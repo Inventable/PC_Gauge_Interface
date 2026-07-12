@@ -51,6 +51,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 decode
 
 Decoded rows currently contain raw pressure and temperature counts. Engineering-unit calibration is the next layer.
 
+If the sensor calibration header includes a count bias, pass it as the fourth optional value to display legacy-scale counts:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 decode-raw artifacts\gauge-file-002.rawbin 0x000097B0 1 12053700
+```
+
 ## Sensor Calibration Data
 
 Initialise the sensor before reading serial/calibration/polynomial data:
@@ -79,3 +85,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 read-t
 ```
 
 Polynomial payloads are ASCII tables of 16-character hexadecimal IEEE-754 double values. The CLI prints the raw ASCII and decoded coefficient rows.
+
+The sensor header payload is parsed for:
+
+- Reference clock.
+- Sensor ID.
+- Count bias.
+- Pressure startup delay.
+- PLL clock.

@@ -12,7 +12,8 @@ var tests = new (string Name, Action Run)[]
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
     ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
-    ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse)
+    ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse),
+    ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields)
 };
 
 var failures = 0;
@@ -194,6 +195,18 @@ static void SensorHexDoubleCoefficientsParse()
     AssertEqual(2, rows[0].Count);
     AssertNear(262086.294787233, rows[0][0], 0.000000001);
     AssertNear(263350.316343829, rows[0][1], 0.000000001);
+}
+
+static void SensorCalibrationHeaderParsesFields()
+{
+    var payload = "S: RefClk .0 Id 1777 Bias 12053700 PStartupMs 5000 PLLClk 169750000\r\n=\r\n"u8.ToArray();
+    var header = SensorCalibrationHeader.Parse(payload);
+
+    AssertEqual(0.0, header.ReferenceClock);
+    AssertEqual(1777, header.SensorId);
+    AssertEqual((uint)12053700, header.CountBias);
+    AssertEqual(5000, header.PressureStartupMilliseconds);
+    AssertEqual((uint)169750000, header.PllClock);
 }
 
 static void WriteUInt32LittleEndian(Span<byte> target, uint value)

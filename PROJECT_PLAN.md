@@ -321,6 +321,8 @@ Current status:
 - Sensor serial, header/calibration record, pressure polynomial, and temperature polynomial reads are implemented.
 - Live polynomial payloads have been confirmed as ASCII rows of 16-character hexadecimal IEEE-754 double values.
 - Coefficient parsing is implemented and covered by tests.
+- Sensor header parsing is implemented for reference clock, sensor ID, count bias, pressure startup delay, and PLL clock.
+- Raw decode can optionally apply the sensor count bias so count columns align with the legacy export scale.
 - The remaining calibration task is to confirm the exact conversion equation used by the legacy LabVIEW application or sensor documentation.
 
 ### Phase 5: Desktop UI

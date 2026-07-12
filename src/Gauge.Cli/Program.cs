@@ -18,7 +18,7 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  read-file-sector <port> [baud] [address] [length]");
     Console.WriteLine("  list-files <port> [baud] [table-bytes] [chunk-bytes]");
     Console.WriteLine("  download-file <port> <file-index> <output-path> [baud] [chunk-bytes]");
-    Console.WriteLine("  decode-raw <input-path> [start-address] [measurement-interval]");
+    Console.WriteLine("  decode-raw <input-path> [start-address] [measurement-interval] [count-bias]");
     Console.WriteLine("  initialise-sensor <port> [baud]");
     Console.WriteLine("  read-sensor-serial <port> [baud]");
     Console.WriteLine("  read-sensor-cal <port> [baud]");
@@ -339,13 +339,14 @@ if (args[0] == "decode-raw")
 {
     if (args.Length < 2)
     {
-        Console.Error.WriteLine("Usage: decode-raw <input-path> [start-address] [measurement-interval]");
+        Console.Error.WriteLine("Usage: decode-raw <input-path> [start-address] [measurement-interval] [count-bias]");
         return 1;
     }
 
     var inputPath = args[1];
     var startAddress = args.Length >= 3 ? ParseUInt32(args[2]) : 0;
     var measurementInterval = args.Length >= 4 ? ParseUInt32(args[3]) : 1;
+    var countBias = args.Length >= 5 ? ParseUInt32(args[4]) : 0;
     var bytes = await File.ReadAllBytesAsync(inputPath, CancellationToken.None).ConfigureAwait(false);
 
     if (bytes.Length % MemoryGaugeDataRecord.Length != 0)
@@ -358,8 +359,8 @@ if (args[0] == "decode-raw")
     Console.WriteLine("P Counts,T Counts,Seq,Counter,Address,Timestamp,CRC ERR,Batt Status");
     foreach (var record in records)
     {
-        PrintSampleRow(record, record.FirstSample, measurementInterval);
-        PrintSampleRow(record, record.SecondSample, measurementInterval);
+        PrintSampleRow(record, record.FirstSample, measurementInterval, countBias);
+        PrintSampleRow(record, record.SecondSample, measurementInterval, countBias);
     }
 
     return 0;
@@ -424,6 +425,11 @@ if (args[0] is "read-sensor-serial" or "read-sensor-cal" or "read-pressure-poly"
         Console.WriteLine(Convert.ToHexString(payload));
         Console.WriteLine("ASCII:");
         Console.WriteLine(ToPrintableAscii(payload));
+        if (command == GaugeCommand.ReadSensorCalibration)
+        {
+            PrintCalibrationHeader(payload);
+        }
+
         if (command is GaugeCommand.ReadSensorPressurePolynomial or GaugeCommand.ReadSensorTemperaturePolynomial)
         {
             PrintPolynomialRows(payload);
@@ -587,11 +593,14 @@ static void PrintHexDump(uint startAddress, ReadOnlySpan<byte> bytes)
     }
 }
 
-static void PrintSampleRow(MemoryGaugeDataRecord record, MemoryGaugeSample sample, uint measurementInterval)
+static void PrintSampleRow(MemoryGaugeDataRecord record, MemoryGaugeSample sample, uint measurementInterval, uint countBias)
 {
     var timestamp = sample.SampleIndex * measurementInterval;
+    var pressureCounts = sample.PressureCounts + countBias;
+    var temperatureCounts = sample.TemperatureCounts + countBias;
+
     Console.WriteLine(
-        $"{sample.PressureCounts},{sample.TemperatureCounts},{sample.SampleIndex},{record.Counter},{record.Address},{timestamp},{(record.IsCrcValid ? 0 : 1)},{record.BatteryStatus}");
+        $"{pressureCounts},{temperatureCounts},{sample.SampleIndex},{record.Counter},{record.Address},{timestamp},{(record.IsCrcValid ? 0 : 1)},{record.BatteryStatus}");
 }
 
 static string ToPrintableAscii(ReadOnlySpan<byte> bytes)
@@ -627,6 +636,17 @@ static void PrintPolynomialRows(ReadOnlySpan<byte> payload)
     {
         Console.WriteLine($"Could not decode coefficient rows: {ex.Message}");
     }
+}
+
+static void PrintCalibrationHeader(ReadOnlySpan<byte> payload)
+{
+    var header = SensorCalibrationHeader.Parse(payload);
+    Console.WriteLine("Parsed header:");
+    Console.WriteLine($"Reference clock: {header.ReferenceClock}");
+    Console.WriteLine($"Sensor ID: {header.SensorId}");
+    Console.WriteLine($"Count bias: {header.CountBias}");
+    Console.WriteLine($"Pressure startup ms: {header.PressureStartupMilliseconds}");
+    Console.WriteLine($"PLL clock: {header.PllClock}");
 }
 
 static ushort ParseUInt16(string value)
