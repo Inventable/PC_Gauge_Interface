@@ -18,6 +18,13 @@ public sealed class GaugeSession
         return await _transport.TransactAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<GaugeFrame> SendCommandAsync(GaugeCommand command, CancellationToken cancellationToken = default)
+    {
+        return await _transport
+            .TransactAsync(GaugeFrame.Create(command), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public async Task<GaugeMemoryAddress> FindEndOfFileAsync(CancellationToken cancellationToken = default)
     {
         var reply = await _transport
@@ -55,6 +62,23 @@ public sealed class GaugeSession
         {
             throw new GaugeProtocolException($"Memory read returned {reply.Payload.Length} byte(s); expected {length}.");
         }
+
+        return reply.Payload;
+    }
+
+    public async Task<byte[]> ReadSensorDataAsync(GaugeCommand command, CancellationToken cancellationToken = default)
+    {
+        if (command is not (GaugeCommand.ReadSensorSerial
+            or GaugeCommand.ReadSensorCalibration
+            or GaugeCommand.ReadSensorPressurePolynomial
+            or GaugeCommand.ReadSensorTemperaturePolynomial))
+        {
+            throw new ArgumentOutOfRangeException(nameof(command), command, "Command is not a sensor data read command.");
+        }
+
+        var reply = await _transport
+            .TransactAsync(GaugeFrame.Create(command), cancellationToken)
+            .ConfigureAwait(false);
 
         return reply.Payload;
     }

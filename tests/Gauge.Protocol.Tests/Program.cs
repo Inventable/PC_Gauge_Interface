@@ -11,7 +11,8 @@ var tests = new (string Name, Action Run)[]
     ("Bad CRC is rejected", BadCrcIsRejected),
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
-    ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc)
+    ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
+    ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse)
 };
 
 var failures = 0;
@@ -184,6 +185,17 @@ static void MemoryGaugeDataRecordParsesCountsAndCrc()
     AssertEqual(true, record.IsCrcValid);
 }
 
+static void SensorHexDoubleCoefficientsParse()
+{
+    var payload = "410FFE325BB968AB,411012D943EFA2F7\r\n=\r\n"u8.ToArray();
+    var rows = SensorAsciiData.ParseHexDoubleRows(payload);
+
+    AssertEqual(1, rows.Count);
+    AssertEqual(2, rows[0].Count);
+    AssertNear(262086.294787233, rows[0][0], 0.000000001);
+    AssertNear(263350.316343829, rows[0][1], 0.000000001);
+}
+
 static void WriteUInt32LittleEndian(Span<byte> target, uint value)
 {
     target[0] = (byte)value;
@@ -205,5 +217,13 @@ static void AssertSequenceEqual(ReadOnlySpan<byte> expected, ReadOnlySpan<byte> 
     if (!expected.SequenceEqual(actual))
     {
         throw new InvalidOperationException($"Expected {Convert.ToHexString(expected)}, got {Convert.ToHexString(actual)}.");
+    }
+}
+
+static void AssertNear(double expected, double actual, double tolerance)
+{
+    if (Math.Abs(expected - actual) > tolerance)
+    {
+        throw new InvalidOperationException($"Expected {expected}, got {actual}.");
     }
 }

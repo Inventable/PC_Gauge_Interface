@@ -50,3 +50,32 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 decode
 ```
 
 Decoded rows currently contain raw pressure and temperature counts. Engineering-unit calibration is the next layer.
+
+## Sensor Calibration Data
+
+Initialise the sensor before reading serial/calibration/polynomial data:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 initialise-sensor COM5 460800
+```
+
+Read sensor identity:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 read-sensor-serial COM5 460800
+```
+
+Read the sensor header/calibration record:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 read-sensor-cal COM5 460800
+```
+
+Read pressure and temperature polynomial coefficient tables:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 read-pressure-poly COM5 460800
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 read-temperature-poly COM5 460800
+```
+
+Polynomial payloads are ASCII tables of 16-character hexadecimal IEEE-754 double values. The CLI prints the raw ASCII and decoded coefficient rows.

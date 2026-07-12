@@ -315,6 +315,14 @@ Current status:
 
 Deliverable: first useful replacement for LabVIEW download/display/export.
 
+Current status:
+
+- Sensor initialisation over the gauge serial link is implemented.
+- Sensor serial, header/calibration record, pressure polynomial, and temperature polynomial reads are implemented.
+- Live polynomial payloads have been confirmed as ASCII rows of 16-character hexadecimal IEEE-754 double values.
+- Coefficient parsing is implemented and covered by tests.
+- The remaining calibration task is to confirm the exact conversion equation used by the legacy LabVIEW application or sensor documentation.
+
 ### Phase 5: Desktop UI
 
 - Build Avalonia UI around proven core services.

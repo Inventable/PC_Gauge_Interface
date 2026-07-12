@@ -1,3 +1,4 @@
+using System.Globalization;
 using Gauge.Core;
 using Gauge.Protocol;
 using Gauge.Transport;
@@ -18,6 +19,11 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  list-files <port> [baud] [table-bytes] [chunk-bytes]");
     Console.WriteLine("  download-file <port> <file-index> <output-path> [baud] [chunk-bytes]");
     Console.WriteLine("  decode-raw <input-path> [start-address] [measurement-interval]");
+    Console.WriteLine("  initialise-sensor <port> [baud]");
+    Console.WriteLine("  read-sensor-serial <port> [baud]");
+    Console.WriteLine("  read-sensor-cal <port> [baud]");
+    Console.WriteLine("  read-pressure-poly <port> [baud]");
+    Console.WriteLine("  read-temperature-poly <port> [baud]");
     Console.WriteLine();
     return 0;
 }
@@ -359,6 +365,79 @@ if (args[0] == "decode-raw")
     return 0;
 }
 
+if (args[0] == "initialise-sensor")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: initialise-sensor <port> [baud]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+
+    try
+    {
+        await using var transport = await OpenSerialTransportWithTimeoutAsync(portName, baudRate, 12000, CancellationToken.None);
+        var session = new GaugeSession(transport);
+        var reply = await session.SendCommandAsync(GaugeCommand.InitialiseSensor, CancellationToken.None).ConfigureAwait(false);
+
+        Console.WriteLine($"Command: {reply.Command}");
+        Console.WriteLine($"Payload bytes: {reply.Payload.Length}");
+        Console.WriteLine(Convert.ToHexString(reply.Payload));
+        return reply.Payload is [0x01] ? 0 : 2;
+    }
+    catch (Exception ex) when (IsExpectedSerialFailure(ex))
+    {
+        Console.Error.WriteLine($"Sensor initialise did not complete: {ex.Message}");
+        return 2;
+    }
+}
+
+if (args[0] is "read-sensor-serial" or "read-sensor-cal" or "read-pressure-poly" or "read-temperature-poly")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine($"Usage: {args[0]} <port> [baud]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    var command = args[0] switch
+    {
+        "read-sensor-serial" => GaugeCommand.ReadSensorSerial,
+        "read-sensor-cal" => GaugeCommand.ReadSensorCalibration,
+        "read-pressure-poly" => GaugeCommand.ReadSensorPressurePolynomial,
+        "read-temperature-poly" => GaugeCommand.ReadSensorTemperaturePolynomial,
+        _ => throw new InvalidOperationException("Unexpected sensor command.")
+    };
+
+    try
+    {
+        await using var transport = await OpenSerialTransportWithTimeoutAsync(portName, baudRate, 12000, CancellationToken.None);
+        var session = new GaugeSession(transport);
+        var payload = await session.ReadSensorDataAsync(command, CancellationToken.None).ConfigureAwait(false);
+
+        Console.WriteLine($"Command: {command}");
+        Console.WriteLine($"Payload bytes: {payload.Length}");
+        Console.WriteLine(Convert.ToHexString(payload));
+        Console.WriteLine("ASCII:");
+        Console.WriteLine(ToPrintableAscii(payload));
+        if (command is GaugeCommand.ReadSensorPressurePolynomial or GaugeCommand.ReadSensorTemperaturePolynomial)
+        {
+            PrintPolynomialRows(payload);
+        }
+
+        return 0;
+    }
+    catch (Exception ex) when (IsExpectedSerialFailure(ex))
+    {
+        Console.Error.WriteLine($"{command} did not complete: {ex.Message}");
+        return 2;
+    }
+}
+
 Console.Error.WriteLine($"Unknown command: {args[0]}");
 return 1;
 
@@ -388,13 +467,25 @@ static async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, C
     }
 }
 
-static async Task<SerialGaugeTransport> OpenSerialTransportAsync(string portName, int baudRate, CancellationToken cancellationToken)
+static async Task<SerialGaugeTransport> OpenSerialTransportAsync(
+    string portName,
+    int baudRate,
+    CancellationToken cancellationToken)
+{
+    return await OpenSerialTransportWithTimeoutAsync(portName, baudRate, 1000, cancellationToken).ConfigureAwait(false);
+}
+
+static async Task<SerialGaugeTransport> OpenSerialTransportWithTimeoutAsync(
+    string portName,
+    int baudRate,
+    int timeoutMs,
+    CancellationToken cancellationToken)
 {
     var options = new SerialGaugeTransportOptions(
         portName,
         baudRate,
-        ReadTimeoutMs: 1000,
-        WriteTimeoutMs: 1000);
+        ReadTimeoutMs: timeoutMs,
+        WriteTimeoutMs: timeoutMs);
     var transport = new SerialGaugeTransport(options);
 
     try
@@ -407,6 +498,17 @@ static async Task<SerialGaugeTransport> OpenSerialTransportAsync(string portName
         await transport.DisposeAsync().ConfigureAwait(false);
         throw;
     }
+}
+
+static bool IsExpectedSerialFailure(Exception ex)
+{
+    return ex is TimeoutException
+        or InvalidOperationException
+        or ArgumentOutOfRangeException
+        or UnauthorizedAccessException
+        or OperationCanceledException
+        or IOException
+        or GaugeProtocolException;
 }
 
 static async Task<GaugeFrame?> TryIdentifyOpenTransportAsync(SerialGaugeTransport transport, CancellationToken cancellationToken)
@@ -490,6 +592,41 @@ static void PrintSampleRow(MemoryGaugeDataRecord record, MemoryGaugeSample sampl
     var timestamp = sample.SampleIndex * measurementInterval;
     Console.WriteLine(
         $"{sample.PressureCounts},{sample.TemperatureCounts},{sample.SampleIndex},{record.Counter},{record.Address},{timestamp},{(record.IsCrcValid ? 0 : 1)},{record.BatteryStatus}");
+}
+
+static string ToPrintableAscii(ReadOnlySpan<byte> bytes)
+{
+    var chars = new char[bytes.Length];
+
+    for (var index = 0; index < bytes.Length; index++)
+    {
+        chars[index] = bytes[index] switch
+        {
+            0x0D => '\r',
+            0x0A => '\n',
+            >= 0x20 and <= 0x7E => (char)bytes[index],
+            _ => '.'
+        };
+    }
+
+    return new string(chars);
+}
+
+static void PrintPolynomialRows(ReadOnlySpan<byte> payload)
+{
+    try
+    {
+        var rows = SensorAsciiData.ParseHexDoubleRows(payload);
+        Console.WriteLine("Decoded coefficients:");
+        for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
+        {
+            Console.WriteLine($"{rowIndex}: {string.Join(", ", rows[rowIndex].Select(value => value.ToString("G17", CultureInfo.InvariantCulture)))}");
+        }
+    }
+    catch (Exception ex) when (ex is ArgumentException or FormatException or OverflowException)
+    {
+        Console.WriteLine($"Could not decode coefficient rows: {ex.Message}");
+    }
 }
 
 static ushort ParseUInt16(string value)
