@@ -185,6 +185,14 @@ The first conversion milestone should reproduce these columns from a known raw d
 
 The interface should be functional rather than decorative, but it should not copy the engineering-heavy LabVIEW layout. The old screenshots are useful for discovering features and workflows; the new app should feel like an operator tool first.
 
+The application is a Northstar product. It should use Northstar branding without becoming a marketing page: the brand should appear through the window title, logo/wordmark, colour system, typography, spacing, action hierarchy, and calm industrial tone.
+
+Initial Northstar brand references from `https://northstardst.com/`:
+
+- Website positioning: downhole specialists, well intervention, downhole reservoir testing, global reach, reliability, agility, versatility, dependability.
+- Primary site/logo asset captured locally at `src/Gauge.Interface.App/Assets/northstar-logo.svg`.
+- Working palette: Northstar green `#2DA55D`, red accent `#CE0E2D`, charcoal `#414149`, grey `#5D5D66`, pale steel `#EBF0F3`.
+
 Important qualities:
 
 - Clear connection status and selected COM port.
@@ -208,6 +216,19 @@ Initial main views:
 - Review data.
 - Export.
 - Diagnostics.
+
+### Phase 5 UI Design Work
+
+The first shell proves that the workflow is possible. The next Phase 5 work should turn it into a clean operator application:
+
+1. Establish Northstar design tokens in the app resources.
+2. Create a branded application header and clear connected/not-connected states.
+3. Refine the file table as the primary operator decision point, including file-size bars, suggested file, validity, and selected-file emphasis.
+4. Add progress stages and cancellation for long reads/downloads.
+5. Add a review screen with pressure/temperature chart, latest values, sample count, job duration, and export state.
+6. Add a completion summary after download.
+7. Move raw protocol details, EEPROM tools, and acoustic diagnostics into a separate engineering mode.
+8. Validate the workflow with field-style scenarios: cold gauge, already-awake gauge, small battery-insertion files, bad CRC, disconnected cable, no files, and long download.
 
 ### Operator Workflow
 
@@ -338,6 +359,8 @@ Current status:
 - Chart.
 - Export.
 - Engineering log.
+- Northstar branded design system.
+- Operator usability testing pass.
 
 Deliverable: deployable Windows engineering build.
 
@@ -346,6 +369,7 @@ Current status:
 - `Gauge.Interface.App` Avalonia desktop project is in the solution.
 - The first operator shell can list serial ports, wake/verify the serial link, connect/read the file table, show relative file sizes, suggest the most likely job file, download the selected file into a named job folder, and show latest pressure/temperature plus recent sample rows.
 - The UI is wired to the shared `GaugeJobService`, so the proven CLI workflow is not duplicated in the desktop app.
+- Northstar brand colours are now app resources and the first branded shell pass is underway.
 
 ### Phase 6: Acoustic Gauge Support
 

@@ -1,59 +1,77 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Gauge.Interface.App.MainWindow"
-        Title="Gauge Interface"
+        Title="Northstar Gauge Interface"
         Width="1240"
         Height="780"
         MinWidth="1040"
         MinHeight="680"
-        Background="#F4F6F8">
+        Background="{StaticResource BrandBackgroundBrush}">
   <Window.Styles>
     <Style Selector="TextBlock.label">
-      <Setter Property="Foreground" Value="#5C6670" />
+      <Setter Property="Foreground" Value="{StaticResource BrandMutedBrush}" />
       <Setter Property="FontSize" Value="13" />
     </Style>
     <Style Selector="TextBlock.value">
-      <Setter Property="Foreground" Value="#17202A" />
+      <Setter Property="Foreground" Value="{StaticResource BrandTextBrush}" />
       <Setter Property="FontSize" Value="32" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="Border.panel">
-      <Setter Property="Background" Value="#FFFFFF" />
-      <Setter Property="BorderBrush" Value="#D8DEE6" />
+      <Setter Property="Background" Value="{StaticResource BrandPanelBrush}" />
+      <Setter Property="BorderBrush" Value="{StaticResource BrandBorderBrush}" />
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="6" />
       <Setter Property="Padding" Value="16" />
     </Style>
     <Style Selector="Button.primary">
-      <Setter Property="Background" Value="#0B5CAD" />
+      <Setter Property="Background" Value="{StaticResource BrandPrimaryBrush}" />
       <Setter Property="Foreground" Value="#FFFFFF" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Padding" Value="18,10" />
       <Setter Property="CornerRadius" Value="6" />
     </Style>
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="#F8FAFB" />
+      <Setter Property="Foreground" Value="{StaticResource BrandTextBrush}" />
+      <Setter Property="BorderBrush" Value="{StaticResource BrandBorderBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="14,8" />
+      <Setter Property="CornerRadius" Value="6" />
+    </Style>
   </Window.Styles>
 
   <Grid RowDefinitions="Auto,*" Margin="20" RowSpacing="16">
-    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-      <StackPanel Spacing="4">
-        <TextBlock Text="Gauge Interface" FontSize="24" FontWeight="SemiBold" Foreground="#17202A" />
-        <TextBlock Text="{Binding DeviceSummary}" Foreground="#53606C" FontSize="14" />
-      </StackPanel>
-      <Border Grid.Column="1" Background="#EAF2FB" BorderBrush="#BDD7F2" BorderThickness="1" CornerRadius="6" Padding="12,8">
-        <TextBlock Text="{Binding Status}" Foreground="#17456F" FontWeight="SemiBold" />
-      </Border>
-    </Grid>
+    <Border Background="#FFFFFF" BorderBrush="{StaticResource BrandBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="18,14">
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="18">
+        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+          <TextBlock Text="NORTHSTAR" Foreground="{StaticResource BrandPrimaryBrush}" FontSize="25" FontWeight="Bold" />
+          <Border Width="1" Height="32" Background="{StaticResource BrandBorderBrush}" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
+          <TextBlock Text="Gauge Interface" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+          <TextBlock Text="{Binding DeviceSummary}" Foreground="{StaticResource BrandMutedBrush}" FontSize="14" />
+        </StackPanel>
+        <Border Grid.Column="2" Background="#F2FAF5" BorderBrush="#B8DEC7" BorderThickness="1" CornerRadius="6" Padding="14,9" VerticalAlignment="Center">
+          <Grid ColumnDefinitions="10,Auto" ColumnSpacing="9">
+            <Ellipse Width="10" Height="10" Fill="{StaticResource BrandPrimaryBrush}" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="{Binding Status}" Foreground="{StaticResource BrandTextBrush}" FontWeight="SemiBold" />
+          </Grid>
+        </Border>
+      </Grid>
+    </Border>
 
     <Grid Grid.Row="1" ColumnDefinitions="380,*" ColumnSpacing="16">
       <StackPanel Spacing="16">
         <Border Classes="panel">
           <StackPanel Spacing="12">
-            <TextBlock Text="Connection" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" />
+            <TextBlock Text="Connection" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
               <ComboBox ItemsSource="{Binding Ports}"
                         SelectedItem="{Binding SelectedPort}"
                         MinHeight="38" />
               <Button Grid.Column="1"
+                      Classes="secondary"
                       Content="Refresh"
                       Command="{Binding RefreshPortsCommand}"
                       MinHeight="38" />
@@ -63,8 +81,9 @@
                     Command="{Binding ReadFilesCommand}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Center"
-                    MinHeight="44" />
-            <Button Content="Device Details"
+                    MinHeight="46" />
+            <Button Classes="secondary"
+                    Content="Device Details"
                     Command="{Binding ToggleDeviceDetailsCommand}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Center"
@@ -74,20 +93,21 @@
 
         <Border Classes="panel" IsVisible="{Binding ShowDeviceDetails}">
           <StackPanel Spacing="8">
-            <TextBlock Text="Device Details" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" />
-            <TextBlock Text="{Binding DeviceDetails}" TextWrapping="Wrap" Foreground="#53606C" />
+            <TextBlock Text="Device Details" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+            <TextBlock Text="{Binding DeviceDetails}" TextWrapping="Wrap" Foreground="{StaticResource BrandMutedBrush}" />
           </StackPanel>
         </Border>
 
         <Border Classes="panel">
           <StackPanel Spacing="12">
-            <TextBlock Text="Output" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" />
+            <TextBlock Text="Output" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
             <TextBlock Classes="label" Text="Job Name" />
             <TextBox Text="{Binding JobName}" MinHeight="38" />
             <TextBlock Classes="label" Text="Folder" />
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
               <TextBox Text="{Binding OutputDirectory}" MinHeight="38" />
               <Button Grid.Column="1"
+                      Classes="secondary"
                       Content="Browse"
                       Click="BrowseOutputDirectory_Click"
                       MinHeight="38" />
@@ -97,7 +117,7 @@
                     Command="{Binding DownloadSelectedCommand}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Center"
-                    MinHeight="44" />
+                    MinHeight="46" />
           </StackPanel>
         </Border>
 
@@ -118,8 +138,8 @@
 
         <Border Classes="panel">
           <StackPanel Spacing="8">
-            <TextBlock Text="Last Export" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" />
-            <TextBlock Text="{Binding LastCsvPath}" TextWrapping="Wrap" Foreground="#53606C" />
+            <TextBlock Text="Last Export" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+            <TextBlock Text="{Binding LastCsvPath}" TextWrapping="Wrap" Foreground="{StaticResource BrandMutedBrush}" />
           </StackPanel>
         </Border>
       </StackPanel>
@@ -128,10 +148,10 @@
         <Border Classes="panel" Padding="0">
           <Grid RowDefinitions="Auto,Auto,*">
             <Grid ColumnDefinitions="*,Auto" Margin="18,18,18,10">
-              <TextBlock Text="Gauge Files" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" />
-              <TextBlock Grid.Column="1" Text="{Binding FileSummary}" Foreground="#53606C" />
+              <TextBlock Text="Gauge Files" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+              <TextBlock Grid.Column="1" Text="{Binding FileSummary}" Foreground="{StaticResource BrandMutedBrush}" />
             </Grid>
-            <Border Grid.Row="1" Background="#EEF2F6" Padding="18,10">
+            <Border Grid.Row="1" Background="{StaticResource BrandBackgroundBrush}" Padding="18,10">
               <Grid ColumnDefinitions="52,88,80,86,100,*,92,72" ColumnSpacing="10">
                 <TextBlock Text="File" FontWeight="SemiBold" />
                 <TextBlock Grid.Column="1" Text="Address" FontWeight="SemiBold" />
@@ -158,16 +178,16 @@
                       <TextBlock Grid.Column="3" Text="{Binding Samples}" />
                       <TextBlock Grid.Column="4" Text="{Binding Size}" />
                       <Grid Grid.Column="5" Height="12" VerticalAlignment="Center">
-                        <Border Background="#E4E9EF" CornerRadius="6" />
+                        <Border Background="#DDE6EA" CornerRadius="6" />
                         <ProgressBar Minimum="0"
                                      Maximum="100"
                                      Value="{Binding SizePercent}"
                                      Height="12"
                                      BorderThickness="0"
-                                     Foreground="#0B5CAD"
+                                     Foreground="{StaticResource BrandPrimaryBrush}"
                                      Background="Transparent" />
                       </Grid>
-                      <TextBlock Grid.Column="6" Text="{Binding Suggestion}" Foreground="#0B5CAD" FontWeight="SemiBold" />
+                      <TextBlock Grid.Column="6" Text="{Binding Suggestion}" Foreground="{StaticResource BrandPrimaryBrush}" FontWeight="SemiBold" />
                       <TextBlock Grid.Column="7" Text="{Binding Crc}" />
                     </Grid>
                   </Border>
@@ -179,9 +199,9 @@
 
         <Border Grid.Row="1" Classes="panel" Padding="0">
           <Grid RowDefinitions="Auto,*">
-            <TextBlock Text="Downloaded Samples" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" Margin="18,18,18,10" />
+            <TextBlock Text="Downloaded Samples" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" Margin="18,18,18,10" />
             <Grid Grid.Row="1" RowDefinitions="Auto,*">
-              <Border Background="#EEF2F6" Padding="18,10">
+              <Border Background="{StaticResource BrandBackgroundBrush}" Padding="18,10">
                 <Grid ColumnDefinitions="80,*,*,*,90">
                   <TextBlock Text="Seq" FontWeight="SemiBold" />
                   <TextBlock Grid.Column="1" Text="Pressure psi" FontWeight="SemiBold" />

@@ -2,6 +2,24 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Gauge.Interface.App.App"
              RequestedThemeVariant="Light">
+  <Application.Resources>
+    <Color x:Key="NorthstarGreen">#2DA55D</Color>
+    <Color x:Key="NorthstarRed">#CE0E2D</Color>
+    <Color x:Key="NorthstarCharcoal">#414149</Color>
+    <Color x:Key="NorthstarGrey">#5D5D66</Color>
+    <Color x:Key="NorthstarSteel">#EBF0F3</Color>
+    <Color x:Key="NorthstarBorder">#CDD6DC</Color>
+    <Color x:Key="NorthstarPanel">#FFFFFF</Color>
+
+    <SolidColorBrush x:Key="BrandPrimaryBrush" Color="{StaticResource NorthstarGreen}" />
+    <SolidColorBrush x:Key="BrandDangerBrush" Color="{StaticResource NorthstarRed}" />
+    <SolidColorBrush x:Key="BrandTextBrush" Color="{StaticResource NorthstarCharcoal}" />
+    <SolidColorBrush x:Key="BrandMutedBrush" Color="{StaticResource NorthstarGrey}" />
+    <SolidColorBrush x:Key="BrandBackgroundBrush" Color="{StaticResource NorthstarSteel}" />
+    <SolidColorBrush x:Key="BrandBorderBrush" Color="{StaticResource NorthstarBorder}" />
+    <SolidColorBrush x:Key="BrandPanelBrush" Color="{StaticResource NorthstarPanel}" />
+  </Application.Resources>
+
   <Application.Styles>
     <FluentTheme />
   </Application.Styles>
