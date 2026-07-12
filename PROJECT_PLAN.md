@@ -136,6 +136,13 @@ The protocol implementation must be covered by unit tests before being trusted i
 
 The gauge stores raw pressure and temperature data. The PC application must convert that raw data to engineering units using calibration information read from the gauge or supplied with the job.
 
+Reference material now exists in:
+
+- `C:\REPOS\PC_Gauge_Interface\reference\Labview-screenshots`
+- `C:\REPOS\PC_Gauge_Interface\reference\labview-exports\Example Export.raw`
+
+These files describe legacy workflows and required data, not the desired visual design. The new interface should be a total redesign with field operators in mind.
+
 Early work must identify:
 
 - Exact memory record layout for P&T samples.
@@ -148,9 +155,26 @@ Early work must identify:
 
 Sample LabVIEW outputs, screenshots, and known-good downloaded files will be essential test fixtures. They should be added under a controlled test-data folder once available.
 
+The example export format includes job metadata followed by tabular records with:
+
+- P counts.
+- T counts.
+- Converted pressure.
+- Converted temperature.
+- Sequence.
+- Counter.
+- Memory address.
+- Timestamp.
+- T frequency.
+- CRC error flag.
+- Corrected flag.
+- Battery status.
+
+The first conversion milestone should reproduce these columns from a known raw download and match the legacy pressure/temperature output within an agreed tolerance.
+
 ## Field-Ready UI Principles
 
-The interface should be functional rather than decorative.
+The interface should be functional rather than decorative, but it should not copy the engineering-heavy LabVIEW layout. The old screenshots are useful for discovering features and workflows; the new app should feel like an operator tool first.
 
 Important qualities:
 
@@ -163,15 +187,51 @@ Important qualities:
 - Recoverable workflows after cable disconnects, bad packets, or power loss.
 - Export paths that are obvious and repeatable.
 - Minimal dependence on internet access.
+- Clear separation between everyday operator actions and advanced engineering controls.
+- High contrast, large click targets, and status language suitable for field use.
+- Strong confirmation and summary screens after downloads, with errors presented as actionable warnings rather than raw counters only.
 
 Initial main views:
 
-- Connection and device identification.
-- Download memory.
-- Job/data viewer.
-- Pressure and temperature chart.
+- Connect.
+- Device summary.
+- Download.
+- Review data.
 - Export.
-- Engineering diagnostics/log.
+- Diagnostics.
+
+### Operator Workflow
+
+The main path should be:
+
+1. Select or auto-detect connection.
+2. Identify gauge.
+3. Show device readiness and memory summary.
+4. Choose the file/run to download.
+5. Download with clear progress, retry, and cancel handling.
+6. Show completion summary.
+7. Review pressure and temperature chart.
+8. Export job files.
+
+The operator should not have to understand packet framing, command history, raw buffers, PLL state, sensor pass-through, or EEPROM functions during normal use.
+
+### Engineering Mode
+
+Engineering tools should still exist, but behind an explicit engineering mode.
+
+Candidate engineering tools from the legacy screenshots:
+
+- Raw command/reply log.
+- Command timing and error counters.
+- Sensor read/calibration tools.
+- Acoustic packet send/receive tools.
+- Error log view.
+- Advanced acoustic settings.
+- Advanced memory functions.
+- Bootloader/reset/program serial actions.
+- PLL and sensor power controls.
+
+Engineering mode should be visually and behaviourally distinct from operator mode, with extra warnings around destructive or state-changing commands.
 
 ## Local Storage And Export
 
@@ -291,4 +351,3 @@ Deliverable: field-deployable application with a path beyond serial.
 - Are multiple gauges ever connected at once?
 - Should the app support firmware bootload/update in the first release or later?
 - What safety confirmations are required before erase/reset/bootload commands?
-
