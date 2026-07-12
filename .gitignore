@@ -10,3 +10,5 @@ artifacts/
 .dotnet-appdata/
 .dotnet-home/
 .nuget-packages/
+reference/phase-sensors/*.pst
+reference/phase-sensors/*.tmp

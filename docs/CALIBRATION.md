@@ -52,7 +52,25 @@ The temperature polynomial has 6 doubles:
 [c0, c1, c2, c3]
 ```
 
-The LabVIEW screen displays the same arrangement as a flattened array. The exact input transform from raw counts to the `x_min`/`x_max` domain still needs confirmation.
+The LabVIEW screen displays the same arrangement as a flattened array.
+
+Convert full-scale temperature counts to crystal frequency:
+
+```text
+temperature_frequency_hz = pll_clock * 262144 / temperature_counts
+```
+
+Normalize to the coefficient domain:
+
+```text
+x = ((2 * temperature_frequency_hz) - x_min - x_max) / (x_max - x_min)
+```
+
+Evaluate:
+
+```text
+temperature_c = c0 + c1*x + c2*x^2 + c3*x^3
+```
 
 ## Pressure Polynomial Shape
 
@@ -66,12 +84,42 @@ rows 2-6: 5 values each
 
 This is likely a bivariate pressure compensation surface using pressure frequency/count and temperature, but the exact equation and normalization still need confirmation before engineering-unit pressure is implemented.
 
+Confirmed from `XHTI-7-1000155 Report.pdf`: the pressure rows are:
+
+```text
+row 0: pressure frequency normalization domain [p_min, p_max]
+row 1: temperature frequency normalization domain [t_min, t_max]
+row 2: y^0 coefficients for x^0..x^4
+row 3: y^1 coefficients for x^0..x^4
+row 4: y^2 coefficients for x^0..x^4
+row 5: y^3 coefficients for x^0..x^4
+row 6: y^4 coefficients for x^0..x^4
+```
+
+Convert full-scale pressure counts to crystal frequency:
+
+```text
+pressure_frequency_hz = pll_clock * 5120 / pressure_counts
+```
+
+Normalize pressure and temperature frequency:
+
+```text
+x = ((2 * pressure_frequency_hz) - p_min - p_max) / (p_max - p_min)
+y = ((2 * temperature_frequency_hz) - t_min - t_max) / (t_max - t_min)
+```
+
+Evaluate:
+
+```text
+pressure_psi = sum(row[j + 2][i] * x^i * y^j), for i=0..4 and j=0..4
+```
+
+This is implemented in `Gauge.Calibration.QuartzCalibration` and tested against the first measurement row in `XHTI-7-1000155 Report.pdf`.
+
 ## Next Calibration Task
 
-To implement pressure and temperature conversion safely, we need one of:
+Next work:
 
-- The legacy LabVIEW conversion VI or formula.
-- Sensor vendor documentation for the Northstar/XHTI polynomial format.
-- A known raw download with matching LabVIEW converted pressure/temperature output and matching sensor polynomial data.
-
-Until then, the app should treat decoded memory data as raw counts plus parsed calibration metadata, not final engineering-unit pressure/temperature.
+- Wire `QuartzCalibration` into raw download export so CSV can include pressure and temperature engineering units.
+- Validate against a known raw download with matching LabVIEW converted pressure/temperature output and matching sensor polynomial data.

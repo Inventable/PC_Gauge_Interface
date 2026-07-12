@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Gauge.Protocol\Gauge.Protocol.csproj" />
+  </ItemGroup>
+</Project>

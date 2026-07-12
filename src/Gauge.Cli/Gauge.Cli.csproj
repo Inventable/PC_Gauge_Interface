@@ -3,6 +3,7 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Gauge.Calibration\Gauge.Calibration.csproj" />
     <ProjectReference Include="..\Gauge.Core\Gauge.Core.csproj" />
     <ProjectReference Include="..\Gauge.Protocol\Gauge.Protocol.csproj" />
     <ProjectReference Include="..\Gauge.Transport\Gauge.Transport.csproj" />

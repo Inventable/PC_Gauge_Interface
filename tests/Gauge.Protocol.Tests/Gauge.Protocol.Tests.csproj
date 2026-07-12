@@ -3,7 +3,7 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Gauge.Calibration\Gauge.Calibration.csproj" />
     <ProjectReference Include="..\..\src\Gauge.Protocol\Gauge.Protocol.csproj" />
   </ItemGroup>
 </Project>
-

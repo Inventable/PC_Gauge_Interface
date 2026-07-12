@@ -12,6 +12,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gauge.Cli", "src\Gauge.Cli\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gauge.Protocol.Tests", "tests\Gauge.Protocol.Tests\Gauge.Protocol.Tests.csproj", "{9957CB3B-80E1-44AB-BEF4-00EEC59EA78E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gauge.Calibration", "src\Gauge.Calibration\Gauge.Calibration.csproj", "{3CFB30DB-B27A-4CBC-8590-5E818FE6A4BB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,6 +40,9 @@ Global
 		{9957CB3B-80E1-44AB-BEF4-00EEC59EA78E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9957CB3B-80E1-44AB-BEF4-00EEC59EA78E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9957CB3B-80E1-44AB-BEF4-00EEC59EA78E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3CFB30DB-B27A-4CBC-8590-5E818FE6A4BB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3CFB30DB-B27A-4CBC-8590-5E818FE6A4BB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3CFB30DB-B27A-4CBC-8590-5E818FE6A4BB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3CFB30DB-B27A-4CBC-8590-5E818FE6A4BB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
-

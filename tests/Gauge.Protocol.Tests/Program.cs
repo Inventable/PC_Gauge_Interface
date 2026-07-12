@@ -1,3 +1,4 @@
+using Gauge.Calibration;
 using Gauge.Protocol;
 
 var tests = new (string Name, Action Run)[]
@@ -13,7 +14,8 @@ var tests = new (string Name, Action Run)[]
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
     ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
     ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse),
-    ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields)
+    ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
+    ("Quartz calibration evaluates report measurement", QuartzCalibrationEvaluatesReportMeasurement)
 };
 
 var failures = 0;
@@ -207,6 +209,38 @@ static void SensorCalibrationHeaderParsesFields()
     AssertEqual((uint)12053700, header.CountBias);
     AssertEqual(5000, header.PressureStartupMilliseconds);
     AssertEqual((uint)169750000, header.PllClock);
+}
+
+static void QuartzCalibrationEvaluatesReportMeasurement()
+{
+    var calibration = BuildReportCalibration();
+
+    var temperature = calibration.TemperatureCelsiusFromFrequency(262037.3431970949);
+    var pressure = calibration.PressurePsiFromFrequency(51290.0241121798, 262037.3431970949);
+
+    AssertNear(14.9819772446, temperature, 0.0000001);
+    AssertNear(16.0058758518, pressure, 0.0000001);
+}
+
+static QuartzCalibration BuildReportCalibration()
+{
+    double[][] pressure =
+    [
+        [50931.11051924353, 51290.02411217977],
+        [262037.3100809597, 263385.11767060595],
+        [574.2243948142991, -602.9156467214243, -5.643272450565251, -1.8236678268104058, -2.1685962221333286],
+        [-107.82114791850289, 4.130031417845537, -6.6463502573076605, 4.103072488854925, 5.138222966532338],
+        [-40.17680703198682, -4.110637621995555, -15.546620699523384, 4.731662740872568, 12.799932516583244],
+        [-4.391831239917007, 5.0743832568239124, 5.858162386408311, -7.45101882228346, -5.5232144603518885],
+        [-8.165749146445576, 3.1283182667300697, 14.331698067632992, -6.26667418065439, -13.922531327671203]
+    ];
+    double[][] temperature =
+    [
+        [262037.3100809597, 263385.11767060595],
+        [84.39016012320367, 66.62699032132008, -1.9068843212100917, 0.8778991584520575]
+    ];
+
+    return new QuartzCalibration(169750000, pressure, temperature);
 }
 
 static void WriteUInt32LittleEndian(Span<byte> target, uint value)
