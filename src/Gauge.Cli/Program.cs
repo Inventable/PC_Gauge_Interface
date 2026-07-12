@@ -19,6 +19,7 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  list-files <port> [baud] [table-bytes] [chunk-bytes]");
     Console.WriteLine("  download-file <port> <file-index> <output-path> [baud] [chunk-bytes]");
     Console.WriteLine("  decode-raw <input-path> [start-address] [measurement-interval] [count-bias]");
+    Console.WriteLine("  export-raw-csv <input-path> <output-path> [start-address] [measurement-interval] [count-bias]");
     Console.WriteLine("  initialise-sensor <port> [baud]");
     Console.WriteLine("  read-sensor-serial <port> [baud]");
     Console.WriteLine("  read-sensor-cal <port> [baud]");
@@ -357,12 +358,40 @@ if (args[0] == "decode-raw")
     var records = MemoryGaugeDataRecord.ParseMany(startAddress, bytes);
 
     Console.WriteLine("P Counts,T Counts,Seq,Counter,Address,Timestamp,CRC ERR,Batt Status");
-    foreach (var record in records)
+    foreach (var row in BuildRawRows(records, measurementInterval, countBias))
     {
-        PrintSampleRow(record, record.FirstSample, measurementInterval, countBias);
-        PrintSampleRow(record, record.SecondSample, measurementInterval, countBias);
+        Console.WriteLine(row);
     }
 
+    return 0;
+}
+
+if (args[0] == "export-raw-csv")
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("Usage: export-raw-csv <input-path> <output-path> [start-address] [measurement-interval] [count-bias]");
+        return 1;
+    }
+
+    var inputPath = args[1];
+    var outputPath = args[2];
+    var startAddress = args.Length >= 4 ? ParseUInt32(args[3]) : 0;
+    var measurementInterval = args.Length >= 5 ? ParseUInt32(args[4]) : 1;
+    var countBias = args.Length >= 6 ? ParseUInt32(args[5]) : 0;
+    var bytes = await File.ReadAllBytesAsync(inputPath, CancellationToken.None).ConfigureAwait(false);
+    var records = MemoryGaugeDataRecord.ParseMany(startAddress, bytes);
+
+    var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+    if (!string.IsNullOrWhiteSpace(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var lines = new List<string> { "P Counts,T Counts,Seq,Counter,Address,Timestamp,CRC ERR,Batt Status" };
+    lines.AddRange(BuildRawRows(records, measurementInterval, countBias));
+    await File.WriteAllLinesAsync(outputPath, lines, CancellationToken.None).ConfigureAwait(false);
+    Console.WriteLine($"Wrote {lines.Count - 1} row(s) to {outputPath}.");
     return 0;
 }
 
@@ -593,14 +622,25 @@ static void PrintHexDump(uint startAddress, ReadOnlySpan<byte> bytes)
     }
 }
 
-static void PrintSampleRow(MemoryGaugeDataRecord record, MemoryGaugeSample sample, uint measurementInterval, uint countBias)
+static IEnumerable<string> BuildRawRows(
+    IReadOnlyList<MemoryGaugeDataRecord> records,
+    uint measurementInterval,
+    uint countBias)
+{
+    foreach (var record in records)
+    {
+        yield return BuildRawRow(record, record.FirstSample, measurementInterval, countBias);
+        yield return BuildRawRow(record, record.SecondSample, measurementInterval, countBias);
+    }
+}
+
+static string BuildRawRow(MemoryGaugeDataRecord record, MemoryGaugeSample sample, uint measurementInterval, uint countBias)
 {
     var timestamp = sample.SampleIndex * measurementInterval;
     var pressureCounts = sample.PressureCounts + countBias;
     var temperatureCounts = sample.TemperatureCounts + countBias;
 
-    Console.WriteLine(
-        $"{pressureCounts},{temperatureCounts},{sample.SampleIndex},{record.Counter},{record.Address},{timestamp},{(record.IsCrcValid ? 0 : 1)},{record.BatteryStatus}");
+    return $"{pressureCounts},{temperatureCounts},{sample.SampleIndex},{record.Counter},{record.Address},{timestamp},{(record.IsCrcValid ? 0 : 1)},{record.BatteryStatus}";
 }
 
 static string ToPrintableAscii(ReadOnlySpan<byte> bytes)

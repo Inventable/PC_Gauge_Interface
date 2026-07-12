@@ -57,6 +57,12 @@ If the sensor calibration header includes a count bias, pass it as the fourth op
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 decode-raw artifacts\gauge-file-002.rawbin 0x000097B0 1 12053700
 ```
 
+Write the same decoded raw rows to CSV:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 export-raw-csv artifacts\gauge-file-002.rawbin artifacts\gauge-file-002.csv 0x000097B0 1 12053700
+```
+
 ## Sensor Calibration Data
 
 Initialise the sensor before reading serial/calibration/polynomial data:
