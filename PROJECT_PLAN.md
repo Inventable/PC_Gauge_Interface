@@ -216,11 +216,12 @@ The main path should be:
 1. Select or auto-detect connection.
 2. Identify gauge.
 3. Show device readiness and memory summary.
-4. Choose the file/run to download.
-5. Download with clear progress, retry, and cancel handling.
-6. Show completion summary.
-7. Review pressure and temperature chart.
-8. Export job files.
+4. Show the file table with clear size indicators and a suggested file.
+5. Choose the file/run to download.
+6. Download with clear progress, retry, and cancel handling.
+7. Show completion summary.
+8. Review pressure and temperature chart.
+9. Export job files.
 
 The operator should not have to understand packet framing, command history, raw buffers, PLL state, sensor pass-through, or EEPROM functions during normal use.
 
@@ -343,7 +344,7 @@ Deliverable: deployable Windows engineering build.
 Current status:
 
 - `Gauge.Interface.App` Avalonia desktop project is in the solution.
-- The first operator shell can list serial ports, select an output folder, run the latest calibrated download workflow, and show latest pressure/temperature plus recent sample rows.
+- The first operator shell can list serial ports, connect/read the file table, show relative file sizes, suggest the most likely job file, download the selected file, and show latest pressure/temperature plus recent sample rows.
 - The UI is wired to the shared `GaugeJobService`, so the proven CLI workflow is not duplicated in the desktop app.
 
 ### Phase 6: Acoustic Gauge Support
@@ -368,9 +369,9 @@ Deliverable: field-deployable application with a path beyond serial.
 
 ## Immediate Next Steps
 
-1. Add a chart/review view for calibrated P&T data.
-2. Add a proper folder picker and repeatable job naming.
-3. Add cold-gauge wake/verify serial flow inside the desktop app.
+1. Add a proper folder picker and repeatable job naming.
+2. Add cold-gauge wake/verify serial flow inside the desktop app.
+3. Add a chart/review view for calibrated P&T data.
 4. Add clear progress stages and cancellation for long downloads.
 5. Keep engineering commands behind a separate diagnostics view.
 

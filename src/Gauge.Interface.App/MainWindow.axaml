@@ -2,10 +2,10 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="Gauge.Interface.App.MainWindow"
         Title="Gauge Interface"
-        Width="1180"
-        Height="760"
-        MinWidth="980"
-        MinHeight="640"
+        Width="1240"
+        Height="780"
+        MinWidth="1040"
+        MinHeight="680"
         Background="#F4F6F8">
   <Window.Styles>
     <Style Selector="TextBlock.label">
@@ -14,7 +14,7 @@
     </Style>
     <Style Selector="TextBlock.value">
       <Setter Property="Foreground" Value="#17202A" />
-      <Setter Property="FontSize" Value="34" />
+      <Setter Property="FontSize" Value="32" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
     <Style Selector="Border.panel">
@@ -22,7 +22,7 @@
       <Setter Property="BorderBrush" Value="#D8DEE6" />
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="6" />
-      <Setter Property="Padding" Value="18" />
+      <Setter Property="Padding" Value="16" />
     </Style>
     <Style Selector="Button.primary">
       <Setter Property="Background" Value="#0B5CAD" />
@@ -33,7 +33,7 @@
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,*,Auto" Margin="20" RowSpacing="16">
+  <Grid RowDefinitions="Auto,*" Margin="20" RowSpacing="16">
     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
       <StackPanel Spacing="4">
         <TextBlock Text="Gauge Interface" FontSize="24" FontWeight="SemiBold" Foreground="#17202A" />
@@ -44,7 +44,7 @@
       </Border>
     </Grid>
 
-    <Grid Grid.Row="1" ColumnDefinitions="360,*" ColumnSpacing="16">
+    <Grid Grid.Row="1" ColumnDefinitions="380,*" ColumnSpacing="16">
       <StackPanel Spacing="16">
         <Border Classes="panel">
           <StackPanel Spacing="12">
@@ -58,6 +58,24 @@
                       Command="{Binding RefreshPortsCommand}"
                       MinHeight="38" />
             </Grid>
+            <Button Classes="primary"
+                    Content="Connect / Read Files"
+                    Command="{Binding ReadFilesCommand}"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    MinHeight="44" />
+            <Button Content="Device Details"
+                    Command="{Binding ToggleDeviceDetailsCommand}"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    MinHeight="38" />
+          </StackPanel>
+        </Border>
+
+        <Border Classes="panel" IsVisible="{Binding ShowDeviceDetails}">
+          <StackPanel Spacing="8">
+            <TextBlock Text="Device Details" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" />
+            <TextBlock Text="{Binding DeviceDetails}" TextWrapping="Wrap" Foreground="#53606C" />
           </StackPanel>
         </Border>
 
@@ -66,13 +84,28 @@
             <TextBlock Text="Output" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" />
             <TextBox Text="{Binding OutputDirectory}" MinHeight="38" />
             <Button Classes="primary"
-                    Content="Download Latest"
-                    Command="{Binding DownloadLatestCommand}"
+                    Content="Download Selected"
+                    Command="{Binding DownloadSelectedCommand}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Center"
                     MinHeight="44" />
           </StackPanel>
         </Border>
+
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+          <Border Classes="panel">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="label" Text="Temperature" />
+              <TextBlock Classes="value" Text="{Binding LatestTemperature}" />
+            </StackPanel>
+          </Border>
+          <Border Grid.Column="1" Classes="panel">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="label" Text="Pressure" />
+              <TextBlock Classes="value" Text="{Binding LatestPressure}" />
+            </StackPanel>
+          </Border>
+        </Grid>
 
         <Border Classes="panel">
           <StackPanel Spacing="8">
@@ -82,25 +115,62 @@
         </Border>
       </StackPanel>
 
-      <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="16">
-        <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
-          <Border Classes="panel">
-            <StackPanel Spacing="4">
-              <TextBlock Classes="label" Text="Latest Temperature" />
-              <TextBlock Classes="value" Text="{Binding LatestTemperature}" />
-            </StackPanel>
-          </Border>
-          <Border Grid.Column="1" Classes="panel">
-            <StackPanel Spacing="4">
-              <TextBlock Classes="label" Text="Latest Pressure" />
-              <TextBlock Classes="value" Text="{Binding LatestPressure}" />
-            </StackPanel>
-          </Border>
-        </Grid>
+      <Grid Grid.Column="1" RowDefinitions="*,220" RowSpacing="16">
+        <Border Classes="panel" Padding="0">
+          <Grid RowDefinitions="Auto,Auto,*">
+            <Grid ColumnDefinitions="*,Auto" Margin="18,18,18,10">
+              <TextBlock Text="Gauge Files" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" />
+              <TextBlock Grid.Column="1" Text="{Binding FileSummary}" Foreground="#53606C" />
+            </Grid>
+            <Border Grid.Row="1" Background="#EEF2F6" Padding="18,10">
+              <Grid ColumnDefinitions="52,88,80,86,100,*,92,72" ColumnSpacing="10">
+                <TextBlock Text="File" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="1" Text="Address" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="2" Text="Rate" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="3" Text="Samples" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="4" Text="Size" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="5" Text="Relative size" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="6" Text="" />
+                <TextBlock Grid.Column="7" Text="CRC" FontWeight="SemiBold" />
+              </Grid>
+            </Border>
+            <ListBox Grid.Row="2"
+                     ItemsSource="{Binding Files}"
+                     SelectedItem="{Binding SelectedFile}"
+                     BorderThickness="0"
+                     Background="#FFFFFF">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <Border Padding="18,9">
+                    <Grid ColumnDefinitions="52,88,80,86,100,*,92,72" ColumnSpacing="10">
+                      <TextBlock Text="{Binding Index}" />
+                      <TextBlock Grid.Column="1" Text="{Binding Address}" />
+                      <TextBlock Grid.Column="2" Text="{Binding Rate}" />
+                      <TextBlock Grid.Column="3" Text="{Binding Samples}" />
+                      <TextBlock Grid.Column="4" Text="{Binding Size}" />
+                      <Grid Grid.Column="5" Height="12" VerticalAlignment="Center">
+                        <Border Background="#E4E9EF" CornerRadius="6" />
+                        <ProgressBar Minimum="0"
+                                     Maximum="100"
+                                     Value="{Binding SizePercent}"
+                                     Height="12"
+                                     BorderThickness="0"
+                                     Foreground="#0B5CAD"
+                                     Background="Transparent" />
+                      </Grid>
+                      <TextBlock Grid.Column="6" Text="{Binding Suggestion}" Foreground="#0B5CAD" FontWeight="SemiBold" />
+                      <TextBlock Grid.Column="7" Text="{Binding Crc}" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Border>
 
         <Border Grid.Row="1" Classes="panel" Padding="0">
           <Grid RowDefinitions="Auto,*">
-            <TextBlock Text="Recent Samples" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" Margin="18,18,18,10" />
+            <TextBlock Text="Downloaded Samples" FontSize="17" FontWeight="SemiBold" Foreground="#17202A" Margin="18,18,18,10" />
             <Grid Grid.Row="1" RowDefinitions="Auto,*">
               <Border Background="#EEF2F6" Padding="18,10">
                 <Grid ColumnDefinitions="80,*,*,*,90">
