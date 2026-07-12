@@ -15,6 +15,7 @@ var tests = new (string Name, Action Run)[]
     ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
     ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse),
     ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
+    ("Quartz calibration converts counts to frequencies", QuartzCalibrationConvertsCountsToFrequencies),
     ("Quartz calibration evaluates report measurement", QuartzCalibrationEvaluatesReportMeasurement)
 };
 
@@ -220,6 +221,14 @@ static void QuartzCalibrationEvaluatesReportMeasurement()
 
     AssertNear(14.9819772446, temperature, 0.0000001);
     AssertNear(16.0058758518, pressure, 0.0000001);
+}
+
+static void QuartzCalibrationConvertsCountsToFrequencies()
+{
+    var calibration = BuildReportCalibration();
+
+    AssertNear(51137.16831107722, calibration.PressureFrequencyHz(16995857), 0.000000001);
+    AssertNear(262306.9780086632, calibration.TemperatureFrequencyHz(16964453), 0.000000001);
 }
 
 static QuartzCalibration BuildReportCalibration()

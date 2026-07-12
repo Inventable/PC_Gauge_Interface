@@ -8,7 +8,7 @@ public sealed record QuartzCalibration(
     IReadOnlyList<IReadOnlyList<double>> TemperaturePolynomialRows)
 {
     public const double PressureFrequencyScale = 5120.0;
-    public const double TemperatureFrequencyScale = 262144.0;
+    public const double TemperatureFrequencyScale = 26214.4;
 
     public static QuartzCalibration FromPayloads(
         SensorCalibrationHeader header,

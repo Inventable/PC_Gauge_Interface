@@ -498,14 +498,29 @@ if (args[0] == "capture-sensor-calibration")
     try
     {
         Directory.CreateDirectory(outputDirectory);
-        await using var transport = await OpenSerialTransportWithTimeoutAsync(portName, baudRate, 12000, CancellationToken.None);
+        await using var transport = await OpenSerialTransportWithTimeoutAsync(portName, baudRate, 30000, CancellationToken.None);
         var session = new GaugeSession(transport);
 
+        Console.WriteLine("Power-cycling sensor.");
+        await session.SendCommandAsync(GaugeCommand.PowerOffSensor, CancellationToken.None).ConfigureAwait(false);
+        await Task.Delay(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+
         Console.WriteLine("Initialising sensor.");
-        var initialiseReply = await session.SendCommandAsync(GaugeCommand.InitialiseSensor, CancellationToken.None).ConfigureAwait(false);
-        if (initialiseReply.Payload is not [0x01])
+        var initialised = false;
+        for (var attempt = 1; attempt <= 3 && !initialised; attempt++)
         {
-            Console.Error.WriteLine($"Sensor initialise returned unexpected payload: {Convert.ToHexString(initialiseReply.Payload)}");
+            var initialiseReply = await session.SendCommandAsync(GaugeCommand.InitialiseSensor, CancellationToken.None).ConfigureAwait(false);
+            initialised = initialiseReply.Payload is [0x01];
+            if (!initialised)
+            {
+                Console.Error.WriteLine($"Sensor initialise attempt {attempt} returned: {Convert.ToHexString(initialiseReply.Payload)}");
+                await Task.Delay(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+            }
+        }
+
+        if (!initialised)
+        {
+            Console.Error.WriteLine("Sensor initialise failed after 3 attempts.");
             return 2;
         }
 
@@ -521,7 +536,7 @@ if (args[0] == "capture-sensor-calibration")
         PrintCalibrationHeader(sensorHeader);
         return 0;
     }
-    catch (Exception ex) when (IsExpectedSerialFailure(ex))
+    catch (Exception ex) when (IsExpectedSensorCaptureFailure(ex))
     {
         Console.Error.WriteLine($"Sensor calibration capture did not complete: {ex.Message}");
         return 2;
@@ -659,6 +674,11 @@ static bool IsExpectedSerialFailure(Exception ex)
         or OperationCanceledException
         or IOException
         or GaugeProtocolException;
+}
+
+static bool IsExpectedSensorCaptureFailure(Exception ex)
+{
+    return IsExpectedSerialFailure(ex) || ex is InvalidOperationException;
 }
 
 static async Task<GaugeFrame?> TryIdentifyOpenTransportAsync(SerialGaugeTransport transport, CancellationToken cancellationToken)

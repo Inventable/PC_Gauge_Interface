@@ -106,6 +106,8 @@ Capture the complete sensor calibration bundle to files:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 capture-sensor-calibration COM5 artifacts\gauge-file-002-cal 460800
 ```
 
+The capture command power-cycles the sensor, waits briefly, and retries sensor initialisation before reading the payloads. This recovers the common case where the gauge is in serial mode but the downstream sensor UART is stale.
+
 This writes:
 
 - `sensor-serial.txt`

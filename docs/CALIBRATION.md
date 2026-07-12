@@ -57,7 +57,7 @@ The LabVIEW screen displays the same arrangement as a flattened array.
 Convert full-scale temperature counts to crystal frequency:
 
 ```text
-temperature_frequency_hz = pll_clock * 262144 / temperature_counts
+temperature_frequency_hz = pll_clock * 26214.4 / temperature_counts
 ```
 
 Normalize to the coefficient domain:
