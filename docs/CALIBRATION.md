@@ -57,7 +57,7 @@ The LabVIEW screen displays the same arrangement as a flattened array.
 Convert full-scale temperature counts to crystal frequency:
 
 ```text
-temperature_frequency_hz = pll_clock * 26214.4 / temperature_counts
+temperature_frequency_hz = pll_clock * 262000 / (temperature_counts * 10)
 ```
 
 Normalize to the coefficient domain:
@@ -89,17 +89,13 @@ Confirmed from `XHTI-7-1000155 Report.pdf`: the pressure rows are:
 ```text
 row 0: pressure frequency normalization domain [p_min, p_max]
 row 1: temperature frequency normalization domain [t_min, t_max]
-row 2: y^0 coefficients for x^0..x^4
-row 3: y^1 coefficients for x^0..x^4
-row 4: y^2 coefficients for x^0..x^4
-row 5: y^3 coefficients for x^0..x^4
-row 6: y^4 coefficients for x^0..x^4
+rows 2-6: LabVIEW reshapes the remaining 25 coefficients as a 5x5 matrix and indexes it as x-power rows by y-power columns
 ```
 
 Convert full-scale pressure counts to crystal frequency:
 
 ```text
-pressure_frequency_hz = pll_clock * 5120 / pressure_counts
+pressure_frequency_hz = pll_clock * 50000 / (pressure_counts * 10)
 ```
 
 Normalize pressure and temperature frequency:
@@ -112,10 +108,10 @@ y = ((2 * temperature_frequency_hz) - t_min - t_max) / (t_max - t_min)
 Evaluate:
 
 ```text
-pressure_psi = sum(row[j + 2][i] * x^i * y^j), for i=0..4 and j=0..4
+pressure_psi = sum(coeff[i][j] * x^i * y^j), for i=0..4 and j=0..4
 ```
 
-This is implemented in `Gauge.Calibration.QuartzCalibration` and tested against the first measurement row in `XHTI-7-1000155 Report.pdf`.
+This is implemented in `Gauge.Calibration.QuartzCalibration` and tested against live sensor ID `1777` calibration payloads captured from the gauge.
 
 ## Next Calibration Task
 

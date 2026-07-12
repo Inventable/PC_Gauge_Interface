@@ -16,7 +16,7 @@ var tests = new (string Name, Action Run)[]
     ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse),
     ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
     ("Quartz calibration converts counts to frequencies", QuartzCalibrationConvertsCountsToFrequencies),
-    ("Quartz calibration evaluates report measurement", QuartzCalibrationEvaluatesReportMeasurement)
+    ("Quartz calibration evaluates live gauge measurement", QuartzCalibrationEvaluatesLiveGaugeMeasurement)
 };
 
 var failures = 0;
@@ -212,41 +212,41 @@ static void SensorCalibrationHeaderParsesFields()
     AssertEqual((uint)169750000, header.PllClock);
 }
 
-static void QuartzCalibrationEvaluatesReportMeasurement()
+static void QuartzCalibrationEvaluatesLiveGaugeMeasurement()
 {
-    var calibration = BuildReportCalibration();
+    var calibration = BuildLiveGaugeCalibration();
 
-    var temperature = calibration.TemperatureCelsiusFromFrequency(262037.3431970949);
-    var pressure = calibration.PressurePsiFromFrequency(51290.0241121798, 262037.3431970949);
+    var temperature = calibration.TemperatureCelsiusFromCounts(16964453);
+    var pressure = calibration.PressurePsiFromCounts(16995857, 16964453);
 
-    AssertNear(14.9819772446, temperature, 0.0000001);
-    AssertNear(16.0058758518, pressure, 0.0000001);
+    AssertNear(28.36388855138488, temperature, 0.0000001);
+    AssertNear(16.22890203894386, pressure, 0.0000001);
 }
 
 static void QuartzCalibrationConvertsCountsToFrequencies()
 {
-    var calibration = BuildReportCalibration();
+    var calibration = BuildLiveGaugeCalibration();
 
-    AssertNear(51137.16831107722, calibration.PressureFrequencyHz(16995857), 0.000000001);
-    AssertNear(262306.9780086632, calibration.TemperatureFrequencyHz(16964453), 0.000000001);
+    AssertNear(49938.64092878635, calibration.PressureFrequencyHz(16995857), 0.000000001);
+    AssertNear(262162.88848216913, calibration.TemperatureFrequencyHz(16964453), 0.000000001);
 }
 
-static QuartzCalibration BuildReportCalibration()
+static QuartzCalibration BuildLiveGaugeCalibration()
 {
     double[][] pressure =
     [
-        [50931.11051924353, 51290.02411217977],
-        [262037.3100809597, 263385.11767060595],
-        [574.2243948142991, -602.9156467214243, -5.643272450565251, -1.8236678268104058, -2.1685962221333286],
-        [-107.82114791850289, 4.130031417845537, -6.6463502573076605, 4.103072488854925, 5.138222966532338],
-        [-40.17680703198682, -4.110637621995555, -15.546620699523384, 4.731662740872568, 12.799932516583244],
-        [-4.391831239917007, 5.0743832568239124, 5.858162386408311, -7.45101882228346, -5.5232144603518885],
-        [-8.165749146445576, 3.1283182667300697, 14.331698067632992, -6.26667418065439, -13.922531327671203]
+        [46324.44450667226, 49941.02711187358],
+        [262086.29478723308, 263350.3163438285],
+        [5272.866950699565, -172.73869329558318, -25.605078878633538, -11.515525660127002, -8.368828955905649],
+        [-5167.581961537286, 91.64409956378267, -28.612436936426217, -1.0941474986489719, 16.1928585184203],
+        [-139.30752948484871, -10.57008476037704, -13.411000370798636, 7.0023223259134735, 9.10864285056903],
+        [-7.016010393447254, -8.010832833036478, 5.352444473805683, 0.747159883066896, -6.5313647187756345],
+        [-2.5255854982739834, 1.031321883485257, 10.161270054912805, -6.371974535669055, -13.044085999053394]
     ];
     double[][] temperature =
     [
-        [262037.3100809597, 263385.11767060595],
-        [84.39016012320367, 66.62699032132008, -1.9068843212100917, 0.8778991584520575]
+        [262086.29478723308, 263350.3163438285],
+        [86.8433423264149, 64.4893597572775, -1.8634567922893475, 0.5398946147181602]
     ];
 
     return new QuartzCalibration(169750000, pressure, temperature);

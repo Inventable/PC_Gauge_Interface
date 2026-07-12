@@ -7,8 +7,8 @@ public sealed record QuartzCalibration(
     IReadOnlyList<IReadOnlyList<double>> PressurePolynomialRows,
     IReadOnlyList<IReadOnlyList<double>> TemperaturePolynomialRows)
 {
-    public const double PressureFrequencyScale = 5120.0;
-    public const double TemperatureFrequencyScale = 26214.4;
+    public const double PressureFrequencyScale = 5000.0;
+    public const double TemperatureFrequencyScale = 26200.0;
 
     public static QuartzCalibration FromPayloads(
         SensorCalibrationHeader header,
@@ -75,12 +75,11 @@ public sealed record QuartzCalibration(
 
         for (var yIndex = 0; yIndex < 5; yIndex++)
         {
-            var row = PressurePolynomialRows[yIndex + 2];
             var xPower = 1.0;
 
             for (var xIndex = 0; xIndex < 5; xIndex++)
             {
-                pressure += row[xIndex] * xPower * yPower;
+                pressure += PressurePolynomialRows[xIndex + 2][yIndex] * xPower * yPower;
                 xPower *= x;
             }
 
