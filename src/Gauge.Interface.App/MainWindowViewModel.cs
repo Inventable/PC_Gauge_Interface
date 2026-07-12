@@ -18,6 +18,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private GaugeFileTable? _fileTable;
     private string _selectedPort = string.Empty;
     private string _outputDirectory;
+    private string _jobName = "Gauge Job";
     private string _status = "Ready";
     private string _latestTemperature = "--";
     private string _latestPressure = "--";
@@ -71,6 +72,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         get => _outputDirectory;
         set => SetField(ref _outputDirectory, value);
+    }
+
+    public string JobName
+    {
+        get => _jobName;
+        set => SetField(ref _jobName, value);
     }
 
     public string Status
@@ -227,7 +234,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         try
         {
-            Directory.CreateDirectory(OutputDirectory);
+            var jobDirectory = BuildJobDirectory();
+            Directory.CreateDirectory(jobDirectory);
             Status = $"Verifying gauge on {SelectedPort}";
             await using var connection = await OpenVerifiedConnectionAsync().ConfigureAwait(true);
             var session = new GaugeSession(connection.Transport);
@@ -235,15 +243,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
             Status = "Capturing sensor calibration";
             var calibration = await service.CaptureSensorCalibrationAsync().ConfigureAwait(true);
-            await WriteCalibrationBundleAsync(OutputDirectory, calibration).ConfigureAwait(true);
+            await WriteCalibrationBundleAsync(jobDirectory, calibration).ConfigureAwait(true);
 
             Status = $"Downloading file {SelectedFile.Index}";
             var download = await service.DownloadFileAsync(_fileTable, SelectedFile.Index).ConfigureAwait(true);
-            var rawPath = Path.Combine(OutputDirectory, $"gauge-file-{download.FileIndex:000}.rawbin");
+            var rawPath = Path.Combine(jobDirectory, $"gauge-file-{download.FileIndex:000}.rawbin");
             await File.WriteAllBytesAsync(rawPath, download.RawBytes).ConfigureAwait(true);
 
             var samples = GaugeJobService.BuildCalibratedSamples(download, calibration);
-            var csvPath = Path.Combine(OutputDirectory, $"gauge-file-{download.FileIndex:000}-calibrated.csv");
+            var csvPath = Path.Combine(jobDirectory, $"gauge-file-{download.FileIndex:000}-calibrated.csv");
             await File.WriteAllLinesAsync(csvPath, CalibratedCsvExporter.BuildLines(samples)).ConfigureAwait(true);
 
             foreach (var sample in samples.TakeLast(25))
@@ -321,6 +329,27 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             baudRate,
             ReadTimeoutMs: timeoutMs,
             WriteTimeoutMs: timeoutMs));
+    }
+
+    private string BuildJobDirectory()
+    {
+        var selected = SelectedFile is null ? "file" : $"file-{SelectedFile.Index:000}";
+        var baseName = string.IsNullOrWhiteSpace(JobName) ? "gauge-job" : JobName.Trim();
+        var folderName = $"{SanitizePathSegment(baseName)}-{selected}-{DateTime.Now:yyyyMMdd-HHmmss}";
+        return Path.Combine(OutputDirectory, folderName);
+    }
+
+    private static string SanitizePathSegment(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            builder.Append(invalid.Contains(character) ? '-' : character);
+        }
+
+        var sanitized = builder.ToString().Trim(' ', '.');
+        return string.IsNullOrWhiteSpace(sanitized) ? "gauge-job" : sanitized;
     }
 
     private void PopulateFiles(GaugeFileTable table)
