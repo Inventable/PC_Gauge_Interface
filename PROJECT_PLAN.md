@@ -340,6 +340,12 @@ Current status:
 
 Deliverable: deployable Windows engineering build.
 
+Current status:
+
+- `Gauge.Interface.App` Avalonia desktop project is in the solution.
+- The first operator shell can list serial ports, select an output folder, run the latest calibrated download workflow, and show latest pressure/temperature plus recent sample rows.
+- The UI is wired to the shared `GaugeJobService`, so the proven CLI workflow is not duplicated in the desktop app.
+
 ### Phase 6: Acoustic Gauge Support
 
 - Add acoustic status view.
@@ -362,10 +368,10 @@ Deliverable: field-deployable application with a path beyond serial.
 
 ## Immediate Next Steps
 
-1. Create the initial Avalonia desktop shell.
-2. Build the operator-first connect/download/review workflow around the proven `GaugeJobService`.
-3. Add a chart and latest-value summary for calibrated P&T data.
-4. Add local job folder selection and repeatable export naming.
+1. Add a chart/review view for calibrated P&T data.
+2. Add a proper folder picker and repeatable job naming.
+3. Add cold-gauge wake/verify serial flow inside the desktop app.
+4. Add clear progress stages and cancellation for long downloads.
 5. Keep engineering commands behind a separate diagnostics view.
 
 ## Open Questions

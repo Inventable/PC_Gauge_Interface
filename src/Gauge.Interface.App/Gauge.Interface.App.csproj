@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UsedAvaloniaProducts></UsedAvaloniaProducts>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.7" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Gauge.Core\Gauge.Core.csproj" />
+    <ProjectReference Include="..\Gauge.Protocol\Gauge.Protocol.csproj" />
+    <ProjectReference Include="..\Gauge.Transport\Gauge.Transport.csproj" />
+  </ItemGroup>
+</Project>

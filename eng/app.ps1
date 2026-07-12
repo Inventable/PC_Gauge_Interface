@@ -13,4 +13,4 @@ if (-not (Test-Path $dotnet)) {
     $dotnet = 'dotnet'
 }
 
-& $dotnet run --project (Join-Path $repoRoot 'tests\Gauge.Protocol.Tests\Gauge.Protocol.Tests.csproj')
+& $dotnet run --project (Join-Path $repoRoot 'src\Gauge.Interface.App\Gauge.Interface.App.csproj') --no-restore
