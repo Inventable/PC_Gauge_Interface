@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 
 namespace Gauge.Interface.App;
@@ -10,7 +11,7 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
     }
 
-    private async void BrowseOutputDirectory_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void BrowseOutputDirectory_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel viewModel)
         {
@@ -26,6 +27,24 @@ public sealed partial class MainWindow : Window
         if (folders.Count > 0)
         {
             viewModel.OutputDirectory = folders[0].Path.LocalPath;
+        }
+    }
+
+    private void FileGraph_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel || sender is not Control control)
+        {
+            return;
+        }
+
+        if (control.DataContext is GaugeFileRowViewModel file)
+        {
+            viewModel.SelectedFile = file;
+        }
+
+        if (viewModel.ShowGraphCommand.CanExecute(null))
+        {
+            viewModel.ShowGraphCommand.Execute(null);
         }
     }
 }

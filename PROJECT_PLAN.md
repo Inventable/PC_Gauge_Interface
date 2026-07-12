@@ -223,12 +223,14 @@ The first shell proves that the workflow is possible. The next Phase 5 work shou
 
 1. Establish Northstar design tokens in the app resources.
 2. Create a branded application header and clear connected/not-connected states.
-3. Refine the file table as the primary operator decision point, including file-size bars, suggested file, validity, and selected-file emphasis.
-4. Add progress stages and cancellation for long reads/downloads.
-5. Add a review screen with pressure/temperature chart, latest values, sample count, job duration, and export state.
-6. Add a completion summary after download.
-7. Move raw protocol details, EEPROM tools, and acoustic diagnostics into a separate engineering mode.
-8. Validate the workflow with field-style scenarios: cold gauge, already-awake gauge, small battery-insertion files, bad CRC, disconnected cable, no files, and long download.
+3. Keep serial-port choice and default download folder in an entry/settings view, not permanently on the operator screen.
+4. Poll the selected gauge port when idle so disconnect/reconnect state is obvious without repeated manual actions.
+5. Refine the file table as the primary operator decision point, including only file index, relative size, download state, and graph/review state.
+6. Add progress stages and cancellation for long reads/downloads.
+7. Add a focused review screen with pressure/temperature chart, latest values, sample count, job duration, and export state.
+8. Add a completion summary after download.
+9. Move raw protocol details, EEPROM tools, and acoustic diagnostics into a separate engineering mode.
+10. Validate the workflow with field-style scenarios: cold gauge, already-awake gauge, small battery-insertion files, bad CRC, disconnected cable, no files, and long download.
 
 ### Operator Workflow
 
@@ -371,6 +373,7 @@ Current status:
 - The UI is wired to the shared `GaugeJobService`, so the proven CLI workflow is not duplicated in the desktop app.
 - Northstar brand colours are now app resources with red as the primary colour and green reserved for accent/healthy states.
 - The first review panel is in progress for calibrated pressure/temperature trend, ranges, duration, and recent samples.
+- A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
 
 ### Phase 6: Acoustic Gauge Support
 

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows.Input;
+using Avalonia.Media;
 using Gauge.Core;
 using Gauge.Protocol;
 using Gauge.Transport;
@@ -14,12 +15,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private const int WakeBaud = 57600;
     private const int FastBaud = 460800;
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
+    private readonly CancellationTokenSource _pollingCancellation = new();
 
     private GaugeFileTable? _fileTable;
     private string _selectedPort = string.Empty;
     private string _outputDirectory;
     private string _jobName = "Gauge Job";
-    private string _status = "Ready";
+    private string _status = "Select serial port";
+    private string _connectionStatus = "Setup";
     private string _latestTemperature = "--";
     private string _latestPressure = "--";
     private string _deviceSummary = "No gauge connected";
@@ -30,7 +33,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _pressureRange = "--";
     private string _temperatureRange = "--";
     private string _jobDuration = "--";
+    private IBrush _connectionBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
     private GaugeFileRowViewModel? _selectedFile;
+    private bool _isPortConfigured;
+    private bool _isGaugeConnected;
+    private bool _isGraphVisible;
     private bool _showDeviceDetails;
     private bool _isBusy;
 
@@ -38,10 +45,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         _outputDirectory = Path.Combine(Environment.CurrentDirectory, "artifacts", "desktop-downloads");
         RefreshPortsCommand = new RelayCommand(RefreshPortsAsync);
+        StartCommand = new RelayCommand(StartAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
         ReadFilesCommand = new RelayCommand(ReadFilesAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
         DownloadSelectedCommand = new RelayCommand(DownloadSelectedAsync, () => !IsBusy && SelectedFile is not null);
+        ShowGraphCommand = new RelayCommand(ShowGraphAsync, () => ChartSamples.Count > 0);
+        BackToFilesCommand = new RelayCommand(BackToFilesAsync);
+        OpenSettingsCommand = new RelayCommand(OpenSettingsAsync);
         ToggleDeviceDetailsCommand = new RelayCommand(ToggleDeviceDetailsAsync);
         RefreshPorts();
+        _ = PollGaugeAsync(_pollingCancellation.Token);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -56,9 +68,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public ICommand RefreshPortsCommand { get; }
 
+    public ICommand StartCommand { get; }
+
     public ICommand ReadFilesCommand { get; }
 
     public ICommand DownloadSelectedCommand { get; }
+
+    public ICommand ShowGraphCommand { get; }
+
+    public ICommand BackToFilesCommand { get; }
+
+    public ICommand OpenSettingsCommand { get; }
 
     public ICommand ToggleDeviceDetailsCommand { get; }
 
@@ -90,6 +110,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         get => _status;
         set => SetField(ref _status, value);
+    }
+
+    public string ConnectionStatus
+    {
+        get => _connectionStatus;
+        set => SetField(ref _connectionStatus, value);
+    }
+
+    public IBrush ConnectionBrush
+    {
+        get => _connectionBrush;
+        set => SetField(ref _connectionBrush, value);
     }
 
     public string LatestTemperature
@@ -159,10 +191,57 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _selectedFile, value))
             {
+                UpdateSelectedFileActions();
                 RaiseCommandStates();
             }
         }
     }
+
+    public bool IsPortConfigured
+    {
+        get => _isPortConfigured;
+        set
+        {
+            if (SetField(ref _isPortConfigured, value))
+            {
+                OnPropertyChanged(nameof(IsSetupVisible));
+                OnPropertyChanged(nameof(IsMainVisible));
+            }
+        }
+    }
+
+    public bool IsSetupVisible => !IsPortConfigured;
+
+    public bool IsMainVisible => IsPortConfigured;
+
+    public bool IsGaugeConnected
+    {
+        get => _isGaugeConnected;
+        set
+        {
+            if (SetField(ref _isGaugeConnected, value))
+            {
+                OnPropertyChanged(nameof(IsDisconnectedVisible));
+                OnPropertyChanged(nameof(IsFileTableVisible));
+            }
+        }
+    }
+
+    public bool IsDisconnectedVisible => IsPortConfigured && !IsGaugeConnected;
+
+    public bool IsGraphVisible
+    {
+        get => _isGraphVisible;
+        set
+        {
+            if (SetField(ref _isGraphVisible, value))
+            {
+                OnPropertyChanged(nameof(IsFileTableVisible));
+            }
+        }
+    }
+
+    public bool IsFileTableVisible => IsPortConfigured && IsGaugeConnected && !IsGraphVisible;
 
     public bool ShowDeviceDetails
     {
@@ -188,6 +267,38 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         return Task.CompletedTask;
     }
 
+    private async Task StartAsync()
+    {
+        IsPortConfigured = true;
+        IsGraphVisible = false;
+        Status = $"Checking {SelectedPort}";
+        await ReadFilesAsync().ConfigureAwait(true);
+    }
+
+    private Task OpenSettingsAsync()
+    {
+        IsPortConfigured = false;
+        IsGraphVisible = false;
+        Status = "Select serial port";
+        return Task.CompletedTask;
+    }
+
+    private Task ShowGraphAsync()
+    {
+        if (ChartSamples.Count > 0)
+        {
+            IsGraphVisible = true;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task BackToFilesAsync()
+    {
+        IsGraphVisible = false;
+        return Task.CompletedTask;
+    }
+
     private Task ToggleDeviceDetailsAsync()
     {
         ShowDeviceDetails = !ShowDeviceDetails;
@@ -208,7 +319,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             ? previous
             : Ports.FirstOrDefault() ?? string.Empty;
 
-        Status = Ports.Count == 0 ? "No serial ports found" : $"Found {Ports.Count} serial port(s)";
+        if (!IsPortConfigured)
+        {
+            Status = Ports.Count == 0 ? "No serial ports found" : $"Found {Ports.Count} serial port(s)";
+        }
     }
 
     private async Task ReadFilesAsync()
@@ -234,6 +348,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             var device = DecodeDevice(identity.Payload);
             DeviceSummary = DescribeGauge(device);
             DeviceDetails = BuildDeviceDetails(device, identity.Payload);
+            IsGaugeConnected = true;
+            ConnectionStatus = "Connected";
+            ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
 
             Status = "Reading file table";
             _fileTable = await service.ReadFileTableAsync().ConfigureAwait(true);
@@ -245,6 +362,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
         catch (Exception ex) when (IsExpectedUiFailure(ex))
         {
+            SetDisconnected();
             Status = $"Connection failed: {ex.Message}";
         }
         finally
@@ -303,6 +421,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             LatestPressure = $"{latest.Pressure:F2} psi";
             LastCsvPath = csvPath;
             UpdateReview(download, samples);
+            if (SelectedFile is not null)
+            {
+                SelectedFile.MarkDownloaded(sampleCount: samples.Count, hasWarnings: samples.Any(sample => sample.CrcError));
+                UpdateSelectedFileActions();
+            }
+
+            IsGraphVisible = true;
             Status = $"Downloaded file {download.FileIndex} with {samples.Count} sample(s)";
         }
         catch (Exception ex) when (IsExpectedUiFailure(ex))
@@ -313,6 +438,79 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             IsBusy = false;
         }
+    }
+
+    private async Task PollGaugeAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(true);
+                if (!IsPortConfigured || IsBusy || string.IsNullOrWhiteSpace(SelectedPort))
+                {
+                    continue;
+                }
+
+                await PollConnectionOnceAsync().ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
+    private async Task PollConnectionOnceAsync()
+    {
+        if (IsGaugeConnected)
+        {
+            var identity = await TryIdentifyAsync(SelectedPort, FastBaud, 350).ConfigureAwait(true);
+            if (identity is null)
+            {
+                SetDisconnected();
+                return;
+            }
+
+            var device = DecodeDevice(identity.Payload);
+            DeviceSummary = DescribeGauge(device);
+            DeviceDetails = BuildDeviceDetails(device, identity.Payload);
+            ConnectionStatus = "Connected";
+            ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
+            Status = "Gauge connected";
+            return;
+        }
+
+        var slowIdentity = await TryIdentifyAsync(SelectedPort, WakeBaud, 350).ConfigureAwait(true);
+        if (slowIdentity is not null)
+        {
+            Status = $"Gauge woke at {WakeBaud}; reading files";
+            await Task.Delay(FastVerifyDelay).ConfigureAwait(true);
+            await ReadFilesAsync().ConfigureAwait(true);
+            return;
+        }
+
+        var fastIdentity = await TryIdentifyAsync(SelectedPort, FastBaud, 350).ConfigureAwait(true);
+        if (fastIdentity is not null)
+        {
+            await ReadFilesAsync().ConfigureAwait(true);
+        }
+    }
+
+    private void SetDisconnected()
+    {
+        IsGaugeConnected = false;
+        IsGraphVisible = false;
+        DeviceSummary = "No gauge connected";
+        DeviceDetails = string.Empty;
+        ConnectionStatus = "Disconnected";
+        ConnectionBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
+        Status = "Waiting for gauge";
+        Files.Clear();
+        SelectedFile = null;
+        _fileTable = null;
+        FileSummary = "No file table loaded";
     }
 
     private async Task<VerifiedGaugeConnection> OpenVerifiedConnectionAsync()
@@ -408,14 +606,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             var samples = bytes / MemoryGaugeDataRecord.Length * 2;
             var row = new GaugeFileRowViewModel(
                 record.Index,
-                record.DataAddress.ToString(),
-                record.MeasurementInterval,
                 bytes,
-                samples,
                 FormatBytes(bytes),
                 largest == 0 ? 0 : Math.Max(4, bytes * 100.0 / largest),
                 index == recommendedIndex ? "Suggested" : string.Empty,
-                record.IsCrcValid ? "OK" : "Bad");
+                record.IsCrcValid);
             Files.Add(row);
         }
 
@@ -562,6 +757,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void RaiseCommandStates()
     {
+        if (StartCommand is RelayCommand start)
+        {
+            start.RaiseCanExecuteChanged();
+        }
+
         if (ReadFilesCommand is RelayCommand readFiles)
         {
             readFiles.RaiseCanExecuteChanged();
@@ -570,6 +770,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         if (DownloadSelectedCommand is RelayCommand download)
         {
             download.RaiseCanExecuteChanged();
+        }
+
+        if (ShowGraphCommand is RelayCommand showGraph)
+        {
+            showGraph.RaiseCanExecuteChanged();
+        }
+    }
+
+    private void UpdateSelectedFileActions()
+    {
+        foreach (var file in Files)
+        {
+            file.IsSelected = ReferenceEquals(file, SelectedFile);
         }
     }
 
@@ -581,21 +794,111 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
 
         field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        OnPropertyChanged(propertyName);
         return true;
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }
 
-public sealed record GaugeFileRowViewModel(
-    int Index,
-    string Address,
-    ushort Rate,
-    int Bytes,
-    int Samples,
-    string Size,
-    double SizePercent,
-    string Suggestion,
-    string Crc);
+public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
+{
+    private bool _isDownloaded;
+    private bool _hasWarnings;
+    private bool _isSelected;
+    private int _sampleCount;
+
+    public GaugeFileRowViewModel(int index, int bytes, string size, double sizePercent, string suggestion, bool isCrcValid)
+    {
+        Index = index;
+        Bytes = bytes;
+        Size = size;
+        SizePercent = sizePercent;
+        Suggestion = suggestion;
+        IsCrcValid = isCrcValid;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public int Index { get; }
+
+    public int Bytes { get; }
+
+    public string Size { get; }
+
+    public double SizePercent { get; }
+
+    public string Suggestion { get; }
+
+    public bool IsCrcValid { get; }
+
+    public bool IsDownloaded
+    {
+        get => _isDownloaded;
+        private set => SetField(ref _isDownloaded, value);
+    }
+
+    public bool HasWarnings
+    {
+        get => _hasWarnings;
+        private set => SetField(ref _hasWarnings, value);
+    }
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetField(ref _isSelected, value);
+    }
+
+    public int SampleCount
+    {
+        get => _sampleCount;
+        private set => SetField(ref _sampleCount, value);
+    }
+
+    public string DownloadStatus => IsDownloaded
+        ? HasWarnings ? "Warnings" : "Downloaded"
+        : "Not downloaded";
+
+    public string GraphStatus => IsDownloaded
+        ? HasWarnings ? "!" : "OK"
+        : "--";
+
+    public void MarkDownloaded(int sampleCount, bool hasWarnings)
+    {
+        SampleCount = sampleCount;
+        HasWarnings = hasWarnings;
+        IsDownloaded = true;
+        OnPropertyChanged(nameof(DownloadStatus));
+        OnPropertyChanged(nameof(GraphStatus));
+    }
+
+    private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return false;
+        }
+
+        field = value;
+        OnPropertyChanged(propertyName);
+        if (propertyName is nameof(IsDownloaded) or nameof(HasWarnings))
+        {
+            OnPropertyChanged(nameof(DownloadStatus));
+            OnPropertyChanged(nameof(GraphStatus));
+        }
+
+        return true;
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+}
 
 public sealed record VerifiedGaugeConnection(
     SerialGaugeTransport Transport,
