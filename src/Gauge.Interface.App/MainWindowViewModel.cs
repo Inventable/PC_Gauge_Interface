@@ -11,6 +11,10 @@ namespace Gauge.Interface.App;
 
 public sealed class MainWindowViewModel : INotifyPropertyChanged
 {
+    private const int WakeBaud = 57600;
+    private const int FastBaud = 460800;
+    private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
+
     private GaugeFileTable? _fileTable;
     private string _selectedPort = string.Empty;
     private string _outputDirectory;
@@ -182,13 +186,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         try
         {
-            Status = $"Opening {SelectedPort} at 460800 baud";
-            await using var transport = await OpenTransportAsync().ConfigureAwait(true);
-            var session = new GaugeSession(transport);
+            Status = $"Waking gauge on {SelectedPort}";
+            await using var connection = await OpenVerifiedConnectionAsync().ConfigureAwait(true);
+            var session = new GaugeSession(connection.Transport);
             var service = new GaugeJobService(session);
 
-            Status = "Identifying gauge";
-            var identity = await session.IdentifyAsync().ConfigureAwait(true);
+            var identity = connection.Identity;
             var device = DecodeDevice(identity.Payload);
             DeviceSummary = DescribeGauge(device);
             DeviceDetails = BuildDeviceDetails(device, identity.Payload);
@@ -225,9 +228,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         try
         {
             Directory.CreateDirectory(OutputDirectory);
-            Status = $"Opening {SelectedPort} at 460800 baud";
-            await using var transport = await OpenTransportAsync().ConfigureAwait(true);
-            var session = new GaugeSession(transport);
+            Status = $"Verifying gauge on {SelectedPort}";
+            await using var connection = await OpenVerifiedConnectionAsync().ConfigureAwait(true);
+            var session = new GaugeSession(connection.Transport);
             var service = new GaugeJobService(session);
 
             Status = "Capturing sensor calibration";
@@ -264,15 +267,60 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    private async Task<SerialGaugeTransport> OpenTransportAsync()
+    private async Task<VerifiedGaugeConnection> OpenVerifiedConnectionAsync()
     {
-        var transport = new SerialGaugeTransport(new SerialGaugeTransportOptions(
-            SelectedPort,
-            460800,
-            ReadTimeoutMs: 30000,
-            WriteTimeoutMs: 30000));
-        await transport.OpenAsync().ConfigureAwait(true);
-        return transport;
+        var slowIdentity = await TryIdentifyAsync(SelectedPort, WakeBaud, 1600).ConfigureAwait(true);
+        if (slowIdentity is not null)
+        {
+            Status = $"Gauge woke at {WakeBaud}; verifying fast link";
+            await Task.Delay(FastVerifyDelay).ConfigureAwait(true);
+            var verified = await OpenIdentifiedTransportAsync(SelectedPort, FastBaud, 30000).ConfigureAwait(true);
+            return verified;
+        }
+
+        Status = $"No slow response; checking {FastBaud} baud";
+        return await OpenIdentifiedTransportAsync(SelectedPort, FastBaud, 30000).ConfigureAwait(true);
+    }
+
+    private static async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, int timeoutMs)
+    {
+        try
+        {
+            await using var transport = CreateTransport(portName, baudRate, timeoutMs);
+            await transport.OpenAsync().ConfigureAwait(false);
+            var session = new GaugeSession(transport);
+            return await session.IdentifyAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedUiFailure(ex) || ex is ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<VerifiedGaugeConnection> OpenIdentifiedTransportAsync(string portName, int baudRate, int timeoutMs)
+    {
+        var transport = CreateTransport(portName, baudRate, timeoutMs);
+        try
+        {
+            await transport.OpenAsync().ConfigureAwait(false);
+            var session = new GaugeSession(transport);
+            var identity = await session.IdentifyAsync().ConfigureAwait(false);
+            return new VerifiedGaugeConnection(transport, identity);
+        }
+        catch
+        {
+            await transport.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static SerialGaugeTransport CreateTransport(string portName, int baudRate, int timeoutMs)
+    {
+        return new SerialGaugeTransport(new SerialGaugeTransportOptions(
+            portName,
+            baudRate,
+            ReadTimeoutMs: timeoutMs,
+            WriteTimeoutMs: timeoutMs));
     }
 
     private void PopulateFiles(GaugeFileTable table)
@@ -454,6 +502,16 @@ public sealed record GaugeFileRowViewModel(
     double SizePercent,
     string Suggestion,
     string Crc);
+
+public sealed record VerifiedGaugeConnection(
+    SerialGaugeTransport Transport,
+    GaugeFrame Identity) : IAsyncDisposable
+{
+    public ValueTask DisposeAsync()
+    {
+        return Transport.DisposeAsync();
+    }
+}
 
 public sealed record SampleRowViewModel(
     int Sequence,
