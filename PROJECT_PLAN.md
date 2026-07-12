@@ -191,7 +191,7 @@ Initial Northstar brand references from `https://northstardst.com/`:
 
 - Website positioning: downhole specialists, well intervention, downhole reservoir testing, global reach, reliability, agility, versatility, dependability.
 - Primary site/logo asset captured locally at `src/Gauge.Interface.App/Assets/northstar-logo.svg`.
-- Working palette: Northstar green `#2DA55D`, red accent `#CE0E2D`, charcoal `#414149`, grey `#5D5D66`, pale steel `#EBF0F3`.
+- Working palette: Northstar red `#CE0E2D` as the primary product colour, green `#2DA55D` as a healthy/connected accent, charcoal `#414149`, grey `#5D5D66`, pale steel `#EBF0F3`.
 
 Important qualities:
 
@@ -369,7 +369,8 @@ Current status:
 - `Gauge.Interface.App` Avalonia desktop project is in the solution.
 - The first operator shell can list serial ports, wake/verify the serial link, connect/read the file table, show relative file sizes, suggest the most likely job file, download the selected file into a named job folder, and show latest pressure/temperature plus recent sample rows.
 - The UI is wired to the shared `GaugeJobService`, so the proven CLI workflow is not duplicated in the desktop app.
-- Northstar brand colours are now app resources and the first branded shell pass is underway.
+- Northstar brand colours are now app resources with red as the primary colour and green reserved for accent/healthy states.
+- The first review panel is in progress for calibrated pressure/temperature trend, ranges, duration, and recent samples.
 
 ### Phase 6: Acoustic Gauge Support
 

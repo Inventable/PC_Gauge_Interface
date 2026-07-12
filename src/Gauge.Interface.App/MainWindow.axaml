@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Gauge.Interface.App"
         x:Class="Gauge.Interface.App.MainWindow"
         Title="Northstar Gauge Interface"
         Width="1240"
@@ -54,7 +55,7 @@
         </StackPanel>
         <Border Grid.Column="2" Background="#F2FAF5" BorderBrush="#B8DEC7" BorderThickness="1" CornerRadius="6" Padding="14,9" VerticalAlignment="Center">
           <Grid ColumnDefinitions="10,Auto" ColumnSpacing="9">
-            <Ellipse Width="10" Height="10" Fill="{StaticResource BrandPrimaryBrush}" VerticalAlignment="Center" />
+            <Ellipse Width="10" Height="10" Fill="{StaticResource BrandAccentBrush}" VerticalAlignment="Center" />
             <TextBlock Grid.Column="1" Text="{Binding Status}" Foreground="{StaticResource BrandTextBrush}" FontWeight="SemiBold" />
           </Grid>
         </Border>
@@ -144,7 +145,7 @@
         </Border>
       </StackPanel>
 
-      <Grid Grid.Column="1" RowDefinitions="*,220" RowSpacing="16">
+      <Grid Grid.Column="1" RowDefinitions="*,230,190" RowSpacing="16">
         <Border Classes="panel" Padding="0">
           <Grid RowDefinitions="Auto,Auto,*">
             <Grid ColumnDefinitions="*,Auto" Margin="18,18,18,10">
@@ -198,6 +199,34 @@
         </Border>
 
         <Border Grid.Row="1" Classes="panel" Padding="0">
+          <Grid RowDefinitions="Auto,*">
+            <Grid ColumnDefinitions="*,Auto" Margin="18,16,18,8">
+              <TextBlock Text="Review" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+              <TextBlock Grid.Column="1" Text="{Binding ReviewSummary}" Foreground="{StaticResource BrandMutedBrush}" />
+            </Grid>
+            <Grid Grid.Row="1" ColumnDefinitions="*,170" ColumnSpacing="14" Margin="18,0,18,16">
+              <Border BorderBrush="{StaticResource BrandBorderBrush}" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
+                <local:GaugeTrendChart Samples="{Binding ChartSamples}" MinHeight="160" />
+              </Border>
+              <StackPanel Grid.Column="1" Spacing="10" VerticalAlignment="Center">
+                <StackPanel Spacing="3">
+                  <TextBlock Classes="label" Text="Pressure Range" />
+                  <TextBlock Text="{Binding PressureRange}" Foreground="{StaticResource BrandTextBrush}" FontWeight="SemiBold" />
+                </StackPanel>
+                <StackPanel Spacing="3">
+                  <TextBlock Classes="label" Text="Temperature Range" />
+                  <TextBlock Text="{Binding TemperatureRange}" Foreground="{StaticResource BrandTextBrush}" FontWeight="SemiBold" />
+                </StackPanel>
+                <StackPanel Spacing="3">
+                  <TextBlock Classes="label" Text="Duration" />
+                  <TextBlock Text="{Binding JobDuration}" Foreground="{StaticResource BrandTextBrush}" FontWeight="SemiBold" />
+                </StackPanel>
+              </StackPanel>
+            </Grid>
+          </Grid>
+        </Border>
+
+        <Border Grid.Row="2" Classes="panel" Padding="0">
           <Grid RowDefinitions="Auto,*">
             <TextBlock Text="Downloaded Samples" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" Margin="18,18,18,10" />
             <Grid Grid.Row="1" RowDefinitions="Auto,*">

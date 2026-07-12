@@ -26,6 +26,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _deviceDetails = string.Empty;
     private string _lastCsvPath = string.Empty;
     private string _fileSummary = "No file table loaded";
+    private string _reviewSummary = "No downloaded job";
+    private string _pressureRange = "--";
+    private string _temperatureRange = "--";
+    private string _jobDuration = "--";
     private GaugeFileRowViewModel? _selectedFile;
     private bool _showDeviceDetails;
     private bool _isBusy;
@@ -47,6 +51,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public ObservableCollection<GaugeFileRowViewModel> Files { get; } = [];
 
     public ObservableCollection<SampleRowViewModel> Samples { get; } = [];
+
+    public ObservableCollection<ChartSampleViewModel> ChartSamples { get; } = [];
 
     public ICommand RefreshPortsCommand { get; }
 
@@ -122,6 +128,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         set => SetField(ref _fileSummary, value);
     }
 
+    public string ReviewSummary
+    {
+        get => _reviewSummary;
+        set => SetField(ref _reviewSummary, value);
+    }
+
+    public string PressureRange
+    {
+        get => _pressureRange;
+        set => SetField(ref _pressureRange, value);
+    }
+
+    public string TemperatureRange
+    {
+        get => _temperatureRange;
+        set => SetField(ref _temperatureRange, value);
+    }
+
+    public string JobDuration
+    {
+        get => _jobDuration;
+        set => SetField(ref _jobDuration, value);
+    }
+
     public GaugeFileRowViewModel? SelectedFile
     {
         get => _selectedFile;
@@ -186,10 +216,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         IsBusy = true;
         Files.Clear();
         Samples.Clear();
+        ChartSamples.Clear();
         SelectedFile = null;
         LatestTemperature = "--";
         LatestPressure = "--";
         LastCsvPath = string.Empty;
+        ResetReview();
 
         try
         {
@@ -230,7 +262,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         IsBusy = true;
         Samples.Clear();
+        ChartSamples.Clear();
         LastCsvPath = string.Empty;
+        ResetReview();
 
         try
         {
@@ -259,10 +293,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 Samples.Add(SampleRowViewModelFactory.FromSample(sample));
             }
 
+            foreach (var sample in samples)
+            {
+                ChartSamples.Add(ChartSampleViewModelFactory.FromSample(sample));
+            }
+
             var latest = samples[^1];
             LatestTemperature = $"{latest.Temperature:F2} C";
             LatestPressure = $"{latest.Pressure:F2} psi";
             LastCsvPath = csvPath;
+            UpdateReview(download, samples);
             Status = $"Downloaded file {download.FileIndex} with {samples.Count} sample(s)";
         }
         catch (Exception ex) when (IsExpectedUiFailure(ex))
@@ -438,6 +478,31 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         await File.WriteAllBytesAsync(Path.Combine(outputDirectory, "temperature-poly.txt"), calibration.TemperaturePolynomial).ConfigureAwait(true);
     }
 
+    private void ResetReview()
+    {
+        ReviewSummary = "No downloaded job";
+        PressureRange = "--";
+        TemperatureRange = "--";
+        JobDuration = "--";
+    }
+
+    private void UpdateReview(GaugeMemoryDownload download, IReadOnlyList<CalibratedGaugeSample> samples)
+    {
+        var pressureMin = samples.Min(sample => sample.Pressure);
+        var pressureMax = samples.Max(sample => sample.Pressure);
+        var temperatureMin = samples.Min(sample => sample.Temperature);
+        var temperatureMax = samples.Max(sample => sample.Temperature);
+        var durationSeconds = samples.Count == 0 ? 0 : samples[^1].Timestamp;
+        var duration = TimeSpan.FromSeconds(durationSeconds);
+
+        ReviewSummary = $"File {download.FileIndex} | {samples.Count} sample(s)";
+        PressureRange = $"{pressureMin:F2} to {pressureMax:F2} psi";
+        TemperatureRange = $"{temperatureMin:F2} to {temperatureMax:F2} C";
+        JobDuration = duration.TotalHours >= 1
+            ? $"{duration.TotalHours:F1} h"
+            : $"{duration.TotalMinutes:F1} min";
+    }
+
     private static DeviceData? DecodeDevice(byte[] payload)
     {
         if (payload.Length < 22)
@@ -549,6 +614,10 @@ public sealed record SampleRowViewModel(
     string Timestamp,
     string Crc);
 
+public sealed record ChartSampleViewModel(
+    double Pressure,
+    double Temperature);
+
 public static class SampleRowViewModelFactory
 {
     public static SampleRowViewModel FromSample(CalibratedGaugeSample sample)
@@ -559,5 +628,13 @@ public static class SampleRowViewModelFactory
             sample.Temperature.ToString("F3"),
             sample.Timestamp.ToString(),
             sample.CrcError ? "Bad" : "OK");
+    }
+}
+
+public static class ChartSampleViewModelFactory
+{
+    public static ChartSampleViewModel FromSample(CalibratedGaugeSample sample)
+    {
+        return new ChartSampleViewModel(sample.Pressure, sample.Temperature);
     }
 }
