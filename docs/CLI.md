@@ -49,8 +49,6 @@ Decode a raw binary download into count rows:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 decode-raw artifacts\gauge-file-002.rawbin 0x000097B0 1
 ```
 
-Decoded rows currently contain raw pressure and temperature counts. Engineering-unit calibration is the next layer.
-
 If the sensor calibration header includes a count bias, pass it as the fourth optional value to display legacy-scale counts:
 
 ```powershell
@@ -122,3 +120,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 export
 ```
 
 The calibrated export applies the sensor header `Bias` to stored 24-bit counts, calculates pressure and temperature frequencies from `PLLClk`, and evaluates the Phase Sensors polynomial payloads.
+
+## Latest Calibrated Download
+
+Once the gauge is already in fast serial mode, download the newest memory file, capture the current sensor calibration bundle, and write a calibrated CSV in one step:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 download-latest-calibrated COM5 artifacts\latest-job 460800
+```
+
+This writes:
+
+- `sensor-serial.txt`
+- `sensor-header.txt`
+- `pressure-poly.txt`
+- `temperature-poly.txt`
+- `gauge-file-###.rawbin`
+- `gauge-file-###-calibrated.csv`
+
+For a cold gauge, wake it first with `wait-identify` or `verify-serial`, then run the latest calibrated download command at `460800`.

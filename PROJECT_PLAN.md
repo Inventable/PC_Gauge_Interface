@@ -303,7 +303,7 @@ Current status:
 - File table reads are implemented with file-record CRC8 validation.
 - Raw file download by file index is implemented.
 - Memory data records are decoded into pressure counts, temperature counts, counter, address, timestamp estimate, CRC status, and battery status.
-- Calibration conversion is not implemented yet; decoded values are currently raw counts only.
+- Latest-file download is available through a reusable core service and CLI command.
 
 ### Phase 4: Calibration And Data Display
 
@@ -323,7 +323,9 @@ Current status:
 - Coefficient parsing is implemented and covered by tests.
 - Sensor header parsing is implemented for reference clock, sensor ID, count bias, pressure startup delay, and PLL clock.
 - Raw decode can optionally apply the sensor count bias so count columns align with the legacy export scale.
-- The remaining calibration task is to confirm the exact conversion equation used by the legacy LabVIEW application or sensor documentation.
+- Pressure and temperature conversion now matches the legacy LabVIEW formulas, including count bias, oscillator frequency scaling, and pressure coefficient matrix orientation.
+- Calibrated CSV export is implemented and verified against a live gauge download.
+- A reusable core job service now captures sensor calibration, downloads the latest memory file, and builds calibrated samples for the future UI.
 
 ### Phase 5: Desktop UI
 
@@ -360,19 +362,16 @@ Deliverable: field-deployable application with a path beyond serial.
 
 ## Immediate Next Steps
 
-1. Add sample LabVIEW screenshots and exported files to the discussion.
-2. Identify the exact serial settings used by the legacy adapter and firmware.
-3. Create the initial .NET/Avalonia solution.
-4. Implement and test CRC/packet framing.
-5. Build the CLI `IDENTIFY` probe.
+1. Create the initial Avalonia desktop shell.
+2. Build the operator-first connect/download/review workflow around the proven `GaugeJobService`.
+3. Add a chart and latest-value summary for calibrated P&T data.
+4. Add local job folder selection and repeatable export naming.
+5. Keep engineering commands behind a separate diagnostics view.
 
 ## Open Questions
 
-- What are the exact serial port settings used by the LabVIEW software?
-- Is the firmware autobaud behaviour sensitive to timing or repeated connection attempts?
 - What is the largest memory download expected in normal field use?
 - What file format does the website currently accept?
-- What units and calibration equations are currently used by LabVIEW?
 - Should exported jobs include both raw and converted data?
 - How should field operators name jobs, wells, runs, or tools?
 - Are multiple gauges ever connected at once?

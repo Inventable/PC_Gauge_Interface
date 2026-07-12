@@ -1,4 +1,5 @@
 using Gauge.Calibration;
+using Gauge.Core;
 using Gauge.Protocol;
 
 var tests = new (string Name, Action Run)[]
@@ -16,7 +17,8 @@ var tests = new (string Name, Action Run)[]
     ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse),
     ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
     ("Quartz calibration converts counts to frequencies", QuartzCalibrationConvertsCountsToFrequencies),
-    ("Quartz calibration evaluates live gauge measurement", QuartzCalibrationEvaluatesLiveGaugeMeasurement)
+    ("Quartz calibration evaluates live gauge measurement", QuartzCalibrationEvaluatesLiveGaugeMeasurement),
+    ("Calibrated CSV exporter formats rows", CalibratedCsvExporterFormatsRows)
 };
 
 var failures = 0;
@@ -250,6 +252,32 @@ static QuartzCalibration BuildLiveGaugeCalibration()
     ];
 
     return new QuartzCalibration(169750000, pressure, temperature);
+}
+
+static void CalibratedCsvExporterFormatsRows()
+{
+    var rows = CalibratedCsvExporter.BuildLines(
+    [
+        new CalibratedGaugeSample(
+            16995857,
+            16964453,
+            16.22890203894386,
+            28.36388855138488,
+            0,
+            240,
+            0x000097B0,
+            0,
+            262162.88848216913,
+            49938.64092878635,
+            false,
+            false,
+            0)
+    ]);
+
+    AssertEqual(CalibratedCsvExporter.Header, rows[0]);
+    AssertEqual(
+        "16995857,16964453,16.228902038943861,28.363888551384878,0,240,38832,0,262162.88848216913,49938.64092878635,0,0,0",
+        rows[1]);
 }
 
 static void WriteUInt32LittleEndian(Span<byte> target, uint value)
