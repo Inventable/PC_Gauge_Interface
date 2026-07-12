@@ -115,7 +115,12 @@ This is implemented in `Gauge.Calibration.QuartzCalibration` and tested against 
 
 ## Next Calibration Task
 
+Completed:
+
+- `QuartzCalibration` is wired into the calibrated download/export workflow.
+- Live gauge downloads have produced sane pressure and temperature values matching the expected LabVIEW range.
+
 Next work:
 
-- Wire `QuartzCalibration` into raw download export so CSV can include pressure and temperature engineering units.
-- Validate against a known raw download with matching LabVIEW converted pressure/temperature output and matching sensor polynomial data.
+- Keep adding known-good raw downloads and matching legacy outputs as regression fixtures.
+- Confirm export metadata/format requirements for website upload.

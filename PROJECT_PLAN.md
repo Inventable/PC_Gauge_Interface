@@ -397,11 +397,18 @@ Deliverable: field-deployable application with a path beyond serial.
 
 ## Immediate Next Steps
 
-1. Add a chart/review view for calibrated P&T data.
+1. Tighten the new state-driven operator UI after a live-gauge test.
 2. Add clear progress stages and cancellation for long downloads.
-3. Keep engineering commands behind a separate diagnostics view.
-4. Add clear progress stages and cancellation for long downloads.
+3. Guard serial access so idle polling cannot collide with download/read operations.
+4. Add a proper settings page for output folder, job naming, and engineering mode entry.
 5. Keep engineering commands behind a separate diagnostics view.
+
+## TODO Reminder
+
+- Test the new splash/setup screen, idle gauge polling, disconnect/reconnect behaviour, and simplified file table with a live gauge.
+- Add staged progress, cancellation, and serial-operation locking before testing large downloads.
+- Refine the graph/review view: file-table graph icons, warning/error colours, completion summary, and export/open-folder actions.
+- Move device details, raw protocol data, and future acoustic tools into settings/engineering mode.
 
 ## Open Questions
 

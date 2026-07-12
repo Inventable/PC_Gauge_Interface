@@ -254,13 +254,18 @@ The first usable application should implement only enough UI to support the core
 Connect -> Device Summary -> Download -> Review Data -> Export
 ```
 
-Before the full desktop UI, build a command-line probe to prove:
+Current status: the command-line probe has proven the memory-gauge protocol path, and the Avalonia desktop shell now has a state-driven operator flow in progress:
+
+```text
+Setup -> Disconnected / Connected File Table -> Download -> Review Graph
+```
+
+The next UX work is to validate this flow with live hardware and tighten progress, cancellation, graph status, warnings, and settings/engineering-mode separation.
+
+The command-line probe exists to prove and preserve:
 
 - Serial port enumeration.
 - `IDENTIFY` command.
 - Packet framing.
 - CRC handling.
 - Device response decoding.
-
-Once the protocol is proven, the first UI can be built around the operator storyboard above.
-
