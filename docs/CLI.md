@@ -99,3 +99,24 @@ The sensor header payload is parsed for:
 - Count bias.
 - Pressure startup delay.
 - PLL clock.
+
+Capture the complete sensor calibration bundle to files:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 capture-sensor-calibration COM5 artifacts\gauge-file-002-cal 460800
+```
+
+This writes:
+
+- `sensor-serial.txt`
+- `sensor-header.txt`
+- `pressure-poly.txt`
+- `temperature-poly.txt`
+
+Convert a downloaded raw memory file directly into calibrated pressure and temperature CSV:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 export-calibrated-csv artifacts\gauge-file-002.rawbin artifacts\gauge-file-002-calibrated.csv artifacts\gauge-file-002-cal\sensor-header.txt artifacts\gauge-file-002-cal\pressure-poly.txt artifacts\gauge-file-002-cal\temperature-poly.txt 0x000097B0 1
+```
+
+The calibrated export applies the sensor header `Bias` to stored 24-bit counts, calculates pressure and temperature frequencies from `PLLClk`, and evaluates the Phase Sensors polynomial payloads.

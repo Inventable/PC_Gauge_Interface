@@ -1,7 +1,10 @@
 using System.Globalization;
+using Gauge.Calibration;
 using Gauge.Core;
 using Gauge.Protocol;
 using Gauge.Transport;
+
+const byte SensorCommsError = 0xFD;
 
 if (args.Length == 0 || args[0] is "--help" or "-h")
 {
@@ -20,7 +23,9 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  download-file <port> <file-index> <output-path> [baud] [chunk-bytes]");
     Console.WriteLine("  decode-raw <input-path> [start-address] [measurement-interval] [count-bias]");
     Console.WriteLine("  export-raw-csv <input-path> <output-path> [start-address] [measurement-interval] [count-bias]");
+    Console.WriteLine("  export-calibrated-csv <input-path> <output-path> <sensor-header-path> <pressure-poly-path> <temperature-poly-path> [start-address] [measurement-interval]");
     Console.WriteLine("  initialise-sensor <port> [baud]");
+    Console.WriteLine("  capture-sensor-calibration <port> <output-dir> [baud]");
     Console.WriteLine("  read-sensor-serial <port> [baud]");
     Console.WriteLine("  read-sensor-cal <port> [baud]");
     Console.WriteLine("  read-pressure-poly <port> [baud]");
@@ -395,6 +400,60 @@ if (args[0] == "export-raw-csv")
     return 0;
 }
 
+if (args[0] == "export-calibrated-csv")
+{
+    if (args.Length < 6)
+    {
+        Console.Error.WriteLine("Usage: export-calibrated-csv <input-path> <output-path> <sensor-header-path> <pressure-poly-path> <temperature-poly-path> [start-address] [measurement-interval]");
+        return 1;
+    }
+
+    var inputPath = args[1];
+    var outputPath = args[2];
+    var sensorHeaderPath = args[3];
+    var pressurePolynomialPath = args[4];
+    var temperaturePolynomialPath = args[5];
+    var startAddress = args.Length >= 7 ? ParseUInt32(args[6]) : 0;
+    var measurementInterval = args.Length >= 8 ? ParseUInt32(args[7]) : 1;
+
+    var rawBytes = await File.ReadAllBytesAsync(inputPath, CancellationToken.None).ConfigureAwait(false);
+    var sensorHeaderPayload = await File.ReadAllBytesAsync(sensorHeaderPath, CancellationToken.None).ConfigureAwait(false);
+    var pressurePolynomialPayload = await File.ReadAllBytesAsync(pressurePolynomialPath, CancellationToken.None).ConfigureAwait(false);
+    var temperaturePolynomialPayload = await File.ReadAllBytesAsync(temperaturePolynomialPath, CancellationToken.None).ConfigureAwait(false);
+
+    var header = SensorCalibrationHeader.Parse(sensorHeaderPayload);
+    if (header.CountBias is null)
+    {
+        Console.Error.WriteLine("Sensor header does not contain Bias; cannot convert stored 24-bit counts to calibration counts.");
+        return 2;
+    }
+
+    var calibration = QuartzCalibration.FromPayloads(
+        header,
+        pressurePolynomialPayload,
+        temperaturePolynomialPayload);
+    var records = MemoryGaugeDataRecord.ParseMany(startAddress, rawBytes);
+
+    var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+    if (!string.IsNullOrWhiteSpace(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var lines = new List<string>
+    {
+        "P Counts,T Counts,Pressure,Temperature,Seq,Counter,Address,Timestamp,T Freq,P Freq,CRC ERR,Corrected,Batt Status"
+    };
+    lines.AddRange(BuildCalibratedRows(records, measurementInterval, header.CountBias.Value, calibration));
+    await File.WriteAllLinesAsync(outputPath, lines, CancellationToken.None).ConfigureAwait(false);
+
+    Console.WriteLine($"Wrote {lines.Count - 1} calibrated row(s) to {outputPath}.");
+    Console.WriteLine($"Sensor ID: {header.SensorId?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}");
+    Console.WriteLine($"Count bias: {header.CountBias.Value}");
+    Console.WriteLine($"PLL clock: {header.PllClock?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}");
+    return 0;
+}
+
 if (args[0] == "initialise-sensor")
 {
     if (args.Length < 2)
@@ -424,6 +483,51 @@ if (args[0] == "initialise-sensor")
     }
 }
 
+if (args[0] == "capture-sensor-calibration")
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("Usage: capture-sensor-calibration <port> <output-dir> [baud]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var outputDirectory = args[2];
+    var baudRate = args.Length >= 4 ? int.Parse(args[3]) : 460800;
+
+    try
+    {
+        Directory.CreateDirectory(outputDirectory);
+        await using var transport = await OpenSerialTransportWithTimeoutAsync(portName, baudRate, 12000, CancellationToken.None);
+        var session = new GaugeSession(transport);
+
+        Console.WriteLine("Initialising sensor.");
+        var initialiseReply = await session.SendCommandAsync(GaugeCommand.InitialiseSensor, CancellationToken.None).ConfigureAwait(false);
+        if (initialiseReply.Payload is not [0x01])
+        {
+            Console.Error.WriteLine($"Sensor initialise returned unexpected payload: {Convert.ToHexString(initialiseReply.Payload)}");
+            return 2;
+        }
+
+        var sensorSerial = await CaptureSensorPayloadAsync(session, GaugeCommand.ReadSensorSerial, Path.Combine(outputDirectory, "sensor-serial.txt"));
+        var sensorHeader = await CaptureSensorPayloadAsync(session, GaugeCommand.ReadSensorCalibration, Path.Combine(outputDirectory, "sensor-header.txt"));
+        var pressurePolynomial = await CaptureSensorPayloadAsync(session, GaugeCommand.ReadSensorPressurePolynomial, Path.Combine(outputDirectory, "pressure-poly.txt"));
+        var temperaturePolynomial = await CaptureSensorPayloadAsync(session, GaugeCommand.ReadSensorTemperaturePolynomial, Path.Combine(outputDirectory, "temperature-poly.txt"));
+
+        Console.WriteLine($"Wrote calibration bundle to {outputDirectory}.");
+        Console.WriteLine($"Sensor serial bytes: {sensorSerial.Length}");
+        Console.WriteLine($"Pressure polynomial bytes: {pressurePolynomial.Length}");
+        Console.WriteLine($"Temperature polynomial bytes: {temperaturePolynomial.Length}");
+        PrintCalibrationHeader(sensorHeader);
+        return 0;
+    }
+    catch (Exception ex) when (IsExpectedSerialFailure(ex))
+    {
+        Console.Error.WriteLine($"Sensor calibration capture did not complete: {ex.Message}");
+        return 2;
+    }
+}
+
 if (args[0] is "read-sensor-serial" or "read-sensor-cal" or "read-pressure-poly" or "read-temperature-poly")
 {
     if (args.Length < 2)
@@ -448,6 +552,17 @@ if (args[0] is "read-sensor-serial" or "read-sensor-cal" or "read-pressure-poly"
         await using var transport = await OpenSerialTransportWithTimeoutAsync(portName, baudRate, 12000, CancellationToken.None);
         var session = new GaugeSession(transport);
         var payload = await session.ReadSensorDataAsync(command, CancellationToken.None).ConfigureAwait(false);
+        if (payload.Length == 0)
+        {
+            Console.Error.WriteLine($"{command} returned no payload.");
+            return 2;
+        }
+
+        if (IsSensorCommsErrorPayload(payload))
+        {
+            Console.Error.WriteLine($"{command} returned ERROR_SENSOR_COMMS (0x{SensorCommsError:X2}).");
+            return 2;
+        }
 
         Console.WriteLine($"Command: {command}");
         Console.WriteLine($"Payload bytes: {payload.Length}");
@@ -641,6 +756,79 @@ static string BuildRawRow(MemoryGaugeDataRecord record, MemoryGaugeSample sample
     var temperatureCounts = sample.TemperatureCounts + countBias;
 
     return $"{pressureCounts},{temperatureCounts},{sample.SampleIndex},{record.Counter},{record.Address},{timestamp},{(record.IsCrcValid ? 0 : 1)},{record.BatteryStatus}";
+}
+
+static IEnumerable<string> BuildCalibratedRows(
+    IReadOnlyList<MemoryGaugeDataRecord> records,
+    uint measurementInterval,
+    uint countBias,
+    QuartzCalibration calibration)
+{
+    foreach (var record in records)
+    {
+        yield return BuildCalibratedRow(record, record.FirstSample, measurementInterval, countBias, calibration);
+        yield return BuildCalibratedRow(record, record.SecondSample, measurementInterval, countBias, calibration);
+    }
+}
+
+static string BuildCalibratedRow(
+    MemoryGaugeDataRecord record,
+    MemoryGaugeSample sample,
+    uint measurementInterval,
+    uint countBias,
+    QuartzCalibration calibration)
+{
+    var timestamp = sample.SampleIndex * measurementInterval;
+    var pressureCounts = sample.PressureCounts + countBias;
+    var temperatureCounts = sample.TemperatureCounts + countBias;
+    var pressureFrequency = calibration.PressureFrequencyHz(pressureCounts);
+    var temperatureFrequency = calibration.TemperatureFrequencyHz(temperatureCounts);
+    var pressure = calibration.PressurePsiFromFrequency(pressureFrequency, temperatureFrequency);
+    var temperature = calibration.TemperatureCelsiusFromFrequency(temperatureFrequency);
+
+    return string.Join(
+        ',',
+        pressureCounts.ToString(CultureInfo.InvariantCulture),
+        temperatureCounts.ToString(CultureInfo.InvariantCulture),
+        FormatDouble(pressure),
+        FormatDouble(temperature),
+        sample.SampleIndex.ToString(CultureInfo.InvariantCulture),
+        record.Counter.ToString(CultureInfo.InvariantCulture),
+        record.Address.ToString(CultureInfo.InvariantCulture),
+        timestamp.ToString(CultureInfo.InvariantCulture),
+        FormatDouble(temperatureFrequency),
+        FormatDouble(pressureFrequency),
+        (record.IsCrcValid ? 0 : 1).ToString(CultureInfo.InvariantCulture),
+        "0",
+        record.BatteryStatus.ToString(CultureInfo.InvariantCulture));
+}
+
+static string FormatDouble(double value)
+{
+    return value.ToString("G17", CultureInfo.InvariantCulture);
+}
+
+static async Task<byte[]> CaptureSensorPayloadAsync(GaugeSession session, GaugeCommand command, string outputPath)
+{
+    var payload = await session.ReadSensorDataAsync(command, CancellationToken.None).ConfigureAwait(false);
+    if (payload.Length == 0)
+    {
+        throw new InvalidOperationException($"{command} returned no payload.");
+    }
+
+    if (IsSensorCommsErrorPayload(payload))
+    {
+        throw new InvalidOperationException($"{command} returned ERROR_SENSOR_COMMS (0x{SensorCommsError:X2}).");
+    }
+
+    await File.WriteAllBytesAsync(outputPath, payload, CancellationToken.None).ConfigureAwait(false);
+    Console.WriteLine($"{command}: wrote {payload.Length} byte(s) to {outputPath}.");
+    return payload;
+}
+
+static bool IsSensorCommsErrorPayload(ReadOnlySpan<byte> payload)
+{
+    return payload is [SensorCommsError];
 }
 
 static string ToPrintableAscii(ReadOnlySpan<byte> bytes)
