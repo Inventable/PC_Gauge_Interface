@@ -297,6 +297,14 @@ Deliverable: simple CLI that proves reliable communication before UI work expand
 
 Deliverable: repeatable memory download to local job file.
 
+Current status:
+
+- `FIND_EOF` is implemented and verified against a connected Memory Gauge.
+- File table reads are implemented with file-record CRC8 validation.
+- Raw file download by file index is implemented.
+- Memory data records are decoded into pressure counts, temperature counts, counter, address, timestamp estimate, CRC status, and battery status.
+- Calibration conversion is not implemented yet; decoded values are currently raw counts only.
+
 ### Phase 4: Calibration And Data Display
 
 - Read sensor serial/calibration/polynomial data.

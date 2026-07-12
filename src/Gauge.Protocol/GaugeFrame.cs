@@ -15,5 +15,9 @@ public sealed record GaugeFrame(
 
         return new GaugeFrame(command, (ushort)payload.Length, address, payload.ToArray());
     }
-}
 
+    public static GaugeFrame CreateReadRequest(GaugeCommand command, uint address, ushort dataLength)
+    {
+        return new GaugeFrame(command, dataLength, address, []);
+    }
+}

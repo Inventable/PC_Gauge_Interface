@@ -4,11 +4,6 @@ public static class GaugeFrameCodec
 {
     public static byte[] Encode(GaugeFrame frame)
     {
-        if (frame.DataLength != frame.Payload.Length)
-        {
-            throw new ArgumentException("Frame data length does not match payload length.", nameof(frame));
-        }
-
         var bodyLength = GaugeProtocolConstants.HeaderLength + frame.Payload.Length;
         var wire = new byte[1 + bodyLength + GaugeProtocolConstants.CrcLength];
         wire[0] = GaugeProtocolConstants.StartByte;
@@ -90,4 +85,3 @@ public static class GaugeFrameCodec
         return (uint)(low | (high << 8) | (upper << 16) | (extended << 24));
     }
 }
-

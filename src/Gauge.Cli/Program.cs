@@ -1,3 +1,4 @@
+using Gauge.Core;
 using Gauge.Protocol;
 using Gauge.Transport;
 
@@ -12,6 +13,11 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  scan-identify [baud|auto] [seconds]");
     Console.WriteLine("  wait-identify <port> [baud] [seconds] [interval-ms]");
     Console.WriteLine("  verify-serial <port> [slow-baud] [fast-baud] [delay-ms]");
+    Console.WriteLine("  find-eof <port> [baud]");
+    Console.WriteLine("  read-file-sector <port> [baud] [address] [length]");
+    Console.WriteLine("  list-files <port> [baud] [table-bytes] [chunk-bytes]");
+    Console.WriteLine("  download-file <port> <file-index> <output-path> [baud] [chunk-bytes]");
+    Console.WriteLine("  decode-raw <input-path> [start-address] [measurement-interval]");
     Console.WriteLine();
     return 0;
 }
@@ -183,6 +189,176 @@ if (args[0] == "scan-identify")
     return 2;
 }
 
+if (args[0] == "find-eof")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: find-eof <port> [baud]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    await using var transport = await OpenSerialTransportAsync(portName, baudRate, CancellationToken.None);
+    var session = new GaugeSession(transport);
+    var eof = await session.FindEndOfFileAsync(CancellationToken.None).ConfigureAwait(false);
+
+    Console.WriteLine($"EOF: {eof} ({eof.Value})");
+    return 0;
+}
+
+if (args[0] == "read-file-sector")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: read-file-sector <port> [baud] [address] [length]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    var address = args.Length >= 4 ? ParseUInt32(args[3]) : 0;
+    var length = args.Length >= 5 ? ParseUInt16(args[4]) : (ushort)256;
+
+    await using var transport = await OpenSerialTransportAsync(portName, baudRate, CancellationToken.None);
+    var session = new GaugeSession(transport);
+    var bytes = await session
+        .ReadExternalMemoryAsync(address, length, GaugeCommand.ReadFileSector, CancellationToken.None)
+        .ConfigureAwait(false);
+
+    Console.WriteLine($"Read {bytes.Length} byte(s) from 0x{address:X8}.");
+    PrintHexDump(address, bytes);
+    return 0;
+}
+
+if (args[0] == "list-files")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: list-files <port> [baud] [table-bytes] [chunk-bytes]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    var tableBytes = args.Length >= 4 ? ParseInt32(args[3]) : 0x4000;
+    var chunkBytes = args.Length >= 5 ? ParseUInt16(args[4]) : (ushort)1024;
+
+    await using var transport = await OpenSerialTransportAsync(portName, baudRate, CancellationToken.None);
+    var session = new GaugeSession(transport);
+    var eof = await session.FindEndOfFileAsync(CancellationToken.None).ConfigureAwait(false);
+    var table = await session
+        .ReadExternalMemoryChunkedAsync(0, tableBytes, chunkBytes, GaugeCommand.ReadFileSector, CancellationToken.None)
+        .ConfigureAwait(false);
+    var records = MemoryGaugeFileRecord.ParseTable(table);
+
+    Console.WriteLine($"EOF: {eof} ({eof.Value})");
+    Console.WriteLine($"Valid file records: {records.Count}");
+
+    if (records.Count == 0)
+    {
+        return 0;
+    }
+
+    Console.WriteLine("Idx  Type      Data Addr   Rate  Est Records  Reset  CRC");
+    for (var index = 0; index < records.Count; index++)
+    {
+        var record = records[index];
+        var nextAddress = GetNextDataAddress(records, index, eof);
+        var estimatedRecords = nextAddress > record.DataAddress.Value
+            ? (nextAddress - record.DataAddress.Value) / MemoryGaugeFileRecord.Length
+            : 0;
+
+        Console.WriteLine(
+            $"{record.Index,3}  {record.RecordType,-8}  {record.DataAddress}  {record.MeasurementInterval,4}  {estimatedRecords,11}  0x{record.ResetCause:X2}   {(record.IsCrcValid ? "OK" : "BAD")}");
+    }
+
+    return 0;
+}
+
+if (args[0] == "download-file")
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("Usage: download-file <port> <file-index> <output-path> [baud] [chunk-bytes]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var fileIndex = ParseInt32(args[2]);
+    var outputPath = args[3];
+    var baudRate = args.Length >= 5 ? int.Parse(args[4]) : 460800;
+    var chunkBytes = args.Length >= 6 ? ParseUInt16(args[5]) : (ushort)1024;
+
+    await using var transport = await OpenSerialTransportAsync(portName, baudRate, CancellationToken.None);
+    var session = new GaugeSession(transport);
+    var eof = await session.FindEndOfFileAsync(CancellationToken.None).ConfigureAwait(false);
+    var table = await session
+        .ReadExternalMemoryChunkedAsync(0, 0x4000, chunkBytes, GaugeCommand.ReadFileSector, CancellationToken.None)
+        .ConfigureAwait(false);
+    var records = MemoryGaugeFileRecord.ParseTable(table);
+
+    if (fileIndex < 0 || fileIndex >= records.Count)
+    {
+        Console.Error.WriteLine($"File index {fileIndex} is not valid. Valid range is 0 to {records.Count - 1}.");
+        return 2;
+    }
+
+    var record = records[fileIndex];
+    var nextAddress = GetNextDataAddress(records, fileIndex, eof);
+    if (nextAddress <= record.DataAddress.Value)
+    {
+        Console.Error.WriteLine($"File index {fileIndex} has no readable data range.");
+        return 3;
+    }
+
+    var bytesToRead = checked((int)(nextAddress - record.DataAddress.Value));
+    Console.WriteLine($"Downloading file {fileIndex}: {bytesToRead} byte(s) from {record.DataAddress} to 0x{nextAddress - 1:X8}.");
+    var bytes = await session
+        .ReadExternalMemoryChunkedAsync(record.DataAddress.Value, bytesToRead, chunkBytes, GaugeCommand.ReadRecordSector, CancellationToken.None)
+        .ConfigureAwait(false);
+
+    var directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+    if (!string.IsNullOrWhiteSpace(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    await File.WriteAllBytesAsync(outputPath, bytes, CancellationToken.None).ConfigureAwait(false);
+    Console.WriteLine($"Wrote {bytes.Length} byte(s) to {outputPath}.");
+    return 0;
+}
+
+if (args[0] == "decode-raw")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: decode-raw <input-path> [start-address] [measurement-interval]");
+        return 1;
+    }
+
+    var inputPath = args[1];
+    var startAddress = args.Length >= 3 ? ParseUInt32(args[2]) : 0;
+    var measurementInterval = args.Length >= 4 ? ParseUInt32(args[3]) : 1;
+    var bytes = await File.ReadAllBytesAsync(inputPath, CancellationToken.None).ConfigureAwait(false);
+
+    if (bytes.Length % MemoryGaugeDataRecord.Length != 0)
+    {
+        Console.Error.WriteLine($"Input length {bytes.Length} is not a multiple of {MemoryGaugeDataRecord.Length}; trailing bytes will be ignored.");
+    }
+
+    var records = MemoryGaugeDataRecord.ParseMany(startAddress, bytes);
+
+    Console.WriteLine("P Counts,T Counts,Seq,Counter,Address,Timestamp,CRC ERR,Batt Status");
+    foreach (var record in records)
+    {
+        PrintSampleRow(record, record.FirstSample, measurementInterval);
+        PrintSampleRow(record, record.SecondSample, measurementInterval);
+    }
+
+    return 0;
+}
+
 Console.Error.WriteLine($"Unknown command: {args[0]}");
 return 1;
 
@@ -209,6 +385,27 @@ static async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, C
         or GaugeProtocolException)
     {
         return null;
+    }
+}
+
+static async Task<SerialGaugeTransport> OpenSerialTransportAsync(string portName, int baudRate, CancellationToken cancellationToken)
+{
+    var options = new SerialGaugeTransportOptions(
+        portName,
+        baudRate,
+        ReadTimeoutMs: 1000,
+        WriteTimeoutMs: 1000);
+    var transport = new SerialGaugeTransport(options);
+
+    try
+    {
+        await transport.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return transport;
+    }
+    catch
+    {
+        await transport.DisposeAsync().ConfigureAwait(false);
+        throw;
     }
 }
 
@@ -257,4 +454,69 @@ static void PrintDevice(DeviceData device)
     Console.WriteLine($"Measurement interval: {device.MeasurementInterval}");
     Console.WriteLine($"Memory mode: {device.MemoryMode}");
     Console.WriteLine($"Erase status: {device.EraseStatus}");
+}
+
+static uint GetNextDataAddress(IReadOnlyList<MemoryGaugeFileRecord> records, int index, GaugeMemoryAddress eof)
+{
+    for (var next = index + 1; next < records.Count; next++)
+    {
+        if (records[next].DataAddress.Value > records[index].DataAddress.Value)
+        {
+            return records[next].DataAddress.Value;
+        }
+    }
+
+    return eof.Value == 0 ? records[index].DataAddress.Value : eof.Value + MemoryGaugeFileRecord.Length;
+}
+
+static void PrintHexDump(uint startAddress, ReadOnlySpan<byte> bytes)
+{
+    for (var offset = 0; offset < bytes.Length; offset += 16)
+    {
+        var line = bytes.Slice(offset, Math.Min(16, bytes.Length - offset));
+        Console.Write($"0x{startAddress + (uint)offset:X8}  ");
+
+        for (var index = 0; index < line.Length; index++)
+        {
+            Console.Write($"{line[index]:X2} ");
+        }
+
+        Console.WriteLine();
+    }
+}
+
+static void PrintSampleRow(MemoryGaugeDataRecord record, MemoryGaugeSample sample, uint measurementInterval)
+{
+    var timestamp = sample.SampleIndex * measurementInterval;
+    Console.WriteLine(
+        $"{sample.PressureCounts},{sample.TemperatureCounts},{sample.SampleIndex},{record.Counter},{record.Address},{timestamp},{(record.IsCrcValid ? 0 : 1)},{record.BatteryStatus}");
+}
+
+static ushort ParseUInt16(string value)
+{
+    var parsed = ParseUInt32(value);
+    if (parsed > ushort.MaxValue)
+    {
+        throw new ArgumentOutOfRangeException(nameof(value), value, "Value is too large for UInt16.");
+    }
+
+    return (ushort)parsed;
+}
+
+static int ParseInt32(string value)
+{
+    var parsed = ParseUInt32(value);
+    if (parsed > int.MaxValue)
+    {
+        throw new ArgumentOutOfRangeException(nameof(value), value, "Value is too large for Int32.");
+    }
+
+    return (int)parsed;
+}
+
+static uint ParseUInt32(string value)
+{
+    return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+        ? Convert.ToUInt32(value[2..], 16)
+        : Convert.ToUInt32(value);
 }

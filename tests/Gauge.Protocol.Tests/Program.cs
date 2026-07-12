@@ -6,9 +6,12 @@ var tests = new (string Name, Action Run)[]
     ("CRC16 verifies appended high-low bytes to zero", Crc16VerifiesAppendedBytes),
     ("CRC8 matches firmware-style record vector", Crc8MatchesRecordVector),
     ("IDENTIFY frame encodes expected wire bytes", IdentifyFrameEncodesExpectedWireBytes),
+    ("Read request encodes declared length without request payload", ReadRequestEncodesDeclaredLengthWithoutRequestPayload),
     ("Encoded frame decodes back to original values", EncodedFrameDecodesBack),
     ("Bad CRC is rejected", BadCrcIsRejected),
-    ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes)
+    ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
+    ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
+    ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc)
 };
 
 var failures = 0;
@@ -52,6 +55,23 @@ static void IdentifyFrameEncodesExpectedWireBytes()
     var frame = GaugeFrame.Create(GaugeCommand.Identify);
     var wire = GaugeFrameCodec.Encode(frame);
     AssertEqual("550C0000000000000CC0", Convert.ToHexString(wire));
+}
+
+static void ReadRequestEncodesDeclaredLengthWithoutRequestPayload()
+{
+    var frame = GaugeFrame.CreateReadRequest(GaugeCommand.ReadFileSector, 0x00123456, 1024);
+    var wire = GaugeFrameCodec.Encode(frame);
+
+    AssertEqual(10, wire.Length);
+    AssertEqual((byte)GaugeProtocolConstants.StartByte, wire[0]);
+    AssertEqual((byte)GaugeCommand.ReadFileSector, wire[1]);
+    AssertEqual((byte)0x00, wire[2]);
+    AssertEqual((byte)0x04, wire[3]);
+    AssertEqual((byte)0x56, wire[4]);
+    AssertEqual((byte)0x34, wire[5]);
+    AssertEqual((byte)0x12, wire[6]);
+    AssertEqual((byte)0x00, wire[7]);
+    AssertEqual((ushort)0, Crc16.Compute(wire.AsSpan(1)));
 }
 
 static void EncodedFrameDecodesBack()
@@ -108,6 +128,60 @@ static void MemoryGaugeIdentifyPayloadDecodes()
     AssertEqual((ushort)5, device.MeasurementInterval);
     AssertEqual((byte)1, device.MemoryMode);
     AssertEqual((byte?)0, device.EraseStatus);
+}
+
+static void MemoryGaugeFileRecordParsesAndValidatesCrc()
+{
+    var bytes = new byte[MemoryGaugeFileRecord.Length];
+    bytes[0] = 0x00;
+    bytes[1] = 0x40;
+    bytes[2] = 0x00;
+    bytes[3] = 0x00;
+    bytes[4] = (byte)MemoryGaugeFileRecordType.Start;
+    bytes[5] = 0x3C;
+    bytes[6] = 0x00;
+    bytes[8] = 0x12;
+    bytes[15] = Crc8.Compute(bytes.AsSpan(0, 15));
+
+    var record = MemoryGaugeFileRecord.Parse(7, bytes);
+
+    AssertEqual(7, record.Index);
+    AssertEqual((uint)0x00004000, record.DataAddress.Value);
+    AssertEqual(MemoryGaugeFileRecordType.Start, record.RecordType);
+    AssertEqual((ushort)60, record.MeasurementInterval);
+    AssertEqual((byte)0x12, record.ResetCause);
+    AssertEqual(true, record.IsCrcValid);
+}
+
+static void MemoryGaugeDataRecordParsesCountsAndCrc()
+{
+    var bytes = new byte[MemoryGaugeDataRecord.Length];
+    bytes[0] = (byte)MemoryGaugeDataRecordType.PressureTemperature;
+    bytes[1] = 0x03;
+    bytes[2] = 0x02;
+    bytes[3] = 0x01;
+    bytes[4] = 0x06;
+    bytes[5] = 0x05;
+    bytes[6] = 0x04;
+    bytes[7] = 0x09;
+    bytes[8] = 0x08;
+    bytes[9] = 0x07;
+    bytes[10] = 0x0C;
+    bytes[11] = 0x0B;
+    bytes[12] = 0x0A;
+    bytes[13] = 0x34;
+    bytes[14] = 0x12;
+    bytes[15] = Crc8.Compute(bytes.AsSpan(0, 15));
+
+    var record = MemoryGaugeDataRecord.Parse(4, 0x4000, bytes);
+
+    AssertEqual((uint)0x010203, record.FirstSample.TemperatureCounts);
+    AssertEqual((uint)0x040506, record.FirstSample.PressureCounts);
+    AssertEqual((uint)0x070809, record.SecondSample.TemperatureCounts);
+    AssertEqual((uint)0x0A0B0C, record.SecondSample.PressureCounts);
+    AssertEqual((ushort)0x1234, record.Counter);
+    AssertEqual((byte)0, record.BatteryStatus);
+    AssertEqual(true, record.IsCrcValid);
 }
 
 static void WriteUInt32LittleEndian(Span<byte> target, uint value)

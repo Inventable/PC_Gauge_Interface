@@ -17,5 +17,81 @@ public sealed class GaugeSession
         var request = GaugeFrame.Create(GaugeCommand.Identify);
         return await _transport.TransactAsync(request, cancellationToken).ConfigureAwait(false);
     }
-}
 
+    public async Task<GaugeMemoryAddress> FindEndOfFileAsync(CancellationToken cancellationToken = default)
+    {
+        var reply = await _transport
+            .TransactAsync(GaugeFrame.Create(GaugeCommand.FindEndOfFile), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (reply.Payload.Length < 4)
+        {
+            throw new GaugeProtocolException($"FIND_EOF returned {reply.Payload.Length} byte(s); expected 4.");
+        }
+
+        return GaugeMemoryAddress.FromLittleEndian(reply.Payload);
+    }
+
+    public async Task<byte[]> ReadExternalMemoryAsync(
+        uint address,
+        ushort length,
+        GaugeCommand command = GaugeCommand.ReadExternalEeprom,
+        CancellationToken cancellationToken = default)
+    {
+        if (length == 0)
+        {
+            return [];
+        }
+
+        if (command is not (GaugeCommand.ReadExternalEeprom or GaugeCommand.ReadFileSector or GaugeCommand.ReadRecordSector))
+        {
+            throw new ArgumentOutOfRangeException(nameof(command), command, "Command is not an external memory read command.");
+        }
+
+        var request = GaugeFrame.CreateReadRequest(command, address, length);
+        var reply = await _transport.TransactAsync(request, cancellationToken).ConfigureAwait(false);
+
+        if (reply.Payload.Length != length)
+        {
+            throw new GaugeProtocolException($"Memory read returned {reply.Payload.Length} byte(s); expected {length}.");
+        }
+
+        return reply.Payload;
+    }
+
+    public async Task<byte[]> ReadExternalMemoryChunkedAsync(
+        uint address,
+        int length,
+        ushort chunkSize = 1024,
+        GaugeCommand command = GaugeCommand.ReadExternalEeprom,
+        CancellationToken cancellationToken = default)
+    {
+        if (length < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(length), "Length cannot be negative.");
+        }
+
+        if (chunkSize == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(chunkSize), "Chunk size must be greater than zero.");
+        }
+
+        var result = new byte[length];
+        var offset = 0;
+
+        while (offset < length)
+        {
+            var bytesThisRead = (ushort)Math.Min(chunkSize, length - offset);
+            var chunk = await ReadExternalMemoryAsync(
+                address + (uint)offset,
+                bytesThisRead,
+                command,
+                cancellationToken).ConfigureAwait(false);
+
+            chunk.CopyTo(result.AsSpan(offset));
+            offset += bytesThisRead;
+        }
+
+        return result;
+    }
+}
