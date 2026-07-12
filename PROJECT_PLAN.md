@@ -83,6 +83,14 @@ payload     0 to max block size bytes
 crc16       CRC over frame body, transmitted high byte then low byte in firmware replies
 ```
 
+Serial connection startup behaviour observed from firmware and hardware:
+
+- At power-up, the gauge waits briefly for PC serial communication at `57600` baud.
+- The first valid decoded serial packet, normally `IDENTIFY`, puts the gauge into serial-connected mode.
+- In `PROCESS_SERIAL`, the firmware enables memory, turns on the PLL, delays briefly, resets the EUSART baud setting, initializes the file system, and remains in serial mode until power is removed.
+- The PC should wait around `250 ms` after the slow `IDENTIFY`, then verify communication at the faster baud rate, currently `460800`.
+- The PC should not send `START_PLL` as part of the normal wake-up/connection handshake.
+
 Memory Gauge source reference:
 
 - `C:\REPOS\PIC_Memory_Gauge\serial.h`
@@ -140,6 +148,7 @@ Reference material now exists in:
 
 - `C:\REPOS\PC_Gauge_Interface\reference\Labview-screenshots`
 - `C:\REPOS\PC_Gauge_Interface\reference\labview-exports\Example Export.raw`
+- `C:\REPOS\PC_Gauge_Interface\UX_STORYBOARD.md`
 
 These files describe legacy workflows and required data, not the desired visual design. The new interface should be a total redesign with field operators in mind.
 
