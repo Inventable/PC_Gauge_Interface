@@ -50,6 +50,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _showDeviceDetails;
     private bool _isBusy;
     private bool _isInitialising = true;
+    private DateTime _statusProtectedUntilUtc = DateTime.MinValue;
 
     public MainWindowViewModel()
     {
@@ -416,10 +417,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    private async Task DownloadSelectedAsync()
+    public async Task DownloadSelectedAsync()
     {
-        if (SelectedFile is null || _fileTable is null)
+        if (IsBusy)
         {
+            SetProtectedStatus("Already working. Please wait for the current operation to finish.");
+            return;
+        }
+
+        SelectedFile ??= Files.FirstOrDefault(file => file.Suggestion == "Suggested")
+            ?? Files.LastOrDefault();
+
+        if (SelectedFile is null)
+        {
+            SetProtectedStatus("Select a file before downloading.");
+            return;
+        }
+
+        if (_fileTable is null)
+        {
+            SetProtectedStatus("Read the gauge file table before downloading.");
             return;
         }
 
@@ -433,16 +450,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             var jobDirectory = BuildJobDirectory();
             Directory.CreateDirectory(jobDirectory);
-            Status = $"Verifying gauge on {SelectedPort}";
+            SetProtectedStatus($"Verifying gauge on {SelectedPort}", TimeSpan.FromSeconds(30));
             await using var connection = await OpenVerifiedConnectionAsync(preferFast: true).ConfigureAwait(true);
             var session = new GaugeSession(connection.Transport);
             var service = new GaugeJobService(session);
 
-            Status = "Capturing sensor calibration";
+            SetProtectedStatus("Capturing sensor calibration", TimeSpan.FromSeconds(30));
             var calibration = await service.CaptureSensorCalibrationAsync().ConfigureAwait(true);
             await WriteCalibrationBundleAsync(jobDirectory, calibration).ConfigureAwait(true);
 
-            Status = $"Downloading file {SelectedFile.Index}";
+            SetProtectedStatus($"Downloading file {SelectedFile.Index}", TimeSpan.FromSeconds(30));
             var download = await service.DownloadFileAsync(_fileTable, SelectedFile.Index).ConfigureAwait(true);
             var rawPath = Path.Combine(jobDirectory, $"gauge-file-{download.FileIndex:000}.rawbin");
             await File.WriteAllBytesAsync(rawPath, download.RawBytes).ConfigureAwait(true);
@@ -473,15 +490,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             }
 
             IsGraphVisible = true;
-            Status = $"Downloaded file {download.FileIndex} with {samples.Count} sample(s)";
+            SetProtectedStatus($"Downloaded file {download.FileIndex} with {samples.Count} sample(s)", TimeSpan.FromSeconds(20));
         }
         catch (Exception ex) when (IsExpectedUiFailure(ex))
         {
-            Status = $"Download failed: {ex.Message}";
+            SetProtectedStatus($"Download failed: {ex.Message}", TimeSpan.FromSeconds(20));
         }
         catch (Exception ex)
         {
-            Status = $"Download failed unexpectedly: {ex.Message}";
+            SetProtectedStatus($"Download failed unexpectedly: {ex.Message}", TimeSpan.FromSeconds(20));
         }
         finally
         {
@@ -527,7 +544,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             DeviceDetails = BuildDeviceDetails(device, identity.Payload);
             ConnectionStatus = "Connected";
             ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
-            Status = "Gauge connected";
+            if (CanPollSetStatus())
+            {
+                Status = "Gauge connected";
+            }
+
             return;
         }
 
@@ -540,7 +561,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             return;
         }
 
-        Status = "Waiting for gauge";
+        if (CanPollSetStatus())
+        {
+            Status = "Waiting for gauge";
+        }
     }
 
     private void SetDisconnected()
@@ -919,6 +943,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    private void SetProtectedStatus(string value, TimeSpan? duration = null)
+    {
+        _statusProtectedUntilUtc = DateTime.UtcNow + (duration ?? TimeSpan.FromSeconds(10));
+        Status = value;
+    }
+
+    private bool CanPollSetStatus()
+    {
+        return DateTime.UtcNow >= _statusProtectedUntilUtc;
     }
 
     private static AppSettings LoadSettings()

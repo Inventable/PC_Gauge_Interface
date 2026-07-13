@@ -103,7 +103,7 @@
               <TextBlock Text="{Binding FileSummary}" Foreground="{StaticResource BrandMutedBrush}" />
             </StackPanel>
             <Button Grid.Column="1" Classes="secondary" Content="Read Files" Command="{Binding ReadFilesCommand}" VerticalAlignment="Center" />
-            <Button Grid.Column="2" Classes="primary" Content="{Binding DownloadButtonText}" Command="{Binding DownloadSelectedCommand}" VerticalAlignment="Center" />
+            <Button Grid.Column="2" Classes="primary" Content="{Binding DownloadButtonText}" Click="DownloadSelected_Click" VerticalAlignment="Center" />
           </Grid>
 
           <Border Grid.Row="1" Classes="panel" Padding="0">

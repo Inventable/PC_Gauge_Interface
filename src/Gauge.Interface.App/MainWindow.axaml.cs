@@ -47,4 +47,12 @@ public sealed partial class MainWindow : Window
             viewModel.ShowGraphCommand.Execute(null);
         }
     }
+
+    private async void DownloadSelected_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            await viewModel.DownloadSelectedAsync().ConfigureAwait(true);
+        }
+    }
 }
