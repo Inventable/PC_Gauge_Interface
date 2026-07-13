@@ -97,13 +97,17 @@
         </Border>
 
         <Grid IsVisible="{Binding IsFileTableVisible}" RowDefinitions="Auto,*" RowSpacing="12">
-          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+          <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="8">
             <StackPanel Spacing="2">
               <TextBlock Text="Files" FontSize="28" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
               <TextBlock Text="{Binding FileSummary}" Foreground="{StaticResource BrandMutedBrush}" />
             </StackPanel>
             <Button Grid.Column="1" Classes="secondary" Content="Read Files" Command="{Binding ReadFilesCommand}" VerticalAlignment="Center" />
             <Button Grid.Column="2" Classes="primary" Content="{Binding DownloadButtonText}" Click="DownloadSelected_Click" VerticalAlignment="Center" />
+            <Grid Grid.Row="1" Grid.ColumnSpan="3" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+              <ProgressBar Minimum="0" Maximum="100" Value="{Binding DownloadProgressPercent}" Height="10" BorderThickness="0" Foreground="{StaticResource BrandPrimaryBrush}" Background="#DDE6EA" />
+              <TextBlock Grid.Column="1" Text="{Binding DownloadProgressText}" Foreground="{StaticResource BrandMutedBrush}" VerticalAlignment="Center" />
+            </Grid>
           </Grid>
 
           <Border Grid.Row="1" Classes="panel" Padding="0">

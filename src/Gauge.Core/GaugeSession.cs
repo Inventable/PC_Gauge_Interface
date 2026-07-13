@@ -88,7 +88,8 @@ public sealed class GaugeSession
         int length,
         ushort chunkSize = 1024,
         GaugeCommand command = GaugeCommand.ReadExternalEeprom,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<MemoryReadProgress>? progress = null)
     {
         if (length < 0)
         {
@@ -102,6 +103,7 @@ public sealed class GaugeSession
 
         var result = new byte[length];
         var offset = 0;
+        progress?.Report(new MemoryReadProgress(0, length));
 
         while (offset < length)
         {
@@ -114,8 +116,13 @@ public sealed class GaugeSession
 
             chunk.CopyTo(result.AsSpan(offset));
             offset += bytesThisRead;
+            progress?.Report(new MemoryReadProgress(offset, length));
         }
 
         return result;
     }
 }
+
+public sealed record MemoryReadProgress(
+    int BytesRead,
+    int TotalBytes);

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -23,6 +24,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         "GaugeInterface",
         "settings.json");
     private readonly CancellationTokenSource _pollingCancellation = new();
+    private readonly SemaphoreSlim _serialGate = new(1, 1);
 
     private GaugeFileTable? _fileTable;
     private AppSettings _settings;
@@ -42,8 +44,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _pressureRange = "--";
     private string _temperatureRange = "--";
     private string _jobDuration = "--";
+    private string _downloadProgressText = "";
     private IBrush _connectionBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
     private GaugeFileRowViewModel? _selectedFile;
+    private double _downloadProgressPercent;
     private bool _isPortConfigured;
     private bool _isGaugeConnected;
     private bool _isGraphVisible;
@@ -224,6 +228,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         set => SetField(ref _jobDuration, value);
     }
 
+    public double DownloadProgressPercent
+    {
+        get => _downloadProgressPercent;
+        set => SetField(ref _downloadProgressPercent, value);
+    }
+
+    public string DownloadProgressText
+    {
+        get => _downloadProgressText;
+        set => SetField(ref _downloadProgressText, value);
+    }
+
     public GaugeFileRowViewModel? SelectedFile
     {
         get => _selectedFile;
@@ -374,6 +390,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private async Task ReadFilesAsync()
     {
         IsBusy = true;
+        await _serialGate.WaitAsync().ConfigureAwait(true);
         Files.Clear();
         Samples.Clear();
         ChartSamples.Clear();
@@ -414,6 +431,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         finally
         {
             IsBusy = false;
+            _serialGate.Release();
         }
     }
 
@@ -441,9 +459,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
 
         IsBusy = true;
+        await _serialGate.WaitAsync().ConfigureAwait(true);
         Samples.Clear();
         ChartSamples.Clear();
         LastCsvPath = string.Empty;
+        DownloadProgressPercent = 0;
+        DownloadProgressText = "Preparing download";
         ResetReview();
 
         try
@@ -460,7 +481,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             await WriteCalibrationBundleAsync(jobDirectory, calibration).ConfigureAwait(true);
 
             SetProtectedStatus($"Downloading file {SelectedFile.Index}", TimeSpan.FromSeconds(30));
-            var download = await service.DownloadFileAsync(_fileTable, SelectedFile.Index).ConfigureAwait(true);
+            var downloadTimer = Stopwatch.StartNew();
+            var progress = new Progress<MemoryReadProgress>(progress =>
+                UpdateDownloadProgress(progress, downloadTimer.Elapsed));
+            var download = await service.DownloadFileAsync(_fileTable, SelectedFile.Index, progress: progress).ConfigureAwait(true);
             var rawPath = Path.Combine(jobDirectory, $"gauge-file-{download.FileIndex:000}.rawbin");
             await File.WriteAllBytesAsync(rawPath, download.RawBytes).ConfigureAwait(true);
 
@@ -490,6 +514,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             }
 
             IsGraphVisible = true;
+            DownloadProgressPercent = 100;
+            DownloadProgressText = "Download complete";
             SetProtectedStatus($"Downloaded file {download.FileIndex} with {samples.Count} sample(s)", TimeSpan.FromSeconds(20));
         }
         catch (Exception ex) when (IsExpectedUiFailure(ex))
@@ -503,6 +529,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         finally
         {
             IsBusy = false;
+            _serialGate.Release();
         }
     }
 
@@ -519,7 +546,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                     continue;
                 }
 
-                await PollConnectionOnceAsync().ConfigureAwait(true);
+                if (!await _serialGate.WaitAsync(0, cancellationToken).ConfigureAwait(true))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await PollConnectionOnceAsync().ConfigureAwait(true);
+                }
+                finally
+                {
+                    _serialGate.Release();
+                }
             }
             catch (OperationCanceledException)
             {
@@ -557,7 +596,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             Status = $"Gauge woke at {WakeBaud}; reading files";
             await Task.Delay(FastVerifyDelay).ConfigureAwait(true);
-            await ReadFilesAsync().ConfigureAwait(true);
+            _ = ReadFilesAsync();
             return;
         }
 
@@ -886,6 +925,48 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         return bytes >= 1024
             ? $"{bytes / 1024.0:F1} KB"
             : $"{bytes} B";
+    }
+
+    private void UpdateDownloadProgress(MemoryReadProgress progress, TimeSpan elapsed)
+    {
+        if (progress.TotalBytes <= 0)
+        {
+            DownloadProgressPercent = 0;
+            DownloadProgressText = "Preparing download";
+            return;
+        }
+
+        DownloadProgressPercent = Math.Clamp(progress.BytesRead * 100.0 / progress.TotalBytes, 0, 100);
+        if (progress.BytesRead <= 0 || elapsed.TotalSeconds < 0.5)
+        {
+            DownloadProgressText = $"{DownloadProgressPercent:F0}%";
+            return;
+        }
+
+        var bytesPerSecond = progress.BytesRead / elapsed.TotalSeconds;
+        var remainingBytes = Math.Max(0, progress.TotalBytes - progress.BytesRead);
+        var remaining = bytesPerSecond <= 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds(remainingBytes / bytesPerSecond);
+
+        DownloadProgressText = remainingBytes == 0
+            ? "100% complete"
+            : $"{DownloadProgressPercent:F0}% - about {FormatDuration(remaining)} remaining";
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalSeconds < 1)
+        {
+            return "1 sec";
+        }
+
+        if (duration.TotalMinutes < 1)
+        {
+            return $"{Math.Ceiling(duration.TotalSeconds):F0} secs";
+        }
+
+        return $"{Math.Ceiling(duration.TotalMinutes):F0} mins";
     }
 
     private static bool IsExpectedUiFailure(Exception ex)

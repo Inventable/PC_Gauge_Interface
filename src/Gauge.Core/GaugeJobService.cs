@@ -80,7 +80,8 @@ public sealed class GaugeJobService
         GaugeFileTable table,
         int fileIndex,
         ushort chunkBytes = 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<MemoryReadProgress>? progress = null)
     {
         if (fileIndex < 0 || fileIndex >= table.Records.Count)
         {
@@ -96,7 +97,7 @@ public sealed class GaugeJobService
 
         var bytesToRead = checked((int)(nextAddress - record.DataAddress.Value));
         var bytes = await _session
-            .ReadExternalMemoryChunkedAsync(record.DataAddress.Value, bytesToRead, chunkBytes, GaugeCommand.ReadRecordSector, cancellationToken)
+            .ReadExternalMemoryChunkedAsync(record.DataAddress.Value, bytesToRead, chunkBytes, GaugeCommand.ReadRecordSector, cancellationToken, progress)
             .ConfigureAwait(false);
 
         return new GaugeMemoryDownload(fileIndex, record, table.EndOfFile, nextAddress, bytes);
