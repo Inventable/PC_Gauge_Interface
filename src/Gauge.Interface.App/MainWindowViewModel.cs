@@ -482,7 +482,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             return;
         }
 
-        var slowIdentity = await TryIdentifyAsync(SelectedPort, WakeBaud, 350).ConfigureAwait(true);
+        var slowIdentity = await WaitForIdentifyAsync(SelectedPort, WakeBaud, 700, 100, 200).ConfigureAwait(true);
         if (slowIdentity is not null)
         {
             Status = $"Gauge woke at {WakeBaud}; reading files";
@@ -511,7 +511,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private async Task<VerifiedGaugeConnection> OpenVerifiedConnectionAsync()
     {
-        var slowIdentity = await TryIdentifyAsync(SelectedPort, WakeBaud, 1600).ConfigureAwait(true);
+        var slowIdentity = await WaitForIdentifyAsync(SelectedPort, WakeBaud, 5000, 100, 250).ConfigureAwait(true);
         if (slowIdentity is not null)
         {
             Status = $"Gauge woke at {WakeBaud}; verifying fast link";
@@ -539,6 +539,42 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    private static async Task<GaugeFrame?> WaitForIdentifyAsync(
+        string portName,
+        int baudRate,
+        int timeoutMs,
+        int intervalMs,
+        int transactionTimeoutMs)
+    {
+        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+        try
+        {
+            await using var transport = CreateTransport(portName, baudRate, transactionTimeoutMs);
+            await transport.OpenAsync(timeoutSource.Token).ConfigureAwait(false);
+
+            while (!timeoutSource.IsCancellationRequested)
+            {
+                var result = await TryIdentifyOpenTransportAsync(transport, timeoutSource.Token).ConfigureAwait(false);
+                if (result is not null)
+                {
+                    return result;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(intervalMs), timeoutSource.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (IsExpectedUiFailure(ex) || ex is ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
     private static async Task<VerifiedGaugeConnection> OpenIdentifiedTransportAsync(string portName, int baudRate, int timeoutMs)
     {
         var transport = CreateTransport(portName, baudRate, timeoutMs);
@@ -553,6 +589,19 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             await transport.DisposeAsync().ConfigureAwait(false);
             throw;
+        }
+    }
+
+    private static async Task<GaugeFrame?> TryIdentifyOpenTransportAsync(SerialGaugeTransport transport, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var session = new GaugeSession(transport);
+            return await session.IdentifyAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedUiFailure(ex) || ex is ArgumentOutOfRangeException)
+        {
+            return null;
         }
     }
 

@@ -153,8 +153,13 @@ if (args[0] == "verify-serial")
     var fastBaud = args.Length >= 4 ? int.Parse(args[3]) : 460800;
     var delayMs = args.Length >= 5 ? int.Parse(args[4]) : 250;
 
-    Console.WriteLine($"Step 1: IDENTIFY on {portName} at {slowBaud} baud.");
-    var slowReply = await TryIdentifyAsync(portName, slowBaud, CancellationToken.None);
+    Console.WriteLine($"Step 1: polling IDENTIFY on {portName} at {slowBaud} baud.");
+    var slowReply = await WaitForIdentifyAsync(
+        portName,
+        slowBaud,
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromMilliseconds(100),
+        CancellationToken.None).ConfigureAwait(false);
     if (slowReply is null)
     {
         Console.Error.WriteLine($"No gauge responded on {portName} at {slowBaud} baud.");
@@ -705,6 +710,49 @@ static async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, C
     {
         return null;
     }
+}
+
+static async Task<GaugeFrame?> WaitForIdentifyAsync(
+    string portName,
+    int baudRate,
+    TimeSpan timeout,
+    TimeSpan interval,
+    CancellationToken cancellationToken)
+{
+    using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    timeoutSource.CancelAfter(timeout);
+
+    try
+    {
+        var options = new SerialGaugeTransportOptions(
+            portName,
+            baudRate,
+            ReadTimeoutMs: 250,
+            WriteTimeoutMs: 250);
+        await using var transport = new SerialGaugeTransport(options);
+        await transport.OpenAsync(timeoutSource.Token).ConfigureAwait(false);
+
+        while (!timeoutSource.IsCancellationRequested)
+        {
+            var result = await TryIdentifyOpenTransportAsync(transport, timeoutSource.Token).ConfigureAwait(false);
+            if (result is not null)
+            {
+                return result;
+            }
+
+            await Task.Delay(interval, timeoutSource.Token).ConfigureAwait(false);
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        // Normal wait timeout.
+    }
+    catch (Exception ex) when (IsExpectedSerialFailure(ex))
+    {
+        return null;
+    }
+
+    return null;
 }
 
 static Task<int> ProbeIdentifyRawAsync(string portName, int baudRate, int listenMs)
