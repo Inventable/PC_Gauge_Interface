@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Windows.Input;
 using Avalonia.Media;
 using Gauge.Core;
@@ -16,9 +17,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private const int FastBaud = 460800;
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AppPollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly string SettingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Northstar",
+        "GaugeInterface",
+        "settings.json");
     private readonly CancellationTokenSource _pollingCancellation = new();
 
     private GaugeFileTable? _fileTable;
+    private AppSettings _settings;
+    private SerialPortOption? _selectedPortOption;
     private string _selectedPort = string.Empty;
     private string _outputDirectory;
     private string _jobName = "Gauge Job";
@@ -41,10 +49,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _isGraphVisible;
     private bool _showDeviceDetails;
     private bool _isBusy;
+    private bool _isInitialising = true;
 
     public MainWindowViewModel()
     {
-        _outputDirectory = Path.Combine(Environment.CurrentDirectory, "artifacts", "desktop-downloads");
+        _settings = LoadSettings();
+        _outputDirectory = string.IsNullOrWhiteSpace(_settings.OutputDirectory)
+            ? Path.Combine(Environment.CurrentDirectory, "artifacts", "desktop-downloads")
+            : _settings.OutputDirectory;
         RefreshPortsCommand = new RelayCommand(RefreshPortsAsync);
         StartCommand = new RelayCommand(StartAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
         ReadFilesCommand = new RelayCommand(ReadFilesAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
@@ -54,12 +66,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OpenSettingsCommand = new RelayCommand(OpenSettingsAsync);
         ToggleDeviceDetailsCommand = new RelayCommand(ToggleDeviceDetailsAsync);
         RefreshPorts();
+        _isInitialising = false;
         _ = PollGaugeAsync(_pollingCancellation.Token);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public ObservableCollection<string> Ports { get; } = [];
+    public ObservableCollection<SerialPortOption> Ports { get; } = [];
 
     public ObservableCollection<GaugeFileRowViewModel> Files { get; } = [];
 
@@ -90,7 +103,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _selectedPort, value))
             {
+                if (!_isInitialising)
+                {
+                    _settings = _settings with { LastPort = value };
+                    SaveSettings();
+                }
+
                 RaiseCommandStates();
+            }
+        }
+    }
+
+    public SerialPortOption? SelectedPortOption
+    {
+        get => _selectedPortOption;
+        set
+        {
+            if (SetField(ref _selectedPortOption, value))
+            {
+                SelectedPort = value?.Name ?? string.Empty;
             }
         }
     }
@@ -98,7 +129,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public string OutputDirectory
     {
         get => _outputDirectory;
-        set => SetField(ref _outputDirectory, value);
+        set
+        {
+            if (SetField(ref _outputDirectory, value) && !_isInitialising)
+            {
+                _settings = _settings with { OutputDirectory = value };
+                SaveSettings();
+            }
+        }
     }
 
     public string JobName
@@ -257,10 +295,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _isBusy, value))
             {
+                OnPropertyChanged(nameof(DownloadButtonText));
                 RaiseCommandStates();
             }
         }
     }
+
+    public string DownloadButtonText => IsBusy ? "Working..." : "Download Selected";
 
     private Task RefreshPortsAsync()
     {
@@ -270,6 +311,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private async Task StartAsync()
     {
+        _settings = _settings with { LastPort = SelectedPort, OutputDirectory = OutputDirectory };
+        SaveSettings();
         IsPortConfigured = true;
         IsGraphVisible = false;
         Status = $"Checking {SelectedPort}";
@@ -308,21 +351,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void RefreshPorts()
     {
-        var previous = SelectedPort;
+        var previous = string.IsNullOrWhiteSpace(SelectedPort) ? _settings.LastPort : SelectedPort;
         Ports.Clear();
 
-        foreach (var port in SerialPortDiscovery.GetPortNames())
+        foreach (var port in SerialPortDiscovery.GetPorts())
         {
-            Ports.Add(port);
+            Ports.Add(new SerialPortOption(port.Name, port.DisplayName, port.IsLikelyUsbSerial));
         }
 
-        SelectedPort = Ports.Contains(previous)
-            ? previous
-            : Ports.FirstOrDefault() ?? string.Empty;
+        SelectedPortOption = ChoosePort(previous);
+        SelectedPort = SelectedPortOption?.Name ?? string.Empty;
 
         if (!IsPortConfigured)
         {
-            Status = Ports.Count == 0 ? "No serial ports found" : $"Found {Ports.Count} serial port(s)";
+            Status = Ports.Count == 0
+                ? "No serial ports found"
+                : $"Selected {SelectedPortOption?.DisplayName ?? SelectedPort}";
         }
     }
 
@@ -341,7 +385,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         try
         {
             Status = $"Waking gauge on {SelectedPort}";
-            await using var connection = await OpenVerifiedConnectionAsync().ConfigureAwait(true);
+            await using var connection = await OpenVerifiedConnectionAsync(preferFast: IsGaugeConnected).ConfigureAwait(true);
             var session = new GaugeSession(connection.Transport);
             var service = new GaugeJobService(session);
 
@@ -390,7 +434,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             var jobDirectory = BuildJobDirectory();
             Directory.CreateDirectory(jobDirectory);
             Status = $"Verifying gauge on {SelectedPort}";
-            await using var connection = await OpenVerifiedConnectionAsync().ConfigureAwait(true);
+            await using var connection = await OpenVerifiedConnectionAsync(preferFast: true).ConfigureAwait(true);
             var session = new GaugeSession(connection.Transport);
             var service = new GaugeJobService(session);
 
@@ -434,6 +478,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         catch (Exception ex) when (IsExpectedUiFailure(ex))
         {
             Status = $"Download failed: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Download failed unexpectedly: {ex.Message}";
         }
         finally
         {
@@ -510,8 +558,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         FileSummary = "No file table loaded";
     }
 
-    private async Task<VerifiedGaugeConnection> OpenVerifiedConnectionAsync()
+    private async Task<VerifiedGaugeConnection> OpenVerifiedConnectionAsync(bool preferFast)
     {
+        if (preferFast)
+        {
+            var fastIdentity = await TryIdentifyAsync(SelectedPort, FastBaud, 1000).ConfigureAwait(true);
+            if (fastIdentity is not null)
+            {
+                return await OpenIdentifiedTransportAsync(SelectedPort, FastBaud, 30000).ConfigureAwait(true);
+            }
+        }
+
         var slowIdentity = await WaitForIdentifyAsync(SelectedPort, WakeBaud, 5000, 100, 250).ConfigureAwait(true);
         if (slowIdentity is not null)
         {
@@ -523,6 +580,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         Status = $"No slow response; checking {FastBaud} baud";
         return await OpenIdentifiedTransportAsync(SelectedPort, FastBaud, 30000).ConfigureAwait(true);
+    }
+
+    private SerialPortOption? ChoosePort(string previous)
+    {
+        if (!string.IsNullOrWhiteSpace(previous))
+        {
+            var remembered = Ports.FirstOrDefault(port => string.Equals(port.Name, previous, StringComparison.OrdinalIgnoreCase));
+            if (remembered is not null)
+            {
+                return remembered;
+            }
+        }
+
+        return Ports.FirstOrDefault(port => port.IsLikelyTarget)
+            ?? Ports.FirstOrDefault();
     }
 
     private static async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, int timeoutMs)
@@ -847,6 +919,51 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    private static AppSettings LoadSettings()
+    {
+        try
+        {
+            if (!File.Exists(SettingsPath))
+            {
+                return new AppSettings();
+            }
+
+            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return new AppSettings();
+        }
+    }
+
+    private void SaveSettings()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Status = $"Settings could not be saved: {ex.Message}";
+        }
+    }
+}
+
+public sealed record AppSettings(
+    string LastPort = "",
+    string OutputDirectory = "");
+
+public sealed record SerialPortOption(
+    string Name,
+    string DisplayName,
+    bool IsLikelyTarget)
+{
+    public override string ToString()
+    {
+        return IsLikelyTarget ? $"{DisplayName} (likely)" : DisplayName;
     }
 }
 
