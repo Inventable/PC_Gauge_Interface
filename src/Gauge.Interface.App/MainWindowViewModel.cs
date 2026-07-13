@@ -15,6 +15,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private const int WakeBaud = 57600;
     private const int FastBaud = 460800;
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan AppPollInterval = TimeSpan.FromMilliseconds(100);
     private readonly CancellationTokenSource _pollingCancellation = new();
 
     private GaugeFileTable? _fileTable;
@@ -442,7 +443,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private async Task PollGaugeAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+        using var timer = new PeriodicTimer(AppPollInterval);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -482,7 +483,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             return;
         }
 
-        var slowIdentity = await WaitForIdentifyAsync(SelectedPort, WakeBaud, 700, 100, 200).ConfigureAwait(true);
+        var slowIdentity = await WaitForIdentifyAsync(SelectedPort, WakeBaud, 2000, 20, 80).ConfigureAwait(true);
         if (slowIdentity is not null)
         {
             Status = $"Gauge woke at {WakeBaud}; reading files";
