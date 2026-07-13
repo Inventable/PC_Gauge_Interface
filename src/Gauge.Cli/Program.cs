@@ -288,14 +288,14 @@ if (args[0] == "list-files")
     var records = MemoryGaugeFileRecord.ParseTable(table);
 
     Console.WriteLine($"EOF: {eof} ({eof.Value})");
-    Console.WriteLine($"Valid file records: {records.Count}");
+    Console.WriteLine($"Files: {records.Count}");
 
     if (records.Count == 0)
     {
         return 0;
     }
 
-    Console.WriteLine("Idx  Type      Data Addr   Rate  Est Records  Reset  CRC");
+    Console.WriteLine("File  Table  Data Addr   Rate  Est Records  Reset  CRC");
     for (var index = 0; index < records.Count; index++)
     {
         var record = records[index];
@@ -305,7 +305,7 @@ if (args[0] == "list-files")
             : 0;
 
         Console.WriteLine(
-            $"{record.Index,3}  {record.RecordType,-8}  {record.DataAddress}  {record.MeasurementInterval,4}  {estimatedRecords,11}  0x{record.ResetCause:X2}   {(record.IsCrcValid ? "OK" : "BAD")}");
+            $"{index,4}  {record.Index,5}  {record.DataAddress}  {record.MeasurementInterval,4}  {estimatedRecords,11}  0x{record.ResetCause:X2}   {(record.IsCrcValid ? "OK" : "BAD")}");
     }
 
     return 0;

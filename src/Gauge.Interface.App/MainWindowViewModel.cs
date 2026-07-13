@@ -651,7 +651,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             var bytes = sizes[index];
             var samples = bytes / MemoryGaugeDataRecord.Length * 2;
             var row = new GaugeFileRowViewModel(
-                record.Index,
+                index,
                 bytes,
                 FormatBytes(bytes),
                 largest == 0 ? 0 : Math.Max(4, bytes * 100.0 / largest),

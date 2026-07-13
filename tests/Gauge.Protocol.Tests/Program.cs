@@ -13,6 +13,7 @@ var tests = new (string Name, Action Run)[]
     ("Bad CRC is rejected", BadCrcIsRejected),
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
+    ("Memory gauge file table ignores continuation records", MemoryGaugeFileTableIgnoresContinuationRecords),
     ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
     ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse),
     ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
@@ -160,6 +161,22 @@ static void MemoryGaugeFileRecordParsesAndValidatesCrc()
     AssertEqual(true, record.IsCrcValid);
 }
 
+static void MemoryGaugeFileTableIgnoresContinuationRecords()
+{
+    var table = Enumerable.Repeat((byte)0xFF, MemoryGaugeFileRecord.Length * 4).ToArray();
+    WriteFileRecord(table.AsSpan(0, MemoryGaugeFileRecord.Length), 0x00004000, MemoryGaugeFileRecordType.Start);
+    WriteFileRecord(table.AsSpan(MemoryGaugeFileRecord.Length, MemoryGaugeFileRecord.Length), 0x00008000, MemoryGaugeFileRecordType.Continue);
+    WriteFileRecord(table.AsSpan(MemoryGaugeFileRecord.Length * 2, MemoryGaugeFileRecord.Length), 0x0000C000, MemoryGaugeFileRecordType.Start);
+
+    var records = MemoryGaugeFileRecord.ParseTable(table);
+
+    AssertEqual(2, records.Count);
+    AssertEqual(0, records[0].Index);
+    AssertEqual((uint)0x00004000, records[0].DataAddress.Value);
+    AssertEqual(2, records[1].Index);
+    AssertEqual((uint)0x0000C000, records[1].DataAddress.Value);
+}
+
 static void MemoryGaugeDataRecordParsesCountsAndCrc()
 {
     var bytes = new byte[MemoryGaugeDataRecord.Length];
@@ -189,6 +206,16 @@ static void MemoryGaugeDataRecordParsesCountsAndCrc()
     AssertEqual((ushort)0x1234, record.Counter);
     AssertEqual((byte)0, record.BatteryStatus);
     AssertEqual(true, record.IsCrcValid);
+}
+
+static void WriteFileRecord(Span<byte> bytes, uint address, MemoryGaugeFileRecordType type)
+{
+    WriteUInt32LittleEndian(bytes[..4], address);
+    bytes[4] = (byte)type;
+    bytes[5] = 0x01;
+    bytes[6] = 0x00;
+    bytes[8] = 0x12;
+    bytes[15] = Crc8.Compute(bytes[..15]);
 }
 
 static void SensorHexDoubleCoefficientsParse()

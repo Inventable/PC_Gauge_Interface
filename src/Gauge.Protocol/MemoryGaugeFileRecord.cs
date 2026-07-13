@@ -74,7 +74,10 @@ public sealed record MemoryGaugeFileRecord(
                 break;
             }
 
-            records.Add(record);
+            if (record.RecordType == MemoryGaugeFileRecordType.Start)
+            {
+                records.Add(record);
+            }
         }
 
         return records;
