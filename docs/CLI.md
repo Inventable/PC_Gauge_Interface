@@ -23,6 +23,14 @@ If the gauge is already in serial mode, direct fast commands can be used:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 identify COM5 460800
 ```
 
+To debug cold-start detection without switching to the faster baud rate, send one `IDENTIFY` at `57600` and dump any raw bytes received:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 probe-identify-raw COM5 57600 2000
+```
+
+This command does not try `460800`. It reports the exact transmitted bytes, the raw received bytes, and whether the received bytes decode as a valid gauge frame.
+
 ## Memory
 
 Read the end-of-file address:

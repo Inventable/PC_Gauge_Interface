@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Ports;
 using Gauge.Calibration;
 using Gauge.Core;
 using Gauge.Protocol;
@@ -13,6 +14,7 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("Commands:");
     Console.WriteLine("  list-ports        List serial ports visible to .NET.");
     Console.WriteLine("  encode-identify   Print the legacy wire bytes for an IDENTIFY request.");
+    Console.WriteLine("  probe-identify-raw <port> [baud] [listen-ms]");
     Console.WriteLine("  identify <port> [baud]");
     Console.WriteLine("  scan-identify [baud|auto] [seconds]");
     Console.WriteLine("  wait-identify <port> [baud] [seconds] [interval-ms]");
@@ -51,6 +53,21 @@ if (args[0] == "encode-identify")
     var wire = GaugeFrameCodec.Encode(frame);
     Console.WriteLine(Convert.ToHexString(wire));
     return 0;
+}
+
+if (args[0] == "probe-identify-raw")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: probe-identify-raw <port> [baud] [listen-ms]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 57600;
+    var listenMs = args.Length >= 4 ? int.Parse(args[3]) : 1200;
+
+    return await ProbeIdentifyRawAsync(portName, baudRate, listenMs).ConfigureAwait(false);
 }
 
 if (args[0] == "identify")
@@ -687,6 +704,108 @@ static async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, C
         or GaugeProtocolException)
     {
         return null;
+    }
+}
+
+static Task<int> ProbeIdentifyRawAsync(string portName, int baudRate, int listenMs)
+{
+    if (listenMs <= 0)
+    {
+        throw new ArgumentOutOfRangeException(nameof(listenMs), "Listen time must be greater than zero.");
+    }
+
+    var requestBytes = GaugeFrameCodec.Encode(GaugeFrame.Create(GaugeCommand.Identify));
+    Console.WriteLine($"Opening {portName} at {baudRate} baud.");
+    Console.WriteLine("This command sends one IDENTIFY and does not try any faster baud rate.");
+    Console.WriteLine($"TX ({requestBytes.Length} bytes): {Convert.ToHexString(requestBytes)}");
+
+    using var port = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
+    {
+        ReadTimeout = 50,
+        WriteTimeout = 500
+    };
+
+    try
+    {
+        port.Open();
+        port.DiscardInBuffer();
+        port.DiscardOutBuffer();
+        port.Write(requestBytes, 0, requestBytes.Length);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(listenMs);
+        var received = new List<byte>();
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var value = port.ReadByte();
+                if (value >= 0)
+                {
+                    received.Add((byte)value);
+                }
+            }
+            catch (TimeoutException)
+            {
+                // Keep listening until the requested window expires.
+            }
+        }
+
+        Console.WriteLine($"RX ({received.Count} bytes): {(received.Count == 0 ? "<none>" : Convert.ToHexString(received.ToArray()))}");
+        if (received.Count > 0)
+        {
+            PrintRawDecodeAttempt(received.ToArray());
+        }
+
+        return Task.FromResult(received.Count == 0 ? 2 : 0);
+    }
+    catch (Exception ex) when (IsExpectedSerialFailure(ex))
+    {
+        Console.Error.WriteLine($"Raw identify probe failed: {ex.Message}");
+        return Task.FromResult(3);
+    }
+    finally
+    {
+        if (port.IsOpen)
+        {
+            port.Close();
+        }
+    }
+}
+
+static void PrintRawDecodeAttempt(byte[] received)
+{
+    var startIndex = Array.IndexOf(received, GaugeProtocolConstants.StartByte);
+    if (startIndex < 0)
+    {
+        Console.WriteLine("Decode: no 0x55 start byte found.");
+        return;
+    }
+
+    var candidate = received[startIndex..];
+    if (candidate.Length < 1 + GaugeProtocolConstants.HeaderLength + GaugeProtocolConstants.CrcLength)
+    {
+        Console.WriteLine($"Decode: found 0x55 at byte {startIndex}, but only {candidate.Length} byte(s) remain.");
+        return;
+    }
+
+    var declaredLength = (ushort)(candidate[2] | (candidate[3] << 8));
+    var expectedLength = 1 + GaugeProtocolConstants.HeaderLength + declaredLength + GaugeProtocolConstants.CrcLength;
+    if (candidate.Length < expectedLength)
+    {
+        Console.WriteLine($"Decode: partial frame. Need {expectedLength} byte(s) from start byte, got {candidate.Length}.");
+        return;
+    }
+
+    var frameBytes = candidate[..expectedLength];
+    try
+    {
+        var frame = GaugeFrameCodec.Decode(frameBytes);
+        Console.WriteLine("Decode: valid gauge frame.");
+        PrintIdentifyResult("raw-probe", 0, frame);
+    }
+    catch (GaugeProtocolException ex)
+    {
+        Console.WriteLine($"Decode: frame-like bytes found but decode failed: {ex.Message}");
     }
 }
 

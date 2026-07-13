@@ -491,11 +491,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             return;
         }
 
-        var fastIdentity = await TryIdentifyAsync(SelectedPort, FastBaud, 350).ConfigureAwait(true);
-        if (fastIdentity is not null)
-        {
-            await ReadFilesAsync().ConfigureAwait(true);
-        }
+        Status = "Waiting for gauge";
     }
 
     private void SetDisconnected()
