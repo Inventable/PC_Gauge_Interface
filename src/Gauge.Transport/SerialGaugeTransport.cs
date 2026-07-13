@@ -1,4 +1,5 @@
 using System.IO.Ports;
+using System.Runtime.ExceptionServices;
 using Gauge.Protocol;
 
 namespace Gauge.Transport;
@@ -59,20 +60,85 @@ public sealed class SerialGaugeTransport : IGaugeTransport
             return await Task.Run(
                 () =>
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var requestBytes = GaugeFrameCodec.Encode(request);
-
-                    port.DiscardInBuffer();
-                    port.Write(requestBytes, 0, requestBytes.Length);
-
-                    var replyBytes = ReadWireFrame(port, cancellationToken);
-                    return GaugeFrameCodec.Decode(replyBytes);
+                    return TransactWithRetries(port, request, cancellationToken);
                 },
                 cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _transactionLock.Release();
+        }
+    }
+
+    private GaugeFrame TransactWithRetries(SerialPort port, GaugeFrame request, CancellationToken cancellationToken)
+    {
+        Exception? lastFailure = null;
+        var attempts = Math.Max(1, _options.MaxAttempts);
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                return TransactOnce(port, request, cancellationToken);
+            }
+            catch (Exception ex) when (IsRetryableCommsFailure(ex) && attempt < attempts)
+            {
+                lastFailure = ex;
+                TryDiscardBuffers(port);
+                DelayBeforeRetry(cancellationToken);
+            }
+            catch (Exception ex) when (IsRetryableCommsFailure(ex))
+            {
+                lastFailure = ex;
+            }
+        }
+
+        ExceptionDispatchInfo.Capture(lastFailure ?? new TimeoutException("Gauge transaction failed without a reply.")).Throw();
+        throw new InvalidOperationException("Gauge transaction retry handling failed unexpectedly.");
+    }
+
+    private static GaugeFrame TransactOnce(SerialPort port, GaugeFrame request, CancellationToken cancellationToken)
+    {
+        var requestBytes = GaugeFrameCodec.Encode(request);
+
+        TryDiscardBuffers(port);
+        port.Write(requestBytes, 0, requestBytes.Length);
+
+        var replyBytes = ReadWireFrame(port, cancellationToken);
+        return GaugeFrameCodec.Decode(replyBytes);
+    }
+
+    private static bool IsRetryableCommsFailure(Exception ex)
+    {
+        return ex is TimeoutException
+            or IOException
+            or GaugeProtocolException;
+    }
+
+    private void DelayBeforeRetry(CancellationToken cancellationToken)
+    {
+        if (_options.RetryDelayMs <= 0)
+        {
+            return;
+        }
+
+        Task.Delay(_options.RetryDelayMs, cancellationToken).GetAwaiter().GetResult();
+    }
+
+    private static void TryDiscardBuffers(SerialPort port)
+    {
+        try
+        {
+            port.DiscardInBuffer();
+            port.DiscardOutBuffer();
+        }
+        catch (IOException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
         }
     }
 
@@ -133,4 +199,3 @@ public sealed class SerialGaugeTransport : IGaugeTransport
         }
     }
 }
-
