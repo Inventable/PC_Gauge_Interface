@@ -1,3 +1,4 @@
+using System.Text;
 using Gauge.Calibration;
 using Gauge.Core;
 using Gauge.Protocol;
@@ -19,7 +20,8 @@ var tests = new (string Name, Action Run)[]
     ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
     ("Quartz calibration converts counts to frequencies", QuartzCalibrationConvertsCountsToFrequencies),
     ("Quartz calibration evaluates live gauge measurement", QuartzCalibrationEvaluatesLiveGaugeMeasurement),
-    ("Calibrated CSV exporter formats rows", CalibratedCsvExporterFormatsRows)
+    ("Calibrated CSV exporter formats rows", CalibratedCsvExporterFormatsRows),
+    ("Legacy record exporter writes ASCII format", LegacyRecordExporterWritesAsciiFormat)
 };
 
 var failures = 0;
@@ -305,6 +307,58 @@ static void CalibratedCsvExporterFormatsRows()
     AssertEqual(
         "16995857,16964453,16.228902038943861,28.363888551384878,0,240,38832,0,262162.88848216913,49938.64092878635,0,0,0",
         rows[1]);
+}
+
+static void LegacyRecordExporterWritesAsciiFormat()
+{
+    var metadata = new LegacyRecordMetadata(
+        new DateTime(2026, 7, 12, 17, 16, 8),
+        "Northstar 4000AH Quartz Transducer",
+        100230,
+        3807522001,
+        0,
+        2,
+        "XHTI-7-1000153",
+        "2022-03-05T00:06:52");
+    CalibratedGaugeSample[] samples =
+    [
+        new CalibratedGaugeSample(
+            16995857,
+            16964453,
+            16.22890203894386,
+            28.36388855138488,
+            0,
+            240,
+            0x000097B0,
+            0,
+            262162.88848216913,
+            49938.64092878635,
+            false,
+            false,
+            0)
+    ];
+
+    using var output = new MemoryStream();
+    LegacyRecordExporter.Write(output, metadata, samples);
+    var bytes = output.ToArray();
+    if (bytes.Any(value => value > 0x7F))
+    {
+        throw new InvalidOperationException("Legacy record output contains non-ASCII bytes.");
+    }
+
+    var text = Encoding.ASCII.GetString(bytes);
+    if (!text.Contains("\r\n", StringComparison.Ordinal) || text.Contains('\uFEFF'))
+    {
+        throw new InvalidOperationException("Legacy record output must use CRLF without a BOM.");
+    }
+
+    var lines = text.Split("\r\n", StringSplitOptions.None);
+    AssertEqual("Start of Job: 2026/07/12 17:16:08", lines[0]);
+    AssertEqual("Device Type: Northstar 4000AH Quartz Transducer", lines[2]);
+    AssertEqual(LegacyRecordExporter.Header, lines[10]);
+    AssertEqual(
+        "16995857\t16964453\t16.228902\t28.363889\t     0\t   240\t38832\t0.00000000\t262162.888482\t0\t0\t0",
+        lines[11]);
 }
 
 static void WriteUInt32LittleEndian(Span<byte> target, uint value)

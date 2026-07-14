@@ -394,6 +394,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         return $"gauge-{serial}-{DateTime.Now:yyyyMMdd}-file-{file.Index:000}.rec";
     }
 
+    public LegacyRecordMetadata BuildLegacyRecordMetadata(GaugeFileRowViewModel file)
+    {
+        if (_connectedDevice is null || _calibration is null || file.Samples is not { Count: > 0 } samples)
+        {
+            throw new InvalidOperationException("Downloaded gauge data and calibration are required for record export.");
+        }
+
+        var sensorIdentity = SensorAsciiData.DecodePayload(_calibration.SensorSerial)
+            .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var sensorType = sensorIdentity.ElementAtOrDefault(0) ?? "Unknown";
+        var sensorSerial = sensorIdentity.ElementAtOrDefault(1) ?? "Unknown";
+        var startOfJob = DateTime.Now - TimeSpan.FromSeconds(samples[^1].Timestamp);
+
+        return new LegacyRecordMetadata(
+            startOfJob,
+            DescribeDeviceType(_connectedDevice.DeviceType),
+            _connectedDevice.DeviceType,
+            _connectedDevice.DeviceSerial,
+            _connectedDevice.FirmwareMajor,
+            _connectedDevice.FirmwareMinor,
+            sensorType,
+            sensorSerial);
+    }
+
     public void RecordExportSucceeded(GaugeFileRowViewModel file, string savedPath)
     {
         var directory = Path.GetDirectoryName(savedPath);
@@ -1094,6 +1118,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         return $"Connected | Device {device.DeviceSerial} | Firmware {device.FirmwareMajor}.{device.FirmwareMinor}";
     }
 
+    private static string DescribeDeviceType(uint deviceType)
+    {
+        return deviceType switch
+        {
+            100200 => "Northstar Acoustic Quartz Transducer",
+            100230 => "Northstar 4000AH Quartz Transducer",
+            _ => "Northstar Quartz Transducer"
+        };
+    }
+
     private static string BuildDeviceDetails(DeviceData? device, byte[] payload)
     {
         if (device is null)
@@ -1324,8 +1358,6 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public GaugeMemoryDownload? Download { get; private set; }
 
-    public byte[]? RawBytes { get; private set; }
-
     public IReadOnlyList<CalibratedGaugeSample>? Samples { get; private set; }
 
     public string State
@@ -1441,7 +1473,6 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         bool hasErrors)
     {
         Download = download;
-        RawBytes = download.RawBytes;
         Samples = samples;
         SampleCount = samples.Count;
         HasWarnings = hasWarnings;

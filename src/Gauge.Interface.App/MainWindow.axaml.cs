@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using Gauge.Core;
 
 namespace Gauge.Interface.App;
 
@@ -62,7 +63,7 @@ public sealed partial class MainWindow : Window
     {
         if (DataContext is not MainWindowViewModel viewModel ||
             sender is not Control { DataContext: GaugeFileRowViewModel file } ||
-            file.RawBytes is not { Length: > 0 } rawBytes)
+            file.Samples is not { Count: > 0 } samples)
         {
             return;
         }
@@ -99,8 +100,8 @@ public sealed partial class MainWindow : Window
 
             await using var stream = await destination.OpenWriteAsync();
             stream.SetLength(0);
-            await stream.WriteAsync(rawBytes);
-            await stream.FlushAsync();
+            var metadata = viewModel.BuildLegacyRecordMetadata(file);
+            await Task.Run(() => LegacyRecordExporter.Write(stream, metadata, samples));
 
             var savedPath = destination.Path.LocalPath;
             viewModel.RecordExportSucceeded(file, savedPath);
