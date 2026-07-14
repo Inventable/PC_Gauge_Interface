@@ -223,11 +223,11 @@
                         Data="M20,11H7.83L13.42,5.41L12,4L4,12L12,20L13.41,18.59L7.83,13H20V11Z" />
             </Button>
           </Grid>
-          <Grid Grid.Row="1" ColumnDefinitions="*,250" ColumnSpacing="14">
-            <Border Classes="panel" Padding="8" ClipToBounds="True">
+          <Grid Grid.Row="1" ColumnDefinitions="250,*" ColumnSpacing="14">
+            <Border Grid.Column="1" Classes="panel" Padding="8" ClipToBounds="True">
               <local:GaugeTrendChart x:Name="GaugeTrend" Data="{Binding ChartData}" />
             </Border>
-            <Border Grid.Column="1" Classes="panel">
+            <Border Classes="panel">
               <StackPanel Spacing="15">
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                   <StackPanel Spacing="3">
