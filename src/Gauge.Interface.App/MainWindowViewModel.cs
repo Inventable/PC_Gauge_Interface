@@ -21,8 +21,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private const int WakePollIntervalMs = 100;
     private const int WakeScanTimeoutMs = 30000;
     private const int BackgroundWakeScanTimeoutMs = 1500;
+    private const int ConnectedPollTransactionTimeoutMs = 250;
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AppPollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan ConnectedPollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Northstar",
@@ -65,6 +67,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _isBusy;
     private bool _isInitialising = true;
     private DateTime _statusProtectedUntilUtc = DateTime.MinValue;
+    private DateTime _nextConnectedPollUtc = DateTime.MinValue;
 
     public MainWindowViewModel()
     {
@@ -491,6 +494,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             DeviceSummary = DescribeGauge(device);
             DeviceDetails = BuildDeviceDetails(device, identity.Payload);
             IsGaugeConnected = true;
+            _nextConnectedPollUtc = DateTime.UtcNow + ConnectedPollInterval;
             ConnectionStatus = "Connected";
             ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
 
@@ -616,6 +620,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         if (IsGaugeConnected)
         {
+            if (_backgroundDownloadCancellation is { IsCancellationRequested: false } ||
+                DateTime.UtcNow < _nextConnectedPollUtc)
+            {
+                return;
+            }
+
+            _nextConnectedPollUtc = DateTime.UtcNow + ConnectedPollInterval;
+            var identity = await TryIdentifyAsync(
+                SelectedPort,
+                FastBaud,
+                ConnectedPollTransactionTimeoutMs).ConfigureAwait(true);
+            if (identity is null)
+            {
+                SetDisconnected();
+                return;
+            }
+
             if (CanPollSetStatus())
             {
                 Status = "Gauge connected";
@@ -647,6 +668,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         CancelBackgroundDownloads();
         IsGaugeConnected = false;
+        _nextConnectedPollUtc = DateTime.MinValue;
         IsGraphVisible = false;
         DeviceSummary = "No gauge connected";
         DeviceDetails = string.Empty;

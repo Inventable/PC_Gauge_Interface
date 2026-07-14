@@ -376,6 +376,7 @@ Current status:
 - Review controls now provide drag-to-zoom-window, wheel/pan interaction, zoom in/out, and fit-all. File metadata, ranges, duration, and latest values are kept in the adjacent summary panel.
 - Chart data is passed as packed numeric arrays and rendered with `SignalXY`; a 259,200-sample-per-series verification (three days at one-second intervals) rendered successfully during development.
 - Downloaded file rows can export legacy-compatible ASCII `.rec` files through the native save dialog. The export includes the device/sensor preamble and tab-separated calibrated P&T rows, and the app remembers the last record-export directory for subsequent saves.
+- Serial activity is exclusive: automatic/manual downloads take priority, then idle connected-state polling verifies the fast link every 500 ms. A failed three-attempt liveness transaction enters the disconnected state and resumes aggressive `57600`-baud wake polling.
 - A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
 
 ### Phase 6: Acoustic Gauge Support
