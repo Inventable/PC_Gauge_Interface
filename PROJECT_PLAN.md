@@ -404,17 +404,17 @@ Deliverable: field-deployable application with a path beyond serial.
 
 ## Immediate Next Steps
 
-1. Tighten the new state-driven operator UI after a live-gauge test.
-2. Add clear progress stages and cancellation for long downloads.
-3. Guard serial access so idle polling cannot collide with download/read operations.
-4. Add a proper settings page for output folder, job naming, and engineering mode entry.
-5. Keep engineering commands behind a separate diagnostics view.
+1. Validate automatic downloads, live graph streaming, completion, and reconnect behaviour with a live gauge and a large file.
+2. Add explicit cancellation and retry controls for long or interrupted downloads.
+3. Add graph cursor readout and clearer record-level data-quality indications.
+4. Add converted CSV/JSON export and open-folder actions alongside the legacy ASCII `.rec` export.
+5. Add a focused settings page and keep raw protocol/device diagnostics behind a separate engineering view.
 
 ## TODO Reminder
 
-- Test the new splash/setup screen, idle gauge polling, disconnect/reconnect behaviour, and simplified file table with a live gauge.
-- Add staged progress, cancellation, and serial-operation locking before testing large downloads.
-- Add graph cursor readout, data-quality indication, and converted CSV/JSON export/open-folder actions.
+- Hardware-test live graph updates and progress/ETA accuracy during a large automatic download.
+- Add operator cancellation/retry without compromising serial-operation locking or partial-data cleanup.
+- Add graph cursor/data-quality tools and converted CSV/JSON export actions.
 - Move device details, raw protocol data, and future acoustic tools into settings/engineering mode.
 
 ## Open Questions
