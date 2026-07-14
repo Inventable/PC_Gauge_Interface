@@ -16,6 +16,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 {
     private const int WakeBaud = 57600;
     private const int FastBaud = 460800;
+    private const int WakeTransactionTimeoutMs = 250;
+    private const int WakePollIntervalMs = 100;
+    private const int WakeScanTimeoutMs = 30000;
+    private const int BackgroundWakeScanTimeoutMs = 1500;
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AppPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly string SettingsPath = Path.Combine(
@@ -591,7 +595,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             return;
         }
 
-        var slowIdentity = await WaitForIdentifyAsync(SelectedPort, WakeBaud, 2000, 20, 80).ConfigureAwait(true);
+        var slowIdentity = await WaitForIdentifyAsync(
+            SelectedPort,
+            WakeBaud,
+            BackgroundWakeScanTimeoutMs,
+            WakePollIntervalMs,
+            WakeTransactionTimeoutMs).ConfigureAwait(true);
         if (slowIdentity is not null)
         {
             Status = $"Gauge woke at {WakeBaud}; reading files";
@@ -632,13 +641,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             }
         }
 
-        var slowIdentity = await WaitForIdentifyAsync(SelectedPort, WakeBaud, 5000, 100, 250).ConfigureAwait(true);
+        var slowIdentity = await WaitForIdentifyAsync(
+            SelectedPort,
+            WakeBaud,
+            WakeScanTimeoutMs,
+            WakePollIntervalMs,
+            WakeTransactionTimeoutMs).ConfigureAwait(true);
         if (slowIdentity is not null)
         {
             Status = $"Gauge woke at {WakeBaud}; verifying fast link";
             await Task.Delay(FastVerifyDelay).ConfigureAwait(true);
-            var verified = await OpenIdentifiedTransportAsync(SelectedPort, FastBaud, 30000).ConfigureAwait(true);
-            return verified;
+            try
+            {
+                return await OpenIdentifiedTransportAsync(SelectedPort, FastBaud, 30000).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (IsExpectedUiFailure(ex) || ex is ArgumentOutOfRangeException)
+            {
+                Status = $"Fast link did not verify; trying {WakeBaud} baud";
+                return await OpenIdentifiedTransportAsync(SelectedPort, WakeBaud, 30000).ConfigureAwait(true);
+            }
         }
 
         Status = $"No slow response; checking {FastBaud} baud";
