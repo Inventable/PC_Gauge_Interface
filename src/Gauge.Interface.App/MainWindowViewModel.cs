@@ -1074,6 +1074,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 index,
                 bytes,
                 samples,
+                (long)samples * record.MeasurementInterval,
                 FormatBytes(bytes),
                 largest == 0 ? 0 : Math.Max(4, bytes * 100.0 / largest),
                 index == suggestedIndex ? "Suggested" : string.Empty,
@@ -1411,11 +1412,21 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     private string _state = "Queued";
     private string _progressText = string.Empty;
 
-    public GaugeFileRowViewModel(int index, int bytes, int estimatedSamples, string size, double sizePercent, string suggestion, bool isCrcValid)
+    public GaugeFileRowViewModel(
+        int index,
+        int bytes,
+        int estimatedSamples,
+        long estimatedDurationSeconds,
+        string size,
+        double sizePercent,
+        string suggestion,
+        bool isCrcValid)
     {
         Index = index;
         Bytes = bytes;
         EstimatedSamples = estimatedSamples;
+        EstimatedDurationSeconds = estimatedDurationSeconds;
+        Duration = FormatFileDuration(estimatedDurationSeconds);
         Size = size;
         SizePercent = sizePercent;
         _suggestion = suggestion;
@@ -1429,6 +1440,10 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     public int Bytes { get; }
 
     public int EstimatedSamples { get; }
+
+    public long EstimatedDurationSeconds { get; }
+
+    public string Duration { get; }
 
     public string Size { get; }
 
@@ -1597,6 +1612,27 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         }
 
         return $"{Math.Ceiling(duration.TotalMinutes):F0} mins";
+    }
+
+    private static string FormatFileDuration(long durationSeconds)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Max(0, durationSeconds));
+        if (duration.TotalMinutes < 1)
+        {
+            return $"{Math.Floor(duration.TotalSeconds):F0} sec";
+        }
+
+        if (duration.TotalHours < 1)
+        {
+            return $"{Math.Floor(duration.TotalMinutes):F0} min";
+        }
+
+        if (duration.TotalDays < 1)
+        {
+            return $"{Math.Floor(duration.TotalHours):F0} h {duration.Minutes:00} min";
+        }
+
+        return $"{Math.Floor(duration.TotalDays):F0} d {duration.Hours:00} h";
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
