@@ -14,6 +14,7 @@ namespace Gauge.Interface.App;
 
 public sealed class MainWindowViewModel : INotifyPropertyChanged
 {
+    private const int SmallFileSampleThreshold = 10;
     private const int WakeBaud = 57600;
     private const int FastBaud = 460800;
     private const int WakeTransactionTimeoutMs = 250;
@@ -31,6 +32,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private readonly SemaphoreSlim _serialGate = new(1, 1);
 
     private GaugeFileTable? _fileTable;
+    private SensorCalibrationBundle? _calibration;
+    private DeviceData? _connectedDevice;
+    private CancellationTokenSource? _backgroundDownloadCancellation;
     private AppSettings _settings;
     private SerialPortOption? _selectedPortOption;
     private string _selectedPort = string.Empty;
@@ -56,6 +60,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _isGaugeConnected;
     private bool _isGraphVisible;
     private bool _showDeviceDetails;
+    private bool _ignoreSmallFiles = true;
     private bool _isBusy;
     private bool _isInitialising = true;
     private DateTime _statusProtectedUntilUtc = DateTime.MinValue;
@@ -70,7 +75,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         StartCommand = new RelayCommand(StartAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
         ReadFilesCommand = new RelayCommand(ReadFilesAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
         DownloadSelectedCommand = new RelayCommand(DownloadSelectedAsync, () => !IsBusy && SelectedFile is not null);
-        ShowGraphCommand = new RelayCommand(ShowGraphAsync, () => ChartSamples.Count > 0);
+        ShowGraphCommand = new RelayCommand(ShowGraphAsync, () => SelectedFile?.Samples is { Count: > 0 } || ChartSamples.Count > 0);
         BackToFilesCommand = new RelayCommand(BackToFilesAsync);
         OpenSettingsCommand = new RelayCommand(OpenSettingsAsync);
         ToggleDeviceDetailsCommand = new RelayCommand(ToggleDeviceDetailsAsync);
@@ -309,6 +314,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         set => SetField(ref _showDeviceDetails, value);
     }
 
+    public bool IgnoreSmallFiles
+    {
+        get => _ignoreSmallFiles;
+        set
+        {
+            if (SetField(ref _ignoreSmallFiles, value) && _fileTable is not null)
+            {
+                CancelBackgroundDownloads();
+                PopulateFiles(_fileTable);
+                StartBackgroundDownloads();
+            }
+        }
+    }
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -350,7 +369,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private Task ShowGraphAsync()
     {
-        if (ChartSamples.Count > 0)
+        if (SelectedFile?.Samples is { Count: > 0 } samples)
+        {
+            ShowFileGraph(SelectedFile, samples);
+        }
+        else if (ChartSamples.Count > 0)
         {
             IsGraphVisible = true;
         }
@@ -393,12 +416,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private async Task ReadFilesAsync()
     {
+        CancelBackgroundDownloads();
         IsBusy = true;
         await _serialGate.WaitAsync().ConfigureAwait(true);
         Files.Clear();
         Samples.Clear();
         ChartSamples.Clear();
         SelectedFile = null;
+        _calibration = null;
+        _connectedDevice = null;
         LatestTemperature = "--";
         LatestPressure = "--";
         LastCsvPath = string.Empty;
@@ -413,6 +439,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
             var identity = connection.Identity;
             var device = DecodeDevice(identity.Payload);
+            _connectedDevice = device;
             DeviceSummary = DescribeGauge(device);
             DeviceDetails = BuildDeviceDetails(device, identity.Payload);
             IsGaugeConnected = true;
@@ -425,7 +452,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             FileSummary = Files.Count == 0
                 ? "No valid files found"
                 : $"{Files.Count} file(s), EOF {_fileTable.EndOfFile}";
-            Status = Files.Count == 0 ? "Gauge connected; no files found" : "Gauge connected";
+            Status = "Capturing sensor calibration";
+            _calibration = await service.CaptureSensorCalibrationAsync().ConfigureAwait(true);
+            Status = Files.Count == 0 ? "Gauge connected; no files found" : "Gauge connected; downloading files";
         }
         catch (Exception ex) when (IsExpectedUiFailure(ex))
         {
@@ -437,10 +466,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             IsBusy = false;
             _serialGate.Release();
         }
+
+        if (IsGaugeConnected && _fileTable is not null && _calibration is not null)
+        {
+            StartBackgroundDownloads();
+        }
     }
 
     public async Task DownloadSelectedAsync()
     {
+        CancelBackgroundDownloads();
         if (IsBusy)
         {
             SetProtectedStatus("Already working. Please wait for the current operation to finish.");
@@ -463,7 +498,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
 
         IsBusy = true;
-        await _serialGate.WaitAsync().ConfigureAwait(true);
         Samples.Clear();
         ChartSamples.Clear();
         LastCsvPath = string.Empty;
@@ -473,54 +507,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         try
         {
-            var jobDirectory = BuildJobDirectory();
-            Directory.CreateDirectory(jobDirectory);
-            SetProtectedStatus($"Verifying gauge on {SelectedPort}", TimeSpan.FromSeconds(30));
-            await using var connection = await OpenVerifiedConnectionAsync(preferFast: true).ConfigureAwait(true);
-            var session = new GaugeSession(connection.Transport);
-            var service = new GaugeJobService(session);
-
-            SetProtectedStatus("Capturing sensor calibration", TimeSpan.FromSeconds(30));
-            var calibration = await service.CaptureSensorCalibrationAsync().ConfigureAwait(true);
-            await WriteCalibrationBundleAsync(jobDirectory, calibration).ConfigureAwait(true);
-
-            SetProtectedStatus($"Downloading file {SelectedFile.Index}", TimeSpan.FromSeconds(30));
-            var downloadTimer = Stopwatch.StartNew();
-            var progress = new Progress<MemoryReadProgress>(progress =>
-                UpdateDownloadProgress(progress, downloadTimer.Elapsed));
-            var download = await service.DownloadFileAsync(_fileTable, SelectedFile.Index, progress: progress).ConfigureAwait(true);
-            var rawPath = Path.Combine(jobDirectory, $"gauge-file-{download.FileIndex:000}.rawbin");
-            await File.WriteAllBytesAsync(rawPath, download.RawBytes).ConfigureAwait(true);
-
-            var samples = GaugeJobService.BuildCalibratedSamples(download, calibration);
-            var csvPath = Path.Combine(jobDirectory, $"gauge-file-{download.FileIndex:000}-calibrated.csv");
-            await File.WriteAllLinesAsync(csvPath, CalibratedCsvExporter.BuildLines(samples)).ConfigureAwait(true);
-
-            foreach (var sample in samples.TakeLast(25))
+            await EnsureCalibrationAsync(CancellationToken.None).ConfigureAwait(true);
+            var downloaded = await DownloadFileRowAsync(SelectedFile, manual: true, CancellationToken.None).ConfigureAwait(true);
+            if (downloaded is not null)
             {
-                Samples.Add(SampleRowViewModelFactory.FromSample(sample));
+                ShowFileGraph(SelectedFile, downloaded.Samples);
+                SetProtectedStatus($"Downloaded file {downloaded.Download.FileIndex} with {downloaded.Samples.Count} sample(s)", TimeSpan.FromSeconds(20));
             }
-
-            foreach (var sample in samples)
-            {
-                ChartSamples.Add(ChartSampleViewModelFactory.FromSample(sample));
-            }
-
-            var latest = samples[^1];
-            LatestTemperature = $"{latest.Temperature:F2} C";
-            LatestPressure = $"{latest.Pressure:F2} psi";
-            LastCsvPath = csvPath;
-            UpdateReview(download, samples);
-            if (SelectedFile is not null)
-            {
-                SelectedFile.MarkDownloaded(sampleCount: samples.Count, hasWarnings: samples.Any(sample => sample.CrcError));
-                UpdateSelectedFileActions();
-            }
-
-            IsGraphVisible = true;
-            DownloadProgressPercent = 100;
-            DownloadProgressText = "Download complete";
-            SetProtectedStatus($"Downloaded file {download.FileIndex} with {samples.Count} sample(s)", TimeSpan.FromSeconds(20));
         }
         catch (Exception ex) when (IsExpectedUiFailure(ex))
         {
@@ -533,7 +526,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         finally
         {
             IsBusy = false;
-            _serialGate.Release();
+            if (IsGaugeConnected)
+            {
+                StartBackgroundDownloads();
+            }
         }
     }
 
@@ -575,23 +571,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         if (IsGaugeConnected)
         {
-            var identity = await TryIdentifyAsync(SelectedPort, FastBaud, 350).ConfigureAwait(true);
-            if (identity is null)
-            {
-                SetDisconnected();
-                return;
-            }
-
-            var device = DecodeDevice(identity.Payload);
-            DeviceSummary = DescribeGauge(device);
-            DeviceDetails = BuildDeviceDetails(device, identity.Payload);
-            ConnectionStatus = "Connected";
-            ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
             if (CanPollSetStatus())
             {
                 Status = "Gauge connected";
             }
-
             return;
         }
 
@@ -617,6 +600,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void SetDisconnected()
     {
+        CancelBackgroundDownloads();
         IsGaugeConnected = false;
         IsGraphVisible = false;
         DeviceSummary = "No gauge connected";
@@ -771,6 +755,166 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             WriteTimeoutMs: timeoutMs));
     }
 
+    private void StartBackgroundDownloads()
+    {
+        if (!IsGaugeConnected || _fileTable is null || _calibration is null || Files.Count == 0)
+        {
+            return;
+        }
+
+        if (_backgroundDownloadCancellation is { IsCancellationRequested: false })
+        {
+            return;
+        }
+
+        _backgroundDownloadCancellation?.Dispose();
+        _backgroundDownloadCancellation = new CancellationTokenSource();
+        _ = RunBackgroundDownloadsAsync(_backgroundDownloadCancellation.Token);
+    }
+
+    private void CancelBackgroundDownloads()
+    {
+        _backgroundDownloadCancellation?.Cancel();
+    }
+
+    private async Task RunBackgroundDownloadsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            foreach (var file in Files.Where(file => !file.IsDownloaded).ToArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await DownloadFileRowAsync(file, manual: false, cancellationToken).ConfigureAwait(true);
+            }
+
+            if (CanPollSetStatus())
+            {
+                Status = "Gauge connected; files ready";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (IsExpectedUiFailure(ex))
+        {
+            SetProtectedStatus($"Background download paused: {ex.Message}", TimeSpan.FromSeconds(15));
+        }
+        catch (Exception ex)
+        {
+            SetProtectedStatus($"Background download failed: {ex.Message}", TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            if (_backgroundDownloadCancellation?.Token == cancellationToken)
+            {
+                _backgroundDownloadCancellation.Dispose();
+                _backgroundDownloadCancellation = null;
+            }
+        }
+    }
+
+    private async Task EnsureCalibrationAsync(CancellationToken cancellationToken)
+    {
+        if (_calibration is not null)
+        {
+            return;
+        }
+
+        await _serialGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+        try
+        {
+            SetProtectedStatus("Capturing sensor calibration", TimeSpan.FromSeconds(30));
+            await using var connection = await OpenVerifiedConnectionAsync(preferFast: true).ConfigureAwait(true);
+            var service = new GaugeJobService(new GaugeSession(connection.Transport));
+            _calibration = await service.CaptureSensorCalibrationAsync(cancellationToken: cancellationToken).ConfigureAwait(true);
+        }
+        finally
+        {
+            _serialGate.Release();
+        }
+    }
+
+    private async Task<DownloadedGaugeFile?> DownloadFileRowAsync(
+        GaugeFileRowViewModel file,
+        bool manual,
+        CancellationToken cancellationToken)
+    {
+        if (_fileTable is null || _calibration is null)
+        {
+            return null;
+        }
+
+        if (file.Download is not null && file.Samples is not null)
+        {
+            return new DownloadedGaugeFile(file.Download, file.Samples);
+        }
+
+        await _serialGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+        try
+        {
+            file.MarkDownloading();
+            var label = manual ? "Downloading" : "Auto-downloading";
+            SetProtectedStatus($"{label} file {file.Index}", TimeSpan.FromSeconds(30));
+            await using var connection = await OpenVerifiedConnectionAsync(preferFast: true).ConfigureAwait(true);
+            var service = new GaugeJobService(new GaugeSession(connection.Transport));
+            var timer = Stopwatch.StartNew();
+            var progress = new Progress<MemoryReadProgress>(progress =>
+            {
+                file.MarkProgress(progress, timer.Elapsed);
+                if (manual)
+                {
+                    UpdateDownloadProgress(progress, timer.Elapsed);
+                }
+            });
+            var download = await service.DownloadFileAsync(_fileTable, file.Index, progress: progress, cancellationToken: cancellationToken).ConfigureAwait(true);
+            var samples = GaugeJobService.BuildCalibratedSamples(download, _calibration);
+            file.MarkDownloaded(download, samples, samples.Any(sample => sample.CrcError));
+            return new DownloadedGaugeFile(download, samples);
+        }
+        catch (OperationCanceledException)
+        {
+            file.MarkQueued();
+            throw;
+        }
+        catch (Exception ex) when (!manual && IsExpectedUiFailure(ex))
+        {
+            file.MarkError(ex.Message);
+            return null;
+        }
+        finally
+        {
+            _serialGate.Release();
+        }
+    }
+
+    private void ShowFileGraph(GaugeFileRowViewModel file, IReadOnlyList<CalibratedGaugeSample> samples)
+    {
+        Samples.Clear();
+        ChartSamples.Clear();
+
+        foreach (var sample in samples.TakeLast(25))
+        {
+            Samples.Add(SampleRowViewModelFactory.FromSample(sample));
+        }
+
+        foreach (var sample in samples)
+        {
+            ChartSamples.Add(ChartSampleViewModelFactory.FromSample(sample));
+        }
+
+        var latest = samples[^1];
+        LatestTemperature = $"{latest.Temperature:F2} C";
+        LatestPressure = $"{latest.Pressure:F2} psi";
+        LastCsvPath = string.Empty;
+        if (file.Download is not null)
+        {
+            UpdateReview(file.Download, samples);
+        }
+
+        IsGraphVisible = true;
+        UpdateSelectedFileActions();
+    }
+
     private string BuildJobDirectory()
     {
         var selected = SelectedFile is null ? "file" : $"file-{SelectedFile.Index:000}";
@@ -794,6 +938,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void PopulateFiles(GaugeFileTable table)
     {
+        var existingRows = Files.ToDictionary(file => file.Index);
         Files.Clear();
         var sizes = table.Records
             .Select((record, index) => EstimateBytes(table, index))
@@ -806,14 +951,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             var record = table.Records[index];
             var bytes = sizes[index];
             var samples = bytes / MemoryGaugeDataRecord.Length * 2;
+            if (IgnoreSmallFiles && samples < SmallFileSampleThreshold)
+            {
+                continue;
+            }
+
             var row = new GaugeFileRowViewModel(
                 index,
                 bytes,
+                samples,
                 FormatBytes(bytes),
                 largest == 0 ? 0 : Math.Max(4, bytes * 100.0 / largest),
                 index == recommendedIndex ? "Suggested" : string.Empty,
                 record.IsCrcValid);
-            Files.Add(row);
+            Files.Add(existingRows.TryGetValue(index, out var existing) ? existing : row);
         }
 
         if (recommendedIndex >= 0 && recommendedIndex < Files.Count)
@@ -1104,17 +1255,24 @@ public sealed record SerialPortOption(
     }
 }
 
+public sealed record DownloadedGaugeFile(
+    GaugeMemoryDownload Download,
+    IReadOnlyList<CalibratedGaugeSample> Samples);
+
 public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 {
-    private bool _isDownloaded;
     private bool _hasWarnings;
     private bool _isSelected;
     private int _sampleCount;
+    private double _progressPercent;
+    private string _state = "Queued";
+    private string _progressText = string.Empty;
 
-    public GaugeFileRowViewModel(int index, int bytes, string size, double sizePercent, string suggestion, bool isCrcValid)
+    public GaugeFileRowViewModel(int index, int bytes, int estimatedSamples, string size, double sizePercent, string suggestion, bool isCrcValid)
     {
         Index = index;
         Bytes = bytes;
+        EstimatedSamples = estimatedSamples;
         Size = size;
         SizePercent = sizePercent;
         Suggestion = suggestion;
@@ -1127,6 +1285,8 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public int Bytes { get; }
 
+    public int EstimatedSamples { get; }
+
     public string Size { get; }
 
     public double SizePercent { get; }
@@ -1135,10 +1295,18 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public bool IsCrcValid { get; }
 
-    public bool IsDownloaded
+    public bool IsDownloaded => Samples is { Count: > 0 };
+
+    public GaugeMemoryDownload? Download { get; private set; }
+
+    public byte[]? RawBytes { get; private set; }
+
+    public IReadOnlyList<CalibratedGaugeSample>? Samples { get; private set; }
+
+    public string State
     {
-        get => _isDownloaded;
-        private set => SetField(ref _isDownloaded, value);
+        get => _state;
+        private set => SetField(ref _state, value);
     }
 
     public bool HasWarnings
@@ -1159,21 +1327,100 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         private set => SetField(ref _sampleCount, value);
     }
 
-    public string DownloadStatus => IsDownloaded
-        ? HasWarnings ? "Warnings" : "Downloaded"
-        : "Not downloaded";
+    public double ProgressPercent
+    {
+        get => _progressPercent;
+        private set => SetField(ref _progressPercent, value);
+    }
+
+    public string ProgressText
+    {
+        get => _progressText;
+        private set => SetField(ref _progressText, value);
+    }
+
+    public string DownloadStatus => HasWarnings && IsDownloaded ? "Warnings" : State;
 
     public string GraphStatus => IsDownloaded
         ? HasWarnings ? "!" : "OK"
         : "--";
 
-    public void MarkDownloaded(int sampleCount, bool hasWarnings)
+    public void MarkDownloading()
     {
-        SampleCount = sampleCount;
+        State = "Downloading";
+        ProgressPercent = 0;
+        ProgressText = "0%";
+    }
+
+    public void MarkQueued()
+    {
+        State = "Queued";
+        ProgressPercent = 0;
+        ProgressText = string.Empty;
+    }
+
+    public void MarkProgress(MemoryReadProgress progress, TimeSpan elapsed)
+    {
+        if (progress.TotalBytes <= 0)
+        {
+            ProgressPercent = 0;
+            ProgressText = "Preparing";
+            return;
+        }
+
+        ProgressPercent = Math.Clamp(progress.BytesRead * 100.0 / progress.TotalBytes, 0, 100);
+        if (progress.BytesRead <= 0 || elapsed.TotalSeconds < 0.5)
+        {
+            ProgressText = $"{ProgressPercent:F0}%";
+            return;
+        }
+
+        var bytesPerSecond = progress.BytesRead / elapsed.TotalSeconds;
+        var remainingBytes = Math.Max(0, progress.TotalBytes - progress.BytesRead);
+        var remaining = bytesPerSecond <= 0
+            ? TimeSpan.Zero
+            : TimeSpan.FromSeconds(remainingBytes / bytesPerSecond);
+        ProgressText = remainingBytes == 0
+            ? "100%"
+            : $"{ProgressPercent:F0}% - {FormatDuration(remaining)}";
+    }
+
+    public void MarkDownloaded(GaugeMemoryDownload download, IReadOnlyList<CalibratedGaugeSample> samples, bool hasWarnings)
+    {
+        Download = download;
+        RawBytes = download.RawBytes;
+        Samples = samples;
+        SampleCount = samples.Count;
         HasWarnings = hasWarnings;
-        IsDownloaded = true;
+        ProgressPercent = 100;
+        ProgressText = "100%";
+        State = "Downloaded";
+        OnPropertyChanged(nameof(IsDownloaded));
         OnPropertyChanged(nameof(DownloadStatus));
         OnPropertyChanged(nameof(GraphStatus));
+    }
+
+    public void MarkError(string message)
+    {
+        State = "Error";
+        ProgressText = message;
+        OnPropertyChanged(nameof(DownloadStatus));
+        OnPropertyChanged(nameof(GraphStatus));
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalSeconds < 1)
+        {
+            return "1 sec";
+        }
+
+        if (duration.TotalMinutes < 1)
+        {
+            return $"{Math.Ceiling(duration.TotalSeconds):F0} secs";
+        }
+
+        return $"{Math.Ceiling(duration.TotalMinutes):F0} mins";
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
@@ -1185,7 +1432,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
         field = value;
         OnPropertyChanged(propertyName);
-        if (propertyName is nameof(IsDownloaded) or nameof(HasWarnings))
+        if (propertyName is nameof(State) or nameof(HasWarnings))
         {
             OnPropertyChanged(nameof(DownloadStatus));
             OnPropertyChanged(nameof(GraphStatus));
