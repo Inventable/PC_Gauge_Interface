@@ -5,12 +5,15 @@
   </PropertyGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <AvaloniaResource Include="..\..\reference\brand-images\northstar_logo_black.svg" Link="Assets\northstar-logo.svg" />
+    <AvaloniaResource Include="..\..\reference\brand-images\ico.png" Link="Assets\northstar-app-icon.png" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.7" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.7" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Svg.Skia" Version="11.3.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Gauge.Core\Gauge.Core.csproj" />

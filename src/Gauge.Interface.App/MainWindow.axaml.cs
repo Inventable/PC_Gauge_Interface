@@ -30,29 +30,30 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void FileGraph_Click(object? sender, RoutedEventArgs e)
+    private async void FileAction_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel viewModel || sender is not Control control)
         {
             return;
         }
 
-        if (control.DataContext is GaugeFileRowViewModel file)
+        if (control.DataContext is not GaugeFileRowViewModel file)
         {
-            viewModel.SelectedFile = file;
+            return;
         }
 
-        if (viewModel.ShowGraphCommand.CanExecute(null))
-        {
-            viewModel.ShowGraphCommand.Execute(null);
-        }
-    }
+        viewModel.SelectedFile = file;
 
-    private async void DownloadSelected_Click(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is MainWindowViewModel viewModel)
+        if (file.IsDownloaded)
         {
-            await viewModel.DownloadSelectedAsync().ConfigureAwait(true);
+            if (viewModel.ShowGraphCommand.CanExecute(null))
+            {
+                viewModel.ShowGraphCommand.Execute(null);
+            }
+
+            return;
         }
+
+        await viewModel.DownloadSelectedAsync().ConfigureAwait(true);
     }
 }

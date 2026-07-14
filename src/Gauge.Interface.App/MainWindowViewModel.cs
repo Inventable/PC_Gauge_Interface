@@ -74,7 +74,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         RefreshPortsCommand = new RelayCommand(RefreshPortsAsync);
         StartCommand = new RelayCommand(StartAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
         ReadFilesCommand = new RelayCommand(ReadFilesAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
-        DownloadSelectedCommand = new RelayCommand(DownloadSelectedAsync, () => !IsBusy && SelectedFile is not null);
         ShowGraphCommand = new RelayCommand(ShowGraphAsync, () => SelectedFile?.Samples is { Count: > 0 } || ChartSamples.Count > 0);
         BackToFilesCommand = new RelayCommand(BackToFilesAsync);
         OpenSettingsCommand = new RelayCommand(OpenSettingsAsync);
@@ -99,8 +98,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public ICommand StartCommand { get; }
 
     public ICommand ReadFilesCommand { get; }
-
-    public ICommand DownloadSelectedCommand { get; }
 
     public ICommand ShowGraphCommand { get; }
 
@@ -335,13 +332,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             if (SetField(ref _isBusy, value))
             {
-                OnPropertyChanged(nameof(DownloadButtonText));
                 RaiseCommandStates();
             }
         }
     }
-
-    public string DownloadButtonText => IsBusy ? "Working..." : "Download Selected";
 
     private Task RefreshPortsAsync()
     {
@@ -449,9 +443,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             Status = "Reading file table";
             _fileTable = await service.ReadFileTableAsync().ConfigureAwait(true);
             PopulateFiles(_fileTable);
-            FileSummary = Files.Count == 0
-                ? "No valid files found"
-                : $"{Files.Count} file(s), EOF {_fileTable.EndOfFile}";
+            FileSummary = Files.Count == 0 ? "No valid files found" : string.Empty;
             Status = "Capturing sensor calibration";
             _calibration = await service.CaptureSensorCalibrationAsync().ConfigureAwait(true);
             Status = Files.Count == 0 ? "Gauge connected; no files found" : "Gauge connected; downloading files";
@@ -868,7 +860,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             });
             var download = await service.DownloadFileAsync(_fileTable, file.Index, progress: progress, cancellationToken: cancellationToken).ConfigureAwait(true);
             var samples = GaugeJobService.BuildCalibratedSamples(download, _calibration);
-            file.MarkDownloaded(download, samples, samples.Any(sample => sample.CrcError));
+            file.MarkDownloaded(
+                download,
+                samples,
+                hasWarnings: samples.Any(sample => sample.BatteryStatus != 0),
+                hasErrors: !file.IsCrcValid || samples.Any(sample => sample.CrcError));
             return new DownloadedGaugeFile(download, samples);
         }
         catch (OperationCanceledException)
@@ -967,10 +963,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             Files.Add(existingRows.TryGetValue(index, out var existing) ? existing : row);
         }
 
-        if (recommendedIndex >= 0 && recommendedIndex < Files.Count)
-        {
-            SelectedFile = Files[recommendedIndex];
-        }
+        SelectedFile = Files.FirstOrDefault(file => file.Index == recommendedIndex)
+            ?? Files.LastOrDefault();
     }
 
     private static int ChooseRecommendedFileIndex(IReadOnlyList<int> sizes)
@@ -1162,11 +1156,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             readFiles.RaiseCanExecuteChanged();
         }
 
-        if (DownloadSelectedCommand is RelayCommand download)
-        {
-            download.RaiseCanExecuteChanged();
-        }
-
         if (ShowGraphCommand is RelayCommand showGraph)
         {
             showGraph.RaiseCanExecuteChanged();
@@ -1261,6 +1250,14 @@ public sealed record DownloadedGaugeFile(
 
 public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 {
+    private static readonly Geometry DownloadGeometry = Geometry.Parse("M19,9H15V3H9V9H5L12,16L19,9M5,18V20H19V18H5Z");
+    private static readonly Geometry GraphGeometry = Geometry.Parse("M3,3V21H21V19H5V3H3M7,17L12,12L15,15L20,9L18.59,7.59L15,12L12,9L5.5,15.5L7,17Z");
+    private static readonly IBrush ReadyBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
+    private static readonly IBrush WarningBrush = new SolidColorBrush(Color.Parse("#D97706"));
+    private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
+    private static readonly IBrush MutedBrush = new SolidColorBrush(Color.Parse("#5D5D66"));
+
+    private bool _hasErrors;
     private bool _hasWarnings;
     private bool _isSelected;
     private int _sampleCount;
@@ -1295,7 +1292,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public bool IsCrcValid { get; }
 
-    public bool IsDownloaded => Samples is { Count: > 0 };
+    public bool IsDownloaded => Download is not null;
 
     public GaugeMemoryDownload? Download { get; private set; }
 
@@ -1313,6 +1310,12 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     {
         get => _hasWarnings;
         private set => SetField(ref _hasWarnings, value);
+    }
+
+    public bool HasErrors
+    {
+        get => _hasErrors;
+        private set => SetField(ref _hasErrors, value);
     }
 
     public bool IsSelected
@@ -1339,11 +1342,29 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         private set => SetField(ref _progressText, value);
     }
 
-    public string DownloadStatus => HasWarnings && IsDownloaded ? "Warnings" : State;
+    public bool IsDownloading => State == "Downloading";
 
-    public string GraphStatus => IsDownloaded
-        ? HasWarnings ? "!" : "OK"
-        : "--";
+    public string RowStatus => State switch
+    {
+        "Downloading" => string.IsNullOrWhiteSpace(ProgressText) ? "Downloading" : $"Downloading {ProgressText}",
+        "Downloaded" when HasErrors => "Ready - data errors",
+        "Downloaded" when HasWarnings => "Ready - review warnings",
+        "Downloaded" => "Ready",
+        "Error" => "Download failed - select to retry",
+        _ => "Waiting"
+    };
+
+    public Geometry ActionIcon => IsDownloaded ? GraphGeometry : DownloadGeometry;
+
+    public IBrush ActionBrush => !IsDownloaded || HasErrors
+        ? ErrorBrush
+        : HasWarnings ? WarningBrush : ReadyBrush;
+
+    public IBrush StatusBrush => State == "Error" || HasErrors
+        ? ErrorBrush
+        : HasWarnings ? WarningBrush : State == "Downloaded" ? ReadyBrush : MutedBrush;
+
+    public string ActionToolTip => IsDownloaded ? "View pressure and temperature graph" : "Download this file";
 
     public void MarkDownloading()
     {
@@ -1385,27 +1406,30 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
             : $"{ProgressPercent:F0}% - {FormatDuration(remaining)}";
     }
 
-    public void MarkDownloaded(GaugeMemoryDownload download, IReadOnlyList<CalibratedGaugeSample> samples, bool hasWarnings)
+    public void MarkDownloaded(
+        GaugeMemoryDownload download,
+        IReadOnlyList<CalibratedGaugeSample> samples,
+        bool hasWarnings,
+        bool hasErrors)
     {
         Download = download;
         RawBytes = download.RawBytes;
         Samples = samples;
         SampleCount = samples.Count;
         HasWarnings = hasWarnings;
+        HasErrors = hasErrors;
         ProgressPercent = 100;
         ProgressText = "100%";
         State = "Downloaded";
         OnPropertyChanged(nameof(IsDownloaded));
-        OnPropertyChanged(nameof(DownloadStatus));
-        OnPropertyChanged(nameof(GraphStatus));
+        RaisePresentationChanged();
     }
 
     public void MarkError(string message)
     {
         State = "Error";
         ProgressText = message;
-        OnPropertyChanged(nameof(DownloadStatus));
-        OnPropertyChanged(nameof(GraphStatus));
+        RaisePresentationChanged();
     }
 
     private static string FormatDuration(TimeSpan duration)
@@ -1432,10 +1456,9 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
         field = value;
         OnPropertyChanged(propertyName);
-        if (propertyName is nameof(State) or nameof(HasWarnings))
+        if (propertyName is nameof(State) or nameof(HasWarnings) or nameof(HasErrors) or nameof(ProgressText))
         {
-            OnPropertyChanged(nameof(DownloadStatus));
-            OnPropertyChanged(nameof(GraphStatus));
+            RaisePresentationChanged();
         }
 
         return true;
@@ -1444,6 +1467,16 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    private void RaisePresentationChanged()
+    {
+        OnPropertyChanged(nameof(IsDownloading));
+        OnPropertyChanged(nameof(RowStatus));
+        OnPropertyChanged(nameof(ActionIcon));
+        OnPropertyChanged(nameof(ActionBrush));
+        OnPropertyChanged(nameof(StatusBrush));
+        OnPropertyChanged(nameof(ActionToolTip));
     }
 }
 
