@@ -51,15 +51,24 @@ public sealed record MemoryGaugeDataRecord(
             Crc8.Compute(record[..15]));
     }
 
-    public static IReadOnlyList<MemoryGaugeDataRecord> ParseMany(uint startAddress, ReadOnlySpan<byte> bytes)
+    public static IReadOnlyList<MemoryGaugeDataRecord> ParseMany(
+        uint startAddress,
+        ReadOnlySpan<byte> bytes,
+        int firstRecordIndex = 0)
     {
+        if (firstRecordIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(firstRecordIndex));
+        }
+
         var records = new List<MemoryGaugeDataRecord>();
         var recordCount = bytes.Length / Length;
 
-        for (var index = 0; index < recordCount; index++)
+        for (var offset = 0; offset < recordCount; offset++)
         {
-            var address = startAddress + (uint)(index * Length);
-            records.Add(Parse(index, address, bytes.Slice(index * Length, Length)));
+            var index = firstRecordIndex + offset;
+            var address = startAddress + (uint)(offset * Length);
+            records.Add(Parse(index, address, bytes.Slice(offset * Length, Length)));
         }
 
         return records;

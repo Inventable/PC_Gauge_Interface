@@ -103,7 +103,7 @@ public sealed class GaugeSession
 
         var result = new byte[length];
         var offset = 0;
-        progress?.Report(new MemoryReadProgress(0, length));
+        progress?.Report(new MemoryReadProgress(0, length, result));
 
         while (offset < length)
         {
@@ -116,7 +116,7 @@ public sealed class GaugeSession
 
             chunk.CopyTo(result.AsSpan(offset));
             offset += bytesThisRead;
-            progress?.Report(new MemoryReadProgress(offset, length));
+            progress?.Report(new MemoryReadProgress(offset, length, result));
         }
 
         return result;
@@ -125,4 +125,5 @@ public sealed class GaugeSession
 
 public sealed record MemoryReadProgress(
     int BytesRead,
-    int TotalBytes);
+    int TotalBytes,
+    ReadOnlyMemory<byte> Buffer = default);

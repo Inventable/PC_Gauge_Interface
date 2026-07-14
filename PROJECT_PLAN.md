@@ -379,6 +379,7 @@ Current status:
 - Serial activity is exclusive: automatic/manual downloads take priority, then idle connected-state polling verifies the fast link every 500 ms. A failed three-attempt liveness transaction enters the disconnected state and resumes aggressive `57600`-baud wake polling.
 - Automatic downloads run from the highest file index to the lowest so the latest file becomes available first; the suggested marker affects only the operator's manual choice.
 - The file table starts in descending file-number order and supports ascending/descending sorting by file number or file size. It shows an immediate estimated duration derived from file bytes and measurement interval; `Suggested` marks the latest file whose estimate exceeds one hour.
+- A downloading file becomes graphable as soon as its first complete records are calibrated. The Review graph refreshes from incremental samples every two seconds and mirrors the file row's percentage and estimated time remaining; final completion replaces the preview with the fully parsed dataset.
 - A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
 
 ### Phase 6: Acoustic Gauge Support

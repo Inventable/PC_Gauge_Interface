@@ -16,6 +16,7 @@ var tests = new (string Name, Action Run)[]
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
     ("Memory gauge file table ignores continuation records", MemoryGaugeFileTableIgnoresContinuationRecords),
     ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
+    ("Memory gauge data records preserve incremental indexes", MemoryGaugeDataRecordsPreserveIncrementalIndexes),
     ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse),
     ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
     ("Quartz calibration converts counts to frequencies", QuartzCalibrationConvertsCountsToFrequencies),
@@ -208,6 +209,26 @@ static void MemoryGaugeDataRecordParsesCountsAndCrc()
     AssertEqual((ushort)0x1234, record.Counter);
     AssertEqual((byte)0, record.BatteryStatus);
     AssertEqual(true, record.IsCrcValid);
+}
+
+static void MemoryGaugeDataRecordsPreserveIncrementalIndexes()
+{
+    var bytes = new byte[MemoryGaugeDataRecord.Length * 2];
+    for (var offset = 0; offset < bytes.Length; offset += MemoryGaugeDataRecord.Length)
+    {
+        bytes[offset] = (byte)MemoryGaugeDataRecordType.PressureTemperature;
+        bytes[offset + 15] = Crc8.Compute(bytes.AsSpan(offset, 15));
+    }
+
+    var records = MemoryGaugeDataRecord.ParseMany(0x4020, bytes, firstRecordIndex: 2);
+
+    AssertEqual(2, records.Count);
+    AssertEqual(2, records[0].Index);
+    AssertEqual(4, records[0].FirstSample.SampleIndex);
+    AssertEqual((uint)0x4020, records[0].Address);
+    AssertEqual(3, records[1].Index);
+    AssertEqual(7, records[1].SecondSample.SampleIndex);
+    AssertEqual((uint)0x4030, records[1].Address);
 }
 
 static void WriteFileRecord(Span<byte> bytes, uint address, MemoryGaugeFileRecordType type)

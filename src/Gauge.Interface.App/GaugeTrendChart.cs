@@ -13,6 +13,7 @@ public sealed class GaugeTrendChart : UserControl
     private static readonly ScottPlot.Color TextColor = ScottPlot.Color.FromHex("#414149");
     private static readonly ScottPlot.Color GridColor = ScottPlot.Color.FromHex("#E2E7EA");
     private readonly AvaPlot _plot = new();
+    private bool _followData = true;
 
     public static readonly StyledProperty<ChartDataSet?> DataProperty =
         AvaloniaProperty.Register<GaugeTrendChart, ChartDataSet?>(nameof(Data));
@@ -39,6 +40,12 @@ public sealed class GaugeTrendChart : UserControl
 
     public void Fit()
     {
+        _followData = true;
+        FitPlot();
+    }
+
+    private void FitPlot()
+    {
         _plot.Plot.Axes.Margins(horizontal: 0.02, vertical: 0.08);
         _plot.Plot.Axes.AutoScale();
         _plot.Refresh();
@@ -46,12 +53,14 @@ public sealed class GaugeTrendChart : UserControl
 
     public void ZoomIn()
     {
+        _followData = false;
         _plot.Plot.Axes.Zoom(1.25, 1.25);
         _plot.Refresh();
     }
 
     public void ZoomOut()
     {
+        _followData = false;
         _plot.Plot.Axes.ZoomOut(1.25, 1.25);
         _plot.Refresh();
     }
@@ -63,6 +72,7 @@ public sealed class GaugeTrendChart : UserControl
 
         if (enabled)
         {
+            _followData = false;
             _plot.UserInputProcessor.UserActionResponses.Clear();
             _plot.UserInputProcessor.UserActionResponses.Add(new MouseDragZoomRectangle(StandardMouseButtons.Left));
         }
@@ -130,7 +140,14 @@ public sealed class GaugeTrendChart : UserControl
         temperature.Axes.XAxis = plot.Axes.Bottom;
         temperature.Axes.YAxis = plot.Axes.Right;
 
-        Fit();
+        if (_followData)
+        {
+            FitPlot();
+        }
+        else
+        {
+            _plot.Refresh();
+        }
     }
 
     private static string FormatElapsedTime(double value)

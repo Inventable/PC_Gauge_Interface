@@ -107,26 +107,18 @@ public sealed class GaugeJobService
         GaugeMemoryDownload download,
         SensorCalibrationBundle calibrationBundle)
     {
-        var header = SensorCalibrationHeader.Parse(calibrationBundle.SensorHeader);
-        if (header.CountBias is null)
-        {
-            throw new InvalidOperationException("Sensor header does not contain Bias.");
-        }
+        return CreateSampleConverter(download.FileRecord, calibrationBundle)
+            .Convert(download.RawBytes);
+    }
 
-        var calibration = QuartzCalibration.FromPayloads(
-            header,
-            calibrationBundle.PressurePolynomial,
-            calibrationBundle.TemperaturePolynomial);
-        var records = MemoryGaugeDataRecord.ParseMany(download.FileRecord.DataAddress.Value, download.RawBytes);
-        var samples = new List<CalibratedGaugeSample>(records.Count * 2);
-
-        foreach (var record in records)
-        {
-            samples.Add(BuildCalibratedSample(record, record.FirstSample, download.FileRecord.MeasurementInterval, header.CountBias.Value, calibration));
-            samples.Add(BuildCalibratedSample(record, record.SecondSample, download.FileRecord.MeasurementInterval, header.CountBias.Value, calibration));
-        }
-
-        return samples;
+    public static GaugeSampleConverter CreateSampleConverter(
+        MemoryGaugeFileRecord fileRecord,
+        SensorCalibrationBundle calibrationBundle)
+    {
+        return new GaugeSampleConverter(
+            fileRecord.DataAddress.Value,
+            fileRecord.MeasurementInterval,
+            calibrationBundle);
     }
 
     private async Task<byte[]> ReadRequiredSensorPayloadAsync(GaugeCommand command, CancellationToken cancellationToken)
@@ -145,34 +137,6 @@ public sealed class GaugeJobService
         return payload;
     }
 
-    private static CalibratedGaugeSample BuildCalibratedSample(
-        MemoryGaugeDataRecord record,
-        MemoryGaugeSample sample,
-        ushort measurementInterval,
-        uint countBias,
-        QuartzCalibration calibration)
-    {
-        var pressureCounts = sample.PressureCounts + countBias;
-        var temperatureCounts = sample.TemperatureCounts + countBias;
-        var pressureFrequency = calibration.PressureFrequencyHz(pressureCounts);
-        var temperatureFrequency = calibration.TemperatureFrequencyHz(temperatureCounts);
-
-        return new CalibratedGaugeSample(
-            pressureCounts,
-            temperatureCounts,
-            calibration.PressurePsiFromFrequency(pressureFrequency, temperatureFrequency),
-            calibration.TemperatureCelsiusFromFrequency(temperatureFrequency),
-            sample.SampleIndex,
-            record.Counter,
-            record.Address,
-            checked((uint)(sample.SampleIndex * measurementInterval)),
-            temperatureFrequency,
-            pressureFrequency,
-            !record.IsCrcValid,
-            false,
-            record.BatteryStatus);
-    }
-
     private static uint GetNextDataAddress(IReadOnlyList<MemoryGaugeFileRecord> records, int index, GaugeMemoryAddress eof)
     {
         for (var next = index + 1; next < records.Count; next++)
@@ -184,6 +148,82 @@ public sealed class GaugeJobService
         }
 
         return eof.Value == 0 ? records[index].DataAddress.Value : eof.Value + MemoryGaugeFileRecord.Length;
+    }
+}
+
+public sealed class GaugeSampleConverter
+{
+    private readonly uint _fileStartAddress;
+    private readonly ushort _measurementInterval;
+    private readonly uint _countBias;
+    private readonly QuartzCalibration _calibration;
+
+    public GaugeSampleConverter(
+        uint fileStartAddress,
+        ushort measurementInterval,
+        SensorCalibrationBundle calibrationBundle)
+    {
+        var header = SensorCalibrationHeader.Parse(calibrationBundle.SensorHeader);
+        if (header.CountBias is null)
+        {
+            throw new InvalidOperationException("Sensor header does not contain Bias.");
+        }
+
+        _fileStartAddress = fileStartAddress;
+        _measurementInterval = measurementInterval;
+        _countBias = header.CountBias.Value;
+        _calibration = QuartzCalibration.FromPayloads(
+            header,
+            calibrationBundle.PressurePolynomial,
+            calibrationBundle.TemperaturePolynomial);
+    }
+
+    public IReadOnlyList<CalibratedGaugeSample> Convert(
+        ReadOnlySpan<byte> bytes,
+        int firstRecordIndex = 0)
+    {
+        if (firstRecordIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(firstRecordIndex));
+        }
+
+        var completeLength = bytes.Length / MemoryGaugeDataRecord.Length * MemoryGaugeDataRecord.Length;
+        var startAddress = _fileStartAddress + checked((uint)(firstRecordIndex * MemoryGaugeDataRecord.Length));
+        var records = MemoryGaugeDataRecord.ParseMany(startAddress, bytes[..completeLength], firstRecordIndex);
+        var samples = new List<CalibratedGaugeSample>(records.Count * 2);
+
+        foreach (var record in records)
+        {
+            samples.Add(BuildCalibratedSample(record, record.FirstSample));
+            samples.Add(BuildCalibratedSample(record, record.SecondSample));
+        }
+
+        return samples;
+    }
+
+    private CalibratedGaugeSample BuildCalibratedSample(
+        MemoryGaugeDataRecord record,
+        MemoryGaugeSample sample)
+    {
+        var pressureCounts = sample.PressureCounts + _countBias;
+        var temperatureCounts = sample.TemperatureCounts + _countBias;
+        var pressureFrequency = _calibration.PressureFrequencyHz(pressureCounts);
+        var temperatureFrequency = _calibration.TemperatureFrequencyHz(temperatureCounts);
+
+        return new CalibratedGaugeSample(
+            pressureCounts,
+            temperatureCounts,
+            _calibration.PressurePsiFromFrequency(pressureFrequency, temperatureFrequency),
+            _calibration.TemperatureCelsiusFromFrequency(temperatureFrequency),
+            sample.SampleIndex,
+            record.Counter,
+            record.Address,
+            checked((uint)(sample.SampleIndex * _measurementInterval)),
+            temperatureFrequency,
+            pressureFrequency,
+            !record.IsCrcValid,
+            false,
+            record.BatteryStatus);
     }
 }
 

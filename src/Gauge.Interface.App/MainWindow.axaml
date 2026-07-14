@@ -265,6 +265,14 @@
                     <TextBlock Text="{Binding ReviewSampleCount}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
                   </StackPanel>
                 </Grid>
+                <StackPanel Spacing="7">
+                  <TextBlock Classes="label" Text="Status" />
+                  <TextBlock Text="{Binding SelectedFile.RowStatus}" Foreground="{Binding SelectedFile.StatusBrush}" TextWrapping="Wrap" />
+                  <Grid Height="7" IsVisible="{Binding SelectedFile.IsDownloading}">
+                    <Border Background="#DFE6E9" CornerRadius="3.5" />
+                    <ProgressBar Minimum="0" Maximum="100" Value="{Binding SelectedFile.ProgressPercent}" Height="7" BorderThickness="0" Foreground="{StaticResource BrandPrimaryBrush}" Background="Transparent" />
+                  </Grid>
+                </StackPanel>
                 <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
                 <StackPanel Spacing="4">
                   <TextBlock Classes="label" Text="Duration" />

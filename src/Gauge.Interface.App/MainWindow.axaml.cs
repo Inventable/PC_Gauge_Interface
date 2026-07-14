@@ -46,11 +46,12 @@ public sealed partial class MainWindow : Window
 
         viewModel.SelectedFile = file;
 
-        if (file.IsDownloaded)
+        if (file.HasPlotData)
         {
             if (viewModel.ShowGraphCommand.CanExecute(null))
             {
                 viewModel.ShowGraphCommand.Execute(null);
+                GaugeTrend.Fit();
             }
 
             return;
