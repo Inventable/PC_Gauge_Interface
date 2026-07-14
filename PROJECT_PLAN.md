@@ -378,6 +378,7 @@ Current status:
 - Downloaded file rows can export legacy-compatible ASCII `.rec` files through the native save dialog. The export includes the device/sensor preamble and tab-separated calibrated P&T rows, and the app remembers the last record-export directory for subsequent saves.
 - Serial activity is exclusive: automatic/manual downloads take priority, then idle connected-state polling verifies the fast link every 500 ms. A failed three-attempt liveness transaction enters the disconnected state and resumes aggressive `57600`-baud wake polling.
 - Automatic downloads run from the highest file index to the lowest so the latest file becomes available first; the suggested marker affects only the operator's manual choice.
+- The file table starts in descending file-number order and supports ascending/descending sorting by file number or file size. `Suggested` marks the latest file whose estimated duration exceeds one hour.
 - A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
 
 ### Phase 6: Acoustic Gauge Support

@@ -52,6 +52,18 @@
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="6" />
     </Style>
+    <Style Selector="Button.tableHeader">
+      <Setter Property="MinHeight" Value="30" />
+      <Setter Property="Padding" Value="0,3" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{StaticResource BrandTextBrush}" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+    </Style>
+    <Style Selector="Button.tableHeader:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#E9EEF0" />
+    </Style>
     <Style Selector="ToggleButton.chartTool">
       <Setter Property="Width" Value="40" />
       <Setter Property="Height" Value="40" />
@@ -154,9 +166,19 @@
             <Grid RowDefinitions="Auto,*">
               <Border Background="#F5F7F8" Padding="20,11">
                 <Grid ColumnDefinitions="130,*,220,96" ColumnSpacing="20">
-                  <TextBlock Text="File" FontWeight="SemiBold" />
-                  <TextBlock Grid.Column="1" Text="Size" FontWeight="SemiBold" />
-                  <TextBlock Grid.Column="2" Text="Status" FontWeight="SemiBold" />
+                  <Button Classes="tableHeader" Click="SortByFileNumber_Click" ToolTip.Tip="Sort by file number">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="File" FontWeight="SemiBold" VerticalAlignment="Center" />
+                      <PathIcon Width="16" Height="16" Data="{Binding FileSortDirectionIcon}" Foreground="{StaticResource BrandPrimaryBrush}" IsVisible="{Binding IsFileNumberSortActive}" />
+                    </StackPanel>
+                  </Button>
+                  <Button Grid.Column="1" Classes="tableHeader" Click="SortByFileSize_Click" ToolTip.Tip="Sort by file size">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <TextBlock Text="Size" FontWeight="SemiBold" VerticalAlignment="Center" />
+                      <PathIcon Width="16" Height="16" Data="{Binding FileSortDirectionIcon}" Foreground="{StaticResource BrandPrimaryBrush}" IsVisible="{Binding IsFileSizeSortActive}" />
+                    </StackPanel>
+                  </Button>
+                  <TextBlock Grid.Column="2" Text="Status" FontWeight="SemiBold" VerticalAlignment="Center" />
                 </Grid>
               </Border>
               <ListBox Grid.Row="1" Classes="fileList" ItemsSource="{Binding Files}" SelectedItem="{Binding SelectedFile}" BorderThickness="0" Background="#FFFFFF">

@@ -22,9 +22,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private const int WakeScanTimeoutMs = 30000;
     private const int BackgroundWakeScanTimeoutMs = 1500;
     private const int ConnectedPollTransactionTimeoutMs = 250;
+    private const int SuggestedMinimumDurationSeconds = 3600;
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AppPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan ConnectedPollInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly Geometry SortAscendingGeometry = Geometry.Parse("M7,15L12,10L17,15H7Z");
+    private static readonly Geometry SortDescendingGeometry = Geometry.Parse("M7,9L12,14L17,9H7Z");
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Northstar",
@@ -68,6 +71,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _isInitialising = true;
     private DateTime _statusProtectedUntilUtc = DateTime.MinValue;
     private DateTime _nextConnectedPollUtc = DateTime.MinValue;
+    private FileListSortColumn _fileSortColumn = FileListSortColumn.FileNumber;
+    private bool _fileSortDescending = true;
 
     public MainWindowViewModel()
     {
@@ -94,6 +99,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public ObservableCollection<GaugeFileRowViewModel> Files { get; } = [];
 
     public ObservableCollection<SampleRowViewModel> Samples { get; } = [];
+
+    public bool IsFileNumberSortActive => _fileSortColumn == FileListSortColumn.FileNumber;
+
+    public bool IsFileSizeSortActive => _fileSortColumn == FileListSortColumn.Size;
+
+    public Geometry FileSortDirectionIcon => _fileSortDescending
+        ? SortDescendingGeometry
+        : SortAscendingGeometry;
 
     public ICommand RefreshPortsCommand { get; }
 
@@ -351,6 +364,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         RefreshPorts();
         return Task.CompletedTask;
+    }
+
+    public void SortFiles(FileListSortColumn column)
+    {
+        if (_fileSortColumn == column)
+        {
+            _fileSortDescending = !_fileSortDescending;
+        }
+        else
+        {
+            _fileSortColumn = column;
+            _fileSortDescending = true;
+        }
+
+        ApplyFileSort();
+        OnPropertyChanged(nameof(IsFileNumberSortActive));
+        OnPropertyChanged(nameof(IsFileSizeSortActive));
+        OnPropertyChanged(nameof(FileSortDirectionIcon));
     }
 
     private async Task StartAsync()
@@ -1014,7 +1045,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             .Select((record, index) => EstimateBytes(table, index))
             .ToArray();
         var largest = sizes.Length == 0 ? 0 : sizes.Max();
-        var recommendedIndex = ChooseRecommendedFileIndex(sizes);
+        var suggestedIndex = ChooseSuggestedFileIndex(table, sizes);
 
         for (var index = 0; index < table.Records.Count; index++)
         {
@@ -1026,48 +1057,63 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 continue;
             }
 
-            var row = new GaugeFileRowViewModel(
+            if (existingRows.TryGetValue(index, out var existing))
+            {
+                existing.SetSuggestion(index == suggestedIndex);
+                Files.Add(existing);
+                continue;
+            }
+
+            Files.Add(new GaugeFileRowViewModel(
                 index,
                 bytes,
                 samples,
                 FormatBytes(bytes),
                 largest == 0 ? 0 : Math.Max(4, bytes * 100.0 / largest),
-                index == recommendedIndex ? "Suggested" : string.Empty,
-                record.IsCrcValid);
-            Files.Add(existingRows.TryGetValue(index, out var existing) ? existing : row);
+                index == suggestedIndex ? "Suggested" : string.Empty,
+                record.IsCrcValid));
         }
 
-        SelectedFile = Files.FirstOrDefault(file => file.Index == recommendedIndex)
-            ?? Files.LastOrDefault();
+        ApplyFileSort();
+        SelectedFile = Files.FirstOrDefault();
     }
 
-    private static int ChooseRecommendedFileIndex(IReadOnlyList<int> sizes)
+    private void ApplyFileSort()
     {
-        if (sizes.Count == 0)
+        var selectedIndex = SelectedFile?.Index;
+        var sorted = (_fileSortColumn, _fileSortDescending) switch
         {
-            return -1;
+            (FileListSortColumn.FileNumber, true) => Files.OrderByDescending(file => file.Index),
+            (FileListSortColumn.FileNumber, false) => Files.OrderBy(file => file.Index),
+            (FileListSortColumn.Size, true) => Files.OrderByDescending(file => file.Bytes).ThenByDescending(file => file.Index),
+            _ => Files.OrderBy(file => file.Bytes).ThenByDescending(file => file.Index)
+        };
+        var rows = sorted.ToArray();
+
+        Files.Clear();
+        foreach (var row in rows)
+        {
+            Files.Add(row);
         }
 
-        var largest = sizes.Max();
-        var largeThreshold = Math.Max(MemoryGaugeDataRecord.Length * 10, largest / 4);
+        SelectedFile = selectedIndex is null
+            ? null
+            : Files.FirstOrDefault(file => file.Index == selectedIndex.Value);
+    }
+
+    private static int ChooseSuggestedFileIndex(GaugeFileTable table, IReadOnlyList<int> sizes)
+    {
         for (var index = sizes.Count - 1; index >= 0; index--)
         {
-            if (sizes[index] >= largeThreshold)
+            var sampleCount = sizes[index] / MemoryGaugeDataRecord.Length * 2L;
+            var durationSeconds = sampleCount * table.Records[index].MeasurementInterval;
+            if (durationSeconds > SuggestedMinimumDurationSeconds)
             {
                 return index;
             }
         }
 
-        var largestIndex = 0;
-        for (var index = 1; index < sizes.Count; index++)
-        {
-            if (sizes[index] >= sizes[largestIndex])
-            {
-                largestIndex = index;
-            }
-        }
-
-        return largestIndex;
+        return -1;
     }
 
     private static int EstimateBytes(GaugeFileTable table, int index)
@@ -1320,6 +1366,12 @@ public sealed record AppSettings(
     string OutputDirectory = "",
     string LastRecordExportDirectory = "");
 
+public enum FileListSortColumn
+{
+    FileNumber,
+    Size
+}
+
 public sealed record SerialPortOption(
     string Name,
     string DisplayName,
@@ -1349,6 +1401,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     private bool _isSelected;
     private int _sampleCount;
     private double _progressPercent;
+    private string _suggestion;
     private string _state = "Queued";
     private string _progressText = string.Empty;
 
@@ -1359,7 +1412,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         EstimatedSamples = estimatedSamples;
         Size = size;
         SizePercent = sizePercent;
-        Suggestion = suggestion;
+        _suggestion = suggestion;
         IsCrcValid = isCrcValid;
     }
 
@@ -1375,7 +1428,11 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public double SizePercent { get; }
 
-    public string Suggestion { get; }
+    public string Suggestion
+    {
+        get => _suggestion;
+        private set => SetField(ref _suggestion, value);
+    }
 
     public bool IsCrcValid { get; }
 
@@ -1450,6 +1507,11 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         : HasWarnings ? WarningBrush : State == "Downloaded" ? ReadyBrush : MutedBrush;
 
     public string ActionToolTip => IsDownloaded ? "View pressure and temperature graph" : "Download this file";
+
+    public void SetSuggestion(bool isSuggested)
+    {
+        Suggestion = isSuggested ? "Suggested" : string.Empty;
+    }
 
     public void MarkDownloading()
     {

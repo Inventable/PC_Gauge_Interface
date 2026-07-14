@@ -59,6 +59,22 @@ public sealed partial class MainWindow : Window
         await viewModel.DownloadSelectedAsync().ConfigureAwait(true);
     }
 
+    private void SortByFileNumber_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.SortFiles(FileListSortColumn.FileNumber);
+        }
+    }
+
+    private void SortByFileSize_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.SortFiles(FileListSortColumn.Size);
+        }
+    }
+
     private async void SaveRecord_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel viewModel ||
