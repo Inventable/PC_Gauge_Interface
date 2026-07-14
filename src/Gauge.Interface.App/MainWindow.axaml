@@ -52,6 +52,15 @@
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="6" />
     </Style>
+    <Style Selector="Button.rowAction.saveAction">
+      <Setter Property="Padding" Value="5" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Button.rowAction.saveAction:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#F2F5F6" />
+    </Style>
     <Style Selector="Button.tableHeader">
       <Setter Property="MinHeight" Value="30" />
       <Setter Property="Padding" Value="0,3" />
@@ -212,8 +221,8 @@
                           <Button Classes="rowAction" Click="FileAction_Click" ToolTip.Tip="{Binding ActionToolTip}">
                             <PathIcon Width="22" Height="22" Data="{Binding ActionIcon}" Foreground="{Binding ActionBrush}" />
                           </Button>
-                          <Button Classes="rowAction" Click="SaveRecord_Click" IsVisible="{Binding IsDownloaded}" ToolTip.Tip="Save record file">
-                            <Svg Path="/Assets/ico-case.svg" Width="22" Height="22" Stretch="Uniform" />
+                          <Button Classes="rowAction saveAction" Click="SaveRecord_Click" IsVisible="{Binding IsDownloaded}" ToolTip.Tip="Save record file">
+                            <Svg Path="/Assets/ico-case.svg" Width="30" Height="26" Stretch="Uniform" />
                           </Button>
                         </StackPanel>
                       </Grid>
