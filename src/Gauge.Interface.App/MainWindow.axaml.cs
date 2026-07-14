@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 
@@ -55,5 +56,34 @@ public sealed partial class MainWindow : Window
         }
 
         await viewModel.DownloadSelectedAsync().ConfigureAwait(true);
+    }
+
+    private void GraphZoomWindow_Click(object? sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton toggle)
+        {
+            GaugeTrend.SetZoomWindowMode(toggle.IsChecked == true);
+        }
+    }
+
+    private void GraphZoomIn_Click(object? sender, RoutedEventArgs e)
+    {
+        GaugeTrend.ZoomIn();
+    }
+
+    private void GraphZoomOut_Click(object? sender, RoutedEventArgs e)
+    {
+        GaugeTrend.ZoomOut();
+    }
+
+    private void GraphFit_Click(object? sender, RoutedEventArgs e)
+    {
+        GaugeTrend.Fit();
+    }
+
+    private void BackToFiles_Click(object? sender, RoutedEventArgs e)
+    {
+        GraphZoomWindowButton.IsChecked = false;
+        GaugeTrend.SetZoomWindowMode(false);
     }
 }

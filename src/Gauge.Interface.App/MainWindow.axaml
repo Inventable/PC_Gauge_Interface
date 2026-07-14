@@ -52,6 +52,19 @@
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="6" />
     </Style>
+    <Style Selector="ToggleButton.chartTool">
+      <Setter Property="Width" Value="40" />
+      <Setter Property="Height" Value="40" />
+      <Setter Property="Padding" Value="8" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="ToggleButton.chartTool:checked /template/ ContentPresenter">
+      <Setter Property="Background" Value="#F8ECEF" />
+      <Setter Property="BorderBrush" Value="{StaticResource BrandPrimaryBrush}" />
+    </Style>
     <Style Selector="ListBox.fileList > ListBoxItem">
       <Setter Property="Padding" Value="0" />
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -181,40 +194,66 @@
           </Border>
         </Grid>
 
-        <Grid IsVisible="{Binding IsGraphVisible}" RowDefinitions="Auto,*" RowSpacing="12">
-          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
-            <Button Classes="secondary" Content="Back" Command="{Binding BackToFilesCommand}" />
-            <StackPanel Grid.Column="1" Spacing="2">
-              <TextBlock Text="Review" FontSize="28" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
-              <TextBlock Text="{Binding ReviewSummary}" Foreground="{StaticResource BrandMutedBrush}" />
-            </StackPanel>
-            <TextBlock Grid.Column="2" Text="{Binding LastCsvPath}" Foreground="{StaticResource BrandMutedBrush}" VerticalAlignment="Center" />
+        <Grid IsVisible="{Binding IsGraphVisible}" RowDefinitions="Auto,*" RowSpacing="10">
+          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+            <TextBlock Text="Review" FontSize="26" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" VerticalAlignment="Center" />
+            <ToggleButton x:Name="GraphZoomWindowButton" Grid.Column="1" Classes="chartTool" Click="GraphZoomWindow_Click" ToolTip.Tip="Zoom window">
+              <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
+                        Data="M7,3H5C3.9,3 3,3.9 3,5V7H5V5H7V3M19,7V5C19,3.9 18.1,3 17,3H15V5H17V7H19M17,19H15V21H17C18.1,21 19,20.1 19,19V17H17V19M5,17H3V19C3,20.1 3.9,21 5,21H7V19H5V17M8,8V16H16V8H8Z" />
+            </ToggleButton>
+            <Button Grid.Column="2" Classes="icon" Click="GraphZoomIn_Click" ToolTip.Tip="Zoom in">
+              <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
+                        Data="M9,3A6,6 0 0,1 15,9C15,10.61 14.37,12.09 13.34,13.19L13.71,13.56H14.79L20,18.77L18.77,20L13.56,14.79V13.71L13.19,13.34C12.09,14.37 10.61,15 9,15A6,6 0 1,1 9,3M8,6V8H6V10H8V12H10V10H12V8H10V6H8Z" />
+            </Button>
+            <Button Grid.Column="3" Classes="icon" Click="GraphZoomOut_Click" ToolTip.Tip="Zoom out">
+              <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
+                        Data="M9,3A6,6 0 0,1 15,9C15,10.61 14.37,12.09 13.34,13.19L13.71,13.56H14.79L20,18.77L18.77,20L13.56,14.79V13.71L13.19,13.34C12.09,14.37 10.61,15 9,15A6,6 0 1,1 9,3M6,8V10H12V8H6Z" />
+            </Button>
+            <Button Grid.Column="4" Classes="icon" Click="GraphFit_Click" ToolTip.Tip="Fit all data">
+              <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
+                        Data="M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z" />
+            </Button>
+            <Button Grid.Column="5" Classes="icon" Command="{Binding BackToFilesCommand}" Click="BackToFiles_Click" ToolTip.Tip="Back to files">
+              <PathIcon Width="22" Height="22" Foreground="{StaticResource BrandTextBrush}"
+                        Data="M20,11H7.83L13.42,5.41L12,4L4,12L12,20L13.41,18.59L7.83,13H20V11Z" />
+            </Button>
           </Grid>
-          <Grid Grid.Row="1" ColumnDefinitions="*,220" ColumnSpacing="14">
-            <Border Classes="panel" ClipToBounds="True">
-              <local:GaugeTrendChart Samples="{Binding ChartSamples}" />
+          <Grid Grid.Row="1" ColumnDefinitions="*,250" ColumnSpacing="14">
+            <Border Classes="panel" Padding="8" ClipToBounds="True">
+              <local:GaugeTrendChart x:Name="GaugeTrend" Data="{Binding ChartData}" />
             </Border>
             <Border Grid.Column="1" Classes="panel">
-              <StackPanel Spacing="18">
+              <StackPanel Spacing="15">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                  <StackPanel Spacing="3">
+                    <TextBlock Classes="label" Text="File" />
+                    <TextBlock Text="{Binding ReviewFile}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Spacing="3">
+                    <TextBlock Classes="label" Text="Samples" />
+                    <TextBlock Text="{Binding ReviewSampleCount}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                  </StackPanel>
+                </Grid>
+                <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
+                <StackPanel Spacing="4">
+                  <TextBlock Classes="label" Text="Duration" />
+                  <TextBlock Text="{Binding JobDuration}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                </StackPanel>
                 <StackPanel Spacing="4">
                   <TextBlock Classes="label" Text="Pressure Range" />
-                  <TextBlock Text="{Binding PressureRange}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                  <TextBlock Text="{Binding PressureRange}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
                 </StackPanel>
                 <StackPanel Spacing="4">
                   <TextBlock Classes="label" Text="Temperature Range" />
-                  <TextBlock Text="{Binding TemperatureRange}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
-                </StackPanel>
-                <StackPanel Spacing="4">
-                  <TextBlock Classes="label" Text="Duration" />
-                  <TextBlock Text="{Binding JobDuration}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                  <TextBlock Text="{Binding TemperatureRange}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
                 </StackPanel>
                 <StackPanel Spacing="4">
                   <TextBlock Classes="label" Text="Latest Pressure" />
-                  <TextBlock Text="{Binding LatestPressure}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                  <TextBlock Text="{Binding LatestPressure}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
                 </StackPanel>
                 <StackPanel Spacing="4">
                   <TextBlock Classes="label" Text="Latest Temperature" />
-                  <TextBlock Text="{Binding LatestTemperature}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                  <TextBlock Text="{Binding LatestTemperature}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
                 </StackPanel>
               </StackPanel>
             </Border>

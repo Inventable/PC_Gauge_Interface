@@ -1,123 +1,158 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Media;
-using System.Collections.Specialized;
+using ScottPlot.Avalonia;
+using ScottPlot.Interactivity;
+using ScottPlot.Interactivity.UserActionResponses;
 
 namespace Gauge.Interface.App;
 
-public sealed class GaugeTrendChart : Control
+public sealed class GaugeTrendChart : UserControl
 {
-    public static readonly StyledProperty<IEnumerable<ChartSampleViewModel>?> SamplesProperty =
-        AvaloniaProperty.Register<GaugeTrendChart, IEnumerable<ChartSampleViewModel>?>(nameof(Samples));
+    private static readonly ScottPlot.Color PressureColor = ScottPlot.Color.FromHex("#CE0E2D");
+    private static readonly ScottPlot.Color TemperatureColor = ScottPlot.Color.FromHex("#168A57");
+    private static readonly ScottPlot.Color TextColor = ScottPlot.Color.FromHex("#414149");
+    private static readonly ScottPlot.Color GridColor = ScottPlot.Color.FromHex("#E2E7EA");
+    private readonly AvaPlot _plot = new();
 
-    private INotifyCollectionChanged? _observableSamples;
+    public static readonly StyledProperty<ChartDataSet?> DataProperty =
+        AvaloniaProperty.Register<GaugeTrendChart, ChartDataSet?>(nameof(Data));
 
-    public IEnumerable<ChartSampleViewModel>? Samples
+    public GaugeTrendChart()
     {
-        get => GetValue(SamplesProperty);
-        set => SetValue(SamplesProperty, value);
+        Content = _plot;
+        ClipToBounds = true;
+        ConfigurePlot();
     }
+
+    public ChartDataSet? Data
+    {
+        get => GetValue(DataProperty);
+        set => SetValue(DataProperty, value);
+    }
+
+    public bool IsZoomWindowMode { get; private set; }
 
     static GaugeTrendChart()
     {
-        SamplesProperty.Changed.AddClassHandler<GaugeTrendChart>((chart, args) => chart.OnSamplesChanged(args));
+        DataProperty.Changed.AddClassHandler<GaugeTrendChart>((chart, _) => chart.UpdatePlot());
     }
 
-    public override void Render(DrawingContext context)
+    public void Fit()
     {
-        base.Render(context);
+        _plot.Plot.Axes.Margins(horizontal: 0.02, vertical: 0.08);
+        _plot.Plot.Axes.AutoScale();
+        _plot.Refresh();
+    }
 
-        var bounds = Bounds;
-        var plot = new Rect(42, 18, Math.Max(0, bounds.Width - 62), Math.Max(0, bounds.Height - 44));
-        var axisPen = new Pen(new SolidColorBrush(Color.Parse("#CDD6DC")), 1);
-        var gridPen = new Pen(new SolidColorBrush(Color.Parse("#E4EAEE")), 1);
-        var pressurePen = new Pen(new SolidColorBrush(Color.Parse("#CE0E2D")), 2);
-        var temperaturePen = new Pen(new SolidColorBrush(Color.Parse("#2DA55D")), 2);
-        var textBrush = new SolidColorBrush(Color.Parse("#5D5D66"));
+    public void ZoomIn()
+    {
+        _plot.Plot.Axes.Zoom(1.25, 1.25);
+        _plot.Refresh();
+    }
 
-        context.FillRectangle(new SolidColorBrush(Colors.White), bounds);
+    public void ZoomOut()
+    {
+        _plot.Plot.Axes.ZoomOut(1.25, 1.25);
+        _plot.Refresh();
+    }
 
-        for (var i = 0; i <= 4; i++)
+    public void SetZoomWindowMode(bool enabled)
+    {
+        IsZoomWindowMode = enabled;
+        _plot.UserInputProcessor.Reset();
+
+        if (enabled)
         {
-            var y = plot.Top + (plot.Height * i / 4);
-            context.DrawLine(gridPen, new Point(plot.Left, y), new Point(plot.Right, y));
+            _plot.UserInputProcessor.UserActionResponses.Clear();
+            _plot.UserInputProcessor.UserActionResponses.Add(new MouseDragZoomRectangle(StandardMouseButtons.Left));
         }
 
-        context.DrawRectangle(null, axisPen, plot);
-        DrawLabel(context, "Pressure", new Point(plot.Left, 0), new SolidColorBrush(Color.Parse("#CE0E2D")));
-        DrawLabel(context, "Temperature", new Point(plot.Left + 92, 0), new SolidColorBrush(Color.Parse("#2DA55D")));
+        _plot.Refresh();
+    }
 
-        var samples = Samples?.ToArray() ?? [];
-        if (samples.Length < 2 || plot.Width <= 0 || plot.Height <= 0)
+    private void ConfigurePlot()
+    {
+        var plot = _plot.Plot;
+        plot.FigureBackground.Color = ScottPlot.Colors.White;
+        plot.DataBackground.Color = ScottPlot.Colors.White;
+        plot.Axes.Color(TextColor);
+        plot.Legend.IsVisible = false;
+
+        plot.Axes.Left.Label.Text = "Pressure (psi)";
+        plot.Axes.Left.Label.ForeColor = PressureColor;
+        plot.Axes.Left.TickLabelStyle.ForeColor = PressureColor;
+        plot.Axes.Left.MajorTickStyle.Color = PressureColor;
+
+        plot.Axes.Right.IsVisible = true;
+        plot.Axes.Right.Label.Text = "Temperature (C)";
+        plot.Axes.Right.Label.ForeColor = TemperatureColor;
+        plot.Axes.Right.TickLabelStyle.ForeColor = TemperatureColor;
+        plot.Axes.Right.MajorTickStyle.Color = TemperatureColor;
+
+        plot.Axes.Bottom.Label.Text = "Elapsed time";
+        plot.Axes.Bottom.TickGenerator = new ScottPlot.TickGenerators.NumericAutomatic
         {
-            DrawLabel(context, "No downloaded data", new Point(plot.Left + 12, plot.Top + 12), textBrush);
+            LabelFormatter = FormatElapsedTime,
+            MinimumTickSpacing = 72
+        };
+
+        // A single quiet grid follows the pressure and elapsed-time axes.
+        plot.Grid.MajorLineColor = GridColor;
+        plot.Grid.MinorLineWidth = 0;
+        plot.Grid.XAxisStyle.IsVisible = true;
+        plot.Grid.YAxisStyle.IsVisible = true;
+    }
+
+    private void UpdatePlot()
+    {
+        var plot = _plot.Plot;
+        plot.Clear();
+        var data = Data;
+
+        if (data is null || data.Count < 2)
+        {
+            _plot.Refresh();
             return;
         }
 
-        DrawSeries(context, samples, plot, pressurePen, sample => sample.Pressure);
-        DrawSeries(context, samples, plot, temperaturePen, sample => sample.Temperature);
+        var pressure = plot.Add.SignalXY(data.ElapsedSeconds, data.Pressure);
+        pressure.Color = PressureColor;
+        pressure.LineWidth = 2;
+        pressure.MarkerStyle.Size = 0;
+        pressure.Axes.XAxis = plot.Axes.Bottom;
+        pressure.Axes.YAxis = plot.Axes.Left;
+
+        var temperature = plot.Add.SignalXY(data.ElapsedSeconds, data.Temperature);
+        temperature.Color = TemperatureColor;
+        temperature.LineWidth = 2;
+        temperature.LinePattern = ScottPlot.LinePattern.Dashed;
+        temperature.MarkerStyle.Size = 0;
+        temperature.Axes.XAxis = plot.Axes.Bottom;
+        temperature.Axes.YAxis = plot.Axes.Right;
+
+        Fit();
     }
 
-    private void OnSamplesChanged(AvaloniaPropertyChangedEventArgs args)
+    private static string FormatElapsedTime(double value)
     {
-        if (_observableSamples is not null)
+        var sign = value < 0 ? "-" : string.Empty;
+        var elapsed = TimeSpan.FromSeconds(Math.Abs(value));
+
+        if (elapsed.TotalDays >= 1)
         {
-            _observableSamples.CollectionChanged -= OnSampleCollectionChanged;
+            return $"{sign}{(int)elapsed.TotalDays}d {elapsed.Hours:00}h";
         }
 
-        _observableSamples = args.NewValue as INotifyCollectionChanged;
-        if (_observableSamples is not null)
+        if (elapsed.TotalHours >= 1)
         {
-            _observableSamples.CollectionChanged += OnSampleCollectionChanged;
+            return $"{sign}{(int)elapsed.TotalHours}h {elapsed.Minutes:00}m";
         }
 
-        InvalidateVisual();
-    }
-
-    private void OnSampleCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        InvalidateVisual();
-    }
-
-    private static void DrawSeries(
-        DrawingContext context,
-        IReadOnlyList<ChartSampleViewModel> samples,
-        Rect plot,
-        Pen pen,
-        Func<ChartSampleViewModel, double> selector)
-    {
-        var min = samples.Min(selector);
-        var max = samples.Max(selector);
-        if (Math.Abs(max - min) < 0.000001)
+        if (elapsed.TotalMinutes >= 1)
         {
-            max = min + 1;
+            return $"{sign}{(int)elapsed.TotalMinutes}m {elapsed.Seconds:00}s";
         }
 
-        Point? previous = null;
-        for (var index = 0; index < samples.Count; index++)
-        {
-            var x = plot.Left + (plot.Width * index / Math.Max(1, samples.Count - 1));
-            var normalized = (selector(samples[index]) - min) / (max - min);
-            var y = plot.Bottom - (plot.Height * normalized);
-            var point = new Point(x, y);
-            if (previous is not null)
-            {
-                context.DrawLine(pen, previous.Value, point);
-            }
-
-            previous = point;
-        }
-    }
-
-    private static void DrawLabel(DrawingContext context, string text, Point origin, IBrush brush)
-    {
-        var formatted = new FormattedText(
-            text,
-            System.Globalization.CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            Typeface.Default,
-            12,
-            brush);
-        context.DrawText(formatted, origin);
+        return $"{sign}{elapsed.TotalSeconds:F0}s";
     }
 }

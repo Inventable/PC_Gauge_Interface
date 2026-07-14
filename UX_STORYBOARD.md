@@ -168,7 +168,9 @@ Purpose: inspect pressure and temperature data clearly.
 Primary content:
 
 - Large pressure/temperature chart.
-- Pressure and temperature traces with distinct colours.
+- Pressure on a directly labelled left axis and temperature on a directly labelled right axis.
+- One subdued grid tied to the pressure and elapsed-time axes; do not draw competing pressure and temperature grids.
+- Pressure and temperature traces with distinct colours and solid/dashed line styles.
 - Time axis with editable start time.
 - Cursor readout: timestamp, pressure, temperature.
 - Units selectors for pressure and temperature.
@@ -178,7 +180,7 @@ Primary content:
 Primary actions:
 
 - `Fit`.
-- `Zoom`.
+- `Zoom window`, zoom in/out, wheel zoom, and pan.
 - `Cursor`.
 - `Export`.
 - `Open data table`.

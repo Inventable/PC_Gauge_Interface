@@ -46,13 +46,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _latestPressure = "--";
     private string _deviceSummary = "No gauge connected";
     private string _deviceDetails = string.Empty;
-    private string _lastCsvPath = string.Empty;
     private string _fileSummary = "No file table loaded";
-    private string _reviewSummary = "No downloaded job";
+    private string _reviewFile = "--";
+    private string _reviewSampleCount = "--";
     private string _pressureRange = "--";
     private string _temperatureRange = "--";
     private string _jobDuration = "--";
     private string _downloadProgressText = "";
+    private ChartDataSet _chartData = ChartDataSet.Empty;
     private IBrush _connectionBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
     private GaugeFileRowViewModel? _selectedFile;
     private double _downloadProgressPercent;
@@ -74,7 +75,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         RefreshPortsCommand = new RelayCommand(RefreshPortsAsync);
         StartCommand = new RelayCommand(StartAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
         ReadFilesCommand = new RelayCommand(ReadFilesAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
-        ShowGraphCommand = new RelayCommand(ShowGraphAsync, () => SelectedFile?.Samples is { Count: > 0 } || ChartSamples.Count > 0);
+        ShowGraphCommand = new RelayCommand(ShowGraphAsync, () => SelectedFile?.Samples is { Count: > 0 } || ChartData.Count > 0);
         BackToFilesCommand = new RelayCommand(BackToFilesAsync);
         OpenSettingsCommand = new RelayCommand(OpenSettingsAsync);
         ToggleDeviceDetailsCommand = new RelayCommand(ToggleDeviceDetailsAsync);
@@ -90,8 +91,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public ObservableCollection<GaugeFileRowViewModel> Files { get; } = [];
 
     public ObservableCollection<SampleRowViewModel> Samples { get; } = [];
-
-    public ObservableCollection<ChartSampleViewModel> ChartSamples { get; } = [];
 
     public ICommand RefreshPortsCommand { get; }
 
@@ -198,22 +197,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         set => SetField(ref _deviceDetails, value);
     }
 
-    public string LastCsvPath
-    {
-        get => _lastCsvPath;
-        set => SetField(ref _lastCsvPath, value);
-    }
-
     public string FileSummary
     {
         get => _fileSummary;
         set => SetField(ref _fileSummary, value);
     }
 
-    public string ReviewSummary
+    public string ReviewFile
     {
-        get => _reviewSummary;
-        set => SetField(ref _reviewSummary, value);
+        get => _reviewFile;
+        set => SetField(ref _reviewFile, value);
+    }
+
+    public string ReviewSampleCount
+    {
+        get => _reviewSampleCount;
+        set => SetField(ref _reviewSampleCount, value);
+    }
+
+    public ChartDataSet ChartData
+    {
+        get => _chartData;
+        private set => SetField(ref _chartData, value);
     }
 
     public string PressureRange
@@ -367,7 +372,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             ShowFileGraph(SelectedFile, samples);
         }
-        else if (ChartSamples.Count > 0)
+        else if (ChartData.Count > 0)
         {
             IsGraphVisible = true;
         }
@@ -415,13 +420,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         await _serialGate.WaitAsync().ConfigureAwait(true);
         Files.Clear();
         Samples.Clear();
-        ChartSamples.Clear();
+        ChartData = ChartDataSet.Empty;
         SelectedFile = null;
         _calibration = null;
         _connectedDevice = null;
         LatestTemperature = "--";
         LatestPressure = "--";
-        LastCsvPath = string.Empty;
         ResetReview();
 
         try
@@ -491,8 +495,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         IsBusy = true;
         Samples.Clear();
-        ChartSamples.Clear();
-        LastCsvPath = string.Empty;
+        ChartData = ChartDataSet.Empty;
         DownloadProgressPercent = 0;
         DownloadProgressText = "Preparing download";
         ResetReview();
@@ -886,22 +889,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private void ShowFileGraph(GaugeFileRowViewModel file, IReadOnlyList<CalibratedGaugeSample> samples)
     {
         Samples.Clear();
-        ChartSamples.Clear();
+        ChartData = ChartDataSet.Empty;
 
         foreach (var sample in samples.TakeLast(25))
         {
             Samples.Add(SampleRowViewModelFactory.FromSample(sample));
         }
 
-        foreach (var sample in samples)
-        {
-            ChartSamples.Add(ChartSampleViewModelFactory.FromSample(sample));
-        }
+        ChartData = ChartDataSet.FromSamples(samples);
 
         var latest = samples[^1];
         LatestTemperature = $"{latest.Temperature:F2} C";
         LatestPressure = $"{latest.Pressure:F2} psi";
-        LastCsvPath = string.Empty;
         if (file.Download is not null)
         {
             UpdateReview(file.Download, samples);
@@ -1022,7 +1021,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void ResetReview()
     {
-        ReviewSummary = "No downloaded job";
+        ReviewFile = "--";
+        ReviewSampleCount = "--";
         PressureRange = "--";
         TemperatureRange = "--";
         JobDuration = "--";
@@ -1034,10 +1034,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         var pressureMax = samples.Max(sample => sample.Pressure);
         var temperatureMin = samples.Min(sample => sample.Temperature);
         var temperatureMax = samples.Max(sample => sample.Temperature);
-        var durationSeconds = samples.Count == 0 ? 0 : samples[^1].Timestamp;
+        var durationSeconds = samples.Count == 0 ? 0 : samples[^1].Timestamp - samples[0].Timestamp;
         var duration = TimeSpan.FromSeconds(durationSeconds);
 
-        ReviewSummary = $"File {download.FileIndex} | {samples.Count} sample(s)";
+        ReviewFile = $"File {download.FileIndex}";
+        ReviewSampleCount = samples.Count.ToString("N0");
         PressureRange = $"{pressureMin:F2} to {pressureMax:F2} psi";
         TemperatureRange = $"{temperatureMin:F2} to {temperatureMax:F2} C";
         JobDuration = duration.TotalHours >= 1
@@ -1497,9 +1498,38 @@ public sealed record SampleRowViewModel(
     string Timestamp,
     string Crc);
 
-public sealed record ChartSampleViewModel(
-    double Pressure,
-    double Temperature);
+public sealed record ChartDataSet(
+    double[] ElapsedSeconds,
+    double[] Pressure,
+    double[] Temperature)
+{
+    public static ChartDataSet Empty { get; } = new([], [], []);
+
+    public int Count => Pressure.Length;
+
+    public static ChartDataSet FromSamples(IReadOnlyList<CalibratedGaugeSample> samples)
+    {
+        if (samples.Count == 0)
+        {
+            return Empty;
+        }
+
+        var elapsedSeconds = new double[samples.Count];
+        var pressure = new double[samples.Count];
+        var temperature = new double[samples.Count];
+        var startTimestamp = samples[0].Timestamp;
+
+        for (var index = 0; index < samples.Count; index++)
+        {
+            var sample = samples[index];
+            elapsedSeconds[index] = sample.Timestamp - startTimestamp;
+            pressure[index] = sample.Pressure;
+            temperature[index] = sample.Temperature;
+        }
+
+        return new ChartDataSet(elapsedSeconds, pressure, temperature);
+    }
+}
 
 public static class SampleRowViewModelFactory
 {
@@ -1511,13 +1541,5 @@ public static class SampleRowViewModelFactory
             sample.Temperature.ToString("F3"),
             sample.Timestamp.ToString(),
             sample.CrcError ? "Bad" : "OK");
-    }
-}
-
-public static class ChartSampleViewModelFactory
-{
-    public static ChartSampleViewModel FromSample(CalibratedGaugeSample sample)
-    {
-        return new ChartSampleViewModel(sample.Pressure, sample.Temperature);
     }
 }
