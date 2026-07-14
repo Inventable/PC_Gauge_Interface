@@ -58,6 +58,59 @@ public sealed partial class MainWindow : Window
         await viewModel.DownloadSelectedAsync().ConfigureAwait(true);
     }
 
+    private async void SaveRecord_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel ||
+            sender is not Control { DataContext: GaugeFileRowViewModel file } ||
+            file.RawBytes is not { Length: > 0 } rawBytes)
+        {
+            return;
+        }
+
+        try
+        {
+            var startDirectory = string.IsNullOrWhiteSpace(viewModel.LastRecordExportDirectory)
+                ? viewModel.OutputDirectory
+                : viewModel.LastRecordExportDirectory;
+            var startFolder = string.IsNullOrWhiteSpace(startDirectory)
+                ? null
+                : await StorageProvider.TryGetFolderFromPathAsync(startDirectory);
+
+            var destination = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Save gauge record",
+                SuggestedFileName = viewModel.BuildRecordFileName(file),
+                SuggestedStartLocation = startFolder,
+                DefaultExtension = "rec",
+                ShowOverwritePrompt = true,
+                FileTypeChoices =
+                [
+                    new FilePickerFileType("Gauge record file")
+                    {
+                        Patterns = ["*.rec"]
+                    }
+                ]
+            });
+
+            if (destination is null)
+            {
+                return;
+            }
+
+            await using var stream = await destination.OpenWriteAsync();
+            stream.SetLength(0);
+            await stream.WriteAsync(rawBytes);
+            await stream.FlushAsync();
+
+            var savedPath = destination.Path.LocalPath;
+            viewModel.RecordExportSucceeded(file, savedPath);
+        }
+        catch (Exception ex)
+        {
+            viewModel.RecordExportFailed(file, ex.Message);
+        }
+    }
+
     private void GraphZoomWindow_Click(object? sender, RoutedEventArgs e)
     {
         if (sender is ToggleButton toggle)

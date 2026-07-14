@@ -7,6 +7,7 @@
     <AvaloniaResource Include="Assets\**" />
     <AvaloniaResource Include="..\..\reference\brand-images\northstar_logo_black.svg" Link="Assets\northstar-logo.svg" />
     <AvaloniaResource Include="..\..\reference\brand-images\ico.png" Link="Assets\northstar-app-icon.png" />
+    <AvaloniaResource Include="..\..\reference\brand-images\ico-case.svg" Link="Assets\ico-case.svg" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.7" />

@@ -375,6 +375,7 @@ Current status:
 - The review panel uses ScottPlot 5 with a single elapsed-time axis, pressure on the left axis, temperature on the right axis, and one subdued grid tied to the pressure axis. Direct axis labels and solid/dashed traces avoid relying on a separate legend or colour alone.
 - Review controls now provide drag-to-zoom-window, wheel/pan interaction, zoom in/out, and fit-all. File metadata, ranges, duration, and latest values are kept in the adjacent summary panel.
 - Chart data is passed as packed numeric arrays and rendered with `SignalXY`; a 259,200-sample-per-series verification (three days at one-second intervals) rendered successfully during development.
+- Downloaded file rows can export their original raw bytes as `.rec` files through the native save dialog. The app remembers the last record-export directory for subsequent saves.
 - A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
 
 ### Phase 6: Acoustic Gauge Support
@@ -409,7 +410,7 @@ Deliverable: field-deployable application with a path beyond serial.
 
 - Test the new splash/setup screen, idle gauge polling, disconnect/reconnect behaviour, and simplified file table with a live gauge.
 - Add staged progress, cancellation, and serial-operation locking before testing large downloads.
-- Add graph cursor readout, data-quality indication, and export/open-folder actions.
+- Add graph cursor readout, data-quality indication, and converted CSV/JSON export/open-folder actions.
 - Move device details, raw protocol data, and future acoustic tools into settings/engineering mode.
 
 ## Open Questions

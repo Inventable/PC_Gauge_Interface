@@ -149,6 +149,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    public string LastRecordExportDirectory => _settings.LastRecordExportDirectory;
+
     public string JobName
     {
         get => _jobName;
@@ -384,6 +386,30 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         IsGraphVisible = false;
         return Task.CompletedTask;
+    }
+
+    public string BuildRecordFileName(GaugeFileRowViewModel file)
+    {
+        var serial = _connectedDevice?.DeviceSerial.ToString() ?? "unknown";
+        return $"gauge-{serial}-{DateTime.Now:yyyyMMdd}-file-{file.Index:000}.rec";
+    }
+
+    public void RecordExportSucceeded(GaugeFileRowViewModel file, string savedPath)
+    {
+        var directory = Path.GetDirectoryName(savedPath);
+        if (!string.IsNullOrWhiteSpace(directory) &&
+            !string.Equals(directory, _settings.LastRecordExportDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            _settings = _settings with { LastRecordExportDirectory = directory };
+            SaveSettings();
+        }
+
+        SetProtectedStatus($"Saved file {file.Index} as {Path.GetFileName(savedPath)}", TimeSpan.FromSeconds(20));
+    }
+
+    public void RecordExportFailed(GaugeFileRowViewModel file, string message)
+    {
+        SetProtectedStatus($"Could not save file {file.Index}: {message}", TimeSpan.FromSeconds(20));
     }
 
     private Task ToggleDeviceDetailsAsync()
@@ -1232,7 +1258,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
 public sealed record AppSettings(
     string LastPort = "",
-    string OutputDirectory = "");
+    string OutputDirectory = "",
+    string LastRecordExportDirectory = "");
 
 public sealed record SerialPortOption(
     string Name,
