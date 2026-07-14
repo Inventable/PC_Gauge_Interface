@@ -102,7 +102,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public bool IsFileNumberSortActive => _fileSortColumn == FileListSortColumn.FileNumber;
 
+    public bool IsFileNumberSortInactive => !IsFileNumberSortActive;
+
     public bool IsFileSizeSortActive => _fileSortColumn == FileListSortColumn.Size;
+
+    public bool IsFileSizeSortInactive => !IsFileSizeSortActive;
 
     public Geometry FileSortDirectionIcon => _fileSortDescending
         ? SortDescendingGeometry
@@ -380,7 +384,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         ApplyFileSort();
         OnPropertyChanged(nameof(IsFileNumberSortActive));
+        OnPropertyChanged(nameof(IsFileNumberSortInactive));
         OnPropertyChanged(nameof(IsFileSizeSortActive));
+        OnPropertyChanged(nameof(IsFileSizeSortInactive));
         OnPropertyChanged(nameof(FileSortDirectionIcon));
     }
 

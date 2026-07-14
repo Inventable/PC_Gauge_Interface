@@ -170,12 +170,14 @@
                     <StackPanel Orientation="Horizontal" Spacing="6">
                       <TextBlock Text="File" FontWeight="SemiBold" VerticalAlignment="Center" />
                       <PathIcon Width="16" Height="16" Data="{Binding FileSortDirectionIcon}" Foreground="{StaticResource BrandPrimaryBrush}" IsVisible="{Binding IsFileNumberSortActive}" />
+                      <PathIcon Width="16" Height="16" Data="M12,3L7,8H10V11H14V8H17L12,3M12,21L17,16H14V13H10V16H7L12,21Z" Foreground="#8A9298" IsVisible="{Binding IsFileNumberSortInactive}" />
                     </StackPanel>
                   </Button>
                   <Button Grid.Column="1" Classes="tableHeader" Click="SortByFileSize_Click" ToolTip.Tip="Sort by file size">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                       <TextBlock Text="Size" FontWeight="SemiBold" VerticalAlignment="Center" />
                       <PathIcon Width="16" Height="16" Data="{Binding FileSortDirectionIcon}" Foreground="{StaticResource BrandPrimaryBrush}" IsVisible="{Binding IsFileSizeSortActive}" />
+                      <PathIcon Width="16" Height="16" Data="M12,3L7,8H10V11H14V8H17L12,3M12,21L17,16H14V13H10V16H7L12,21Z" Foreground="#8A9298" IsVisible="{Binding IsFileSizeSortInactive}" />
                     </StackPanel>
                   </Button>
                   <TextBlock Grid.Column="2" Text="Status" FontWeight="SemiBold" VerticalAlignment="Center" />
