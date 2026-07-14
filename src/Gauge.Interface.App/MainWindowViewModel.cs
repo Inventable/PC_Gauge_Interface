@@ -848,7 +848,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         try
         {
-            foreach (var file in Files.Where(file => !file.IsDownloaded).ToArray())
+            foreach (var file in Files
+                .Where(file => !file.IsDownloaded)
+                .OrderByDescending(file => file.Index)
+                .ToArray())
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 await DownloadFileRowAsync(file, manual: false, cancellationToken).ConfigureAwait(true);
