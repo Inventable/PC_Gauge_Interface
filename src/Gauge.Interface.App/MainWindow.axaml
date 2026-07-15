@@ -98,6 +98,14 @@
       <Setter Property="Foreground" Value="{StaticResource BrandMutedBrush}" />
       <Setter Property="FontSize" Value="13" />
     </Style>
+    <Style Selector="TextBlock.reviewValue">
+      <Setter Property="FontFamily" Value="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" />
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{StaticResource BrandTextBrush}" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="TextAlignment" Value="Right" />
+    </Style>
   </Window.Styles>
 
   <Grid>
@@ -289,17 +297,20 @@
             <Border Classes="panel">
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel Spacing="16">
-                <Grid ColumnDefinitions="104,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="12">
+                <Grid ColumnDefinitions="104,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="12">
                   <TextBlock Classes="label" Text="File" VerticalAlignment="Center" />
-                  <TextBlock Grid.Column="1" Text="{Binding ReviewFile}" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" TextAlignment="Right" />
+                  <TextBlock Grid.Column="1" Classes="reviewValue" Text="{Binding ReviewFile}" />
 
-                  <TextBlock Grid.Row="1" Classes="label" Text="Samples" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ReviewSampleCount}" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" TextAlignment="Right" />
+                  <TextBlock Grid.Row="1" Classes="label" Text="Duration" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="1" Grid.Column="1" Classes="reviewValue" Text="{Binding JobDuration}" />
 
-                  <TextBlock Grid.Row="2" Classes="label" Text="Status" VerticalAlignment="Top" Margin="0,7,0,0" />
-                  <Grid Grid.Row="2" Grid.Column="1" RowDefinitions="Auto,6" RowSpacing="7">
+                  <TextBlock Grid.Row="2" Classes="label" Text="Samples" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="2" Grid.Column="1" Classes="reviewValue" Text="{Binding ReviewSampleCount}" />
+
+                  <TextBlock Grid.Row="3" Classes="label" Text="Status" VerticalAlignment="Top" Margin="0,7,0,0" />
+                  <Grid Grid.Row="3" Grid.Column="1" RowDefinitions="Auto,6" RowSpacing="7">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
-                      <TextBlock Text="{Binding SelectedFile.RowStatus}" Foreground="{Binding SelectedFile.StatusBrush}" TextWrapping="Wrap" HorizontalAlignment="Right" TextAlignment="Right" VerticalAlignment="Center" />
+                      <TextBlock Classes="reviewValue" Text="{Binding SelectedFile.RowStatus}" Foreground="{Binding SelectedFile.StatusBrush}" TextWrapping="Wrap" HorizontalAlignment="Stretch" VerticalAlignment="Center" />
                       <Button Grid.Column="1" Classes="icon" Width="30" Height="30" Padding="6" Click="CancelSelectedDownload_Click" IsVisible="{Binding SelectedFile.IsDownloading}" ToolTip.Tip="Cancel download">
                         <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandPrimaryBrush}"
                                   Data="M18.3,5.71L16.89,4.29L12,9.17L7.11,4.29L5.7,5.71L10.59,10.59L5.7,15.48L7.11,16.89L12,12L16.89,16.89L18.3,15.48L13.41,10.59L18.3,5.71Z" />
@@ -315,35 +326,30 @@
                     </Grid>
                   </Grid>
 
-                  <TextBlock Grid.Row="3" Classes="label" Text="Data Quality" VerticalAlignment="Top" />
-                  <StackPanel Grid.Row="3" Grid.Column="1" Spacing="3" HorizontalAlignment="Right">
-                    <TextBlock Text="{Binding SelectedFile.DataQualityStatus}" Foreground="{Binding SelectedFile.DataQualityBrush}" FontWeight="SemiBold" TextAlignment="Right" HorizontalAlignment="Right" />
-                    <TextBlock Text="{Binding SelectedFile.DataQualityDetail}" Foreground="{StaticResource BrandMutedBrush}" FontSize="12" TextWrapping="Wrap" TextAlignment="Right" HorizontalAlignment="Right" MaxWidth="150" />
-                  </StackPanel>
+                  <TextBlock Grid.Row="4" Classes="label" Text="Data Quality" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="4" Grid.Column="1" Classes="reviewValue" Text="{Binding SelectedFile.DataQualityDetail}" Foreground="{Binding SelectedFile.DataQualityBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding SelectedFile.DataQualityDetail}" />
 
-                  <TextBlock Grid.Row="4" Classes="label" Text="Cursor Sample" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding CursorSample}" Foreground="{StaticResource BrandTextBrush}" FontWeight="SemiBold" HorizontalAlignment="Right" />
-                  <TextBlock Grid.Row="5" Classes="label" Text="Elapsed Time" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding CursorElapsed}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
-                  <TextBlock Grid.Row="6" Classes="label" Text="Pressure" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding CursorPressure}" Foreground="{StaticResource BrandPrimaryBrush}" FontWeight="SemiBold" HorizontalAlignment="Right" />
-                  <TextBlock Grid.Row="7" Classes="label" Text="Temperature" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding CursorTemperature}" Foreground="{StaticResource BrandAccentBrush}" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Row="5" Classes="label" Text="Cursor Sample" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="5" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorSample}" />
+                  <TextBlock Grid.Row="6" Classes="label" Text="Elapsed Time" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="6" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorElapsed}" />
+                  <TextBlock Grid.Row="7" Classes="label" Text="Pressure" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="7" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorPressure}" Foreground="{StaticResource BrandPrimaryBrush}" />
+                  <TextBlock Grid.Row="8" Classes="label" Text="Temperature" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="8" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorTemperature}" Foreground="{StaticResource BrandAccentBrush}" />
                 </Grid>
 
                 <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
 
-                <Grid ColumnDefinitions="104,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="12">
-                  <TextBlock Classes="label" Text="Duration" VerticalAlignment="Center" />
-                  <TextBlock Grid.Column="1" Text="{Binding JobDuration}" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
-                  <TextBlock Grid.Row="1" Classes="label" Text="Pressure Min" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding PressureMinimum}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
-                  <TextBlock Grid.Row="2" Classes="label" Text="Pressure Max" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding PressureMaximum}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
-                  <TextBlock Grid.Row="3" Classes="label" Text="Temperature Min" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding TemperatureMinimum}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
-                  <TextBlock Grid.Row="4" Classes="label" Text="Temperature Max" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding TemperatureMaximum}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
+                <Grid ColumnDefinitions="104,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="12">
+                  <TextBlock Classes="label" Text="Pressure Min" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Classes="reviewValue" Text="{Binding PressureMinimum}" />
+                  <TextBlock Grid.Row="1" Classes="label" Text="Pressure Max" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="1" Grid.Column="1" Classes="reviewValue" Text="{Binding PressureMaximum}" />
+                  <TextBlock Grid.Row="2" Classes="label" Text="Temperature Min" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="2" Grid.Column="1" Classes="reviewValue" Text="{Binding TemperatureMinimum}" />
+                  <TextBlock Grid.Row="3" Classes="label" Text="Temperature Max" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="3" Grid.Column="1" Classes="reviewValue" Text="{Binding TemperatureMaximum}" />
                 </Grid>
               </StackPanel>
               </ScrollViewer>

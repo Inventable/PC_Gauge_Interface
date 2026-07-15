@@ -1847,10 +1847,6 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         ? ErrorBrush
         : HasWarnings ? WarningBrush : ReadyBrush;
 
-    public string DataQualityStatus => HasErrors
-        ? "Errors detected"
-        : HasWarnings ? "Warnings detected" : IsDownloading ? "Good so far" : "Good";
-
     public string DataQualityDetail
     {
         get
@@ -1858,7 +1854,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
             var details = new List<string>();
             if (!IsCrcValid)
             {
-                details.Add("File record CRC");
+                details.Add("File CRC error");
             }
 
             if (CrcErrorCount > 0)
@@ -1868,10 +1864,10 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
             if (BatteryWarningCount > 0)
             {
-                details.Add($"{BatteryWarningCount:N0} sample{(BatteryWarningCount == 1 ? string.Empty : "s")} with battery warning");
+                details.Add($"{BatteryWarningCount:N0} battery warning{(BatteryWarningCount == 1 ? string.Empty : "s")}");
             }
 
-            return details.Count == 0 ? "No recorded data warnings" : string.Join(" | ", details);
+            return details.Count == 0 ? "No warnings" : string.Join(", ", details);
         }
     }
 
@@ -2070,7 +2066,6 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(ActionBrush));
         OnPropertyChanged(nameof(StatusBrush));
         OnPropertyChanged(nameof(DataQualityBrush));
-        OnPropertyChanged(nameof(DataQualityStatus));
         OnPropertyChanged(nameof(DataQualityDetail));
         OnPropertyChanged(nameof(ActionToolTip));
     }
