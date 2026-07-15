@@ -1833,6 +1833,8 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         _ => "Waiting"
     };
 
+    public string ReviewStatus => IsDownloading ? "Downloading" : RowStatus;
+
     public Geometry ActionIcon => HasPlotData ? GraphGeometry : DownloadGeometry;
 
     public IBrush ActionBrush => !HasPlotData || State == "Error" || HasErrors
@@ -2062,6 +2064,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanFileAction));
         OnPropertyChanged(nameof(HasPlotData));
         OnPropertyChanged(nameof(RowStatus));
+        OnPropertyChanged(nameof(ReviewStatus));
         OnPropertyChanged(nameof(ActionIcon));
         OnPropertyChanged(nameof(ActionBrush));
         OnPropertyChanged(nameof(StatusBrush));

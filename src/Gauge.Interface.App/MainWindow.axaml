@@ -104,6 +104,7 @@
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Foreground" Value="{StaticResource BrandTextBrush}" />
       <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="TextAlignment" Value="Right" />
     </Style>
   </Window.Styles>
@@ -260,32 +261,48 @@
         </Grid>
 
         <Grid IsVisible="{Binding IsGraphVisible}" RowDefinitions="Auto,*" RowSpacing="10">
-          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
             <TextBlock Text="Review" FontSize="26" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" VerticalAlignment="Center" />
-            <ToggleButton x:Name="GraphCursorButton" Grid.Column="1" Classes="chartTool" IsChecked="True" Click="GraphCursor_Click" ToolTip.Tip="Inspect data">
+            <Grid Grid.Column="1" Width="260" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,6" ColumnSpacing="8" RowSpacing="5" Margin="8,0" VerticalAlignment="Center" IsVisible="{Binding SelectedFile.IsDownloading}">
+              <TextBlock Text="Downloading" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" Classes="reviewValue" FontSize="12" Text="{Binding SelectedFile.ProgressText}" VerticalAlignment="Center" />
+              <Grid Grid.Row="1" Grid.ColumnSpan="2" Height="6">
+                <Border Background="#DFE6E9" CornerRadius="3" />
+                <ProgressBar Minimum="0" Maximum="100" Value="{Binding SelectedFile.ProgressPercent}" Height="6" BorderThickness="0" Foreground="{StaticResource BrandPrimaryBrush}" Background="Transparent" />
+              </Grid>
+              <Button Grid.Column="2" Grid.RowSpan="2" Classes="icon" Width="30" Height="30" Padding="6" Click="CancelSelectedDownload_Click" ToolTip.Tip="Cancel download">
+                <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandPrimaryBrush}"
+                          Data="M18.3,5.71L16.89,4.29L12,9.17L7.11,4.29L5.7,5.71L10.59,10.59L5.7,15.48L7.11,16.89L12,12L16.89,16.89L18.3,15.48L13.41,10.59L18.3,5.71Z" />
+              </Button>
+            </Grid>
+            <Button Grid.Column="2" Classes="icon" Click="RetrySelectedDownload_Click" IsVisible="{Binding SelectedFile.IsRetryAvailable}" ToolTip.Tip="Retry download">
+              <PathIcon Width="20" Height="20" Foreground="{StaticResource BrandPrimaryBrush}"
+                        Data="M17.65,6.35C16.2,4.9 14.21,4 12,4C7.58,4 4,7.58 4,12C4,16.42 7.58,20 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18C8.69,18 6,15.31 6,12C6,8.69 8.69,6 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" />
+            </Button>
+            <ToggleButton x:Name="GraphCursorButton" Grid.Column="3" Classes="chartTool" IsChecked="True" Click="GraphCursor_Click" ToolTip.Tip="Inspect data">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M13,1H11V4.07C7.39,4.52 4.52,7.39 4.07,11H1V13H4.07C4.52,16.61 7.39,19.48 11,19.93V23H13V19.93C16.61,19.48 19.48,16.61 19.93,13H23V11H19.93C19.48,7.39 16.61,4.52 13,4.07V1M12,6C15.31,6 18,8.69 18,12C18,15.31 15.31,18 12,18C8.69,18 6,15.31 6,12C6,8.69 8.69,6 12,6M12,9C10.34,9 9,10.34 9,12C9,13.66 10.34,15 12,15C13.66,15 15,13.66 15,12C15,10.34 13.66,9 12,9Z" />
             </ToggleButton>
-            <ToggleButton x:Name="GraphZoomWindowButton" Grid.Column="2" Classes="chartTool" Click="GraphZoomWindow_Click" ToolTip.Tip="Zoom window">
+            <ToggleButton x:Name="GraphZoomWindowButton" Grid.Column="4" Classes="chartTool" Click="GraphZoomWindow_Click" ToolTip.Tip="Zoom window">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M7,3H5C3.9,3 3,3.9 3,5V7H5V5H7V3M19,7V5C19,3.9 18.1,3 17,3H15V5H17V7H19M17,19H15V21H17C18.1,21 19,20.1 19,19V17H17V19M5,17H3V19C3,20.1 3.9,21 5,21H7V19H5V17M8,8V16H16V8H8Z" />
             </ToggleButton>
-            <Button Grid.Column="3" Classes="icon" Click="GraphZoomIn_Click" ToolTip.Tip="Zoom in">
+            <Button Grid.Column="5" Classes="icon" Click="GraphZoomIn_Click" ToolTip.Tip="Zoom in">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M9,3A6,6 0 0,1 15,9C15,10.61 14.37,12.09 13.34,13.19L13.71,13.56H14.79L20,18.77L18.77,20L13.56,14.79V13.71L13.19,13.34C12.09,14.37 10.61,15 9,15A6,6 0 1,1 9,3M8,6V8H6V10H8V12H10V10H12V8H10V6H8Z" />
             </Button>
-            <Button Grid.Column="4" Classes="icon" Click="GraphZoomOut_Click" ToolTip.Tip="Zoom out">
+            <Button Grid.Column="6" Classes="icon" Click="GraphZoomOut_Click" ToolTip.Tip="Zoom out">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M9,3A6,6 0 0,1 15,9C15,10.61 14.37,12.09 13.34,13.19L13.71,13.56H14.79L20,18.77L18.77,20L13.56,14.79V13.71L13.19,13.34C12.09,14.37 10.61,15 9,15A6,6 0 1,1 9,3M6,8V10H12V8H6Z" />
             </Button>
-            <Button Grid.Column="5" Classes="icon" Click="GraphFit_Click" ToolTip.Tip="Fit all data">
+            <Button Grid.Column="7" Classes="icon" Click="GraphFit_Click" ToolTip.Tip="Fit all data">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z" />
             </Button>
-            <Button Grid.Column="6" Classes="icon" Click="SaveSelectedRecord_Click" IsVisible="{Binding SelectedFile.IsDownloaded}" ToolTip.Tip="Save record file">
+            <Button Grid.Column="8" Classes="icon" Click="SaveSelectedRecord_Click" IsVisible="{Binding SelectedFile.IsDownloaded}" ToolTip.Tip="Save record file">
               <Svg Path="/Assets/ico-case.svg" Width="30" Height="26" Stretch="Uniform" />
             </Button>
-            <Button Grid.Column="7" Classes="icon" Command="{Binding BackToFilesCommand}" Click="BackToFiles_Click" ToolTip.Tip="Back to files">
+            <Button Grid.Column="9" Classes="icon" Command="{Binding BackToFilesCommand}" Click="BackToFiles_Click" ToolTip.Tip="Back to files">
               <PathIcon Width="22" Height="22" Foreground="{StaticResource BrandTextBrush}"
                         Data="M20,11H7.83L13.42,5.41L12,4L4,12L12,20L13.41,18.59L7.83,13H20V11Z" />
             </Button>
@@ -297,7 +314,7 @@
             <Border Classes="panel">
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel Spacing="16">
-                <Grid ColumnDefinitions="104,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="12">
+                <Grid ColumnDefinitions="104,*" RowDefinitions="24,24,24,24,24" ColumnSpacing="14" RowSpacing="10">
                   <TextBlock Classes="label" Text="File" VerticalAlignment="Center" />
                   <TextBlock Grid.Column="1" Classes="reviewValue" Text="{Binding ReviewFile}" />
 
@@ -307,36 +324,24 @@
                   <TextBlock Grid.Row="2" Classes="label" Text="Samples" VerticalAlignment="Center" />
                   <TextBlock Grid.Row="2" Grid.Column="1" Classes="reviewValue" Text="{Binding ReviewSampleCount}" />
 
-                  <TextBlock Grid.Row="3" Classes="label" Text="Status" VerticalAlignment="Top" Margin="0,7,0,0" />
-                  <Grid Grid.Row="3" Grid.Column="1" RowDefinitions="Auto,6" RowSpacing="7">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
-                      <TextBlock Classes="reviewValue" Text="{Binding SelectedFile.RowStatus}" Foreground="{Binding SelectedFile.StatusBrush}" TextWrapping="Wrap" HorizontalAlignment="Stretch" VerticalAlignment="Center" />
-                      <Button Grid.Column="1" Classes="icon" Width="30" Height="30" Padding="6" Click="CancelSelectedDownload_Click" IsVisible="{Binding SelectedFile.IsDownloading}" ToolTip.Tip="Cancel download">
-                        <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandPrimaryBrush}"
-                                  Data="M18.3,5.71L16.89,4.29L12,9.17L7.11,4.29L5.7,5.71L10.59,10.59L5.7,15.48L7.11,16.89L12,12L16.89,16.89L18.3,15.48L13.41,10.59L18.3,5.71Z" />
-                      </Button>
-                      <Button Grid.Column="1" Classes="icon" Width="30" Height="30" Padding="6" Click="RetrySelectedDownload_Click" IsVisible="{Binding SelectedFile.IsRetryAvailable}" ToolTip.Tip="Retry download">
-                        <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandPrimaryBrush}"
-                                  Data="M17.65,6.35C16.2,4.9 14.21,4 12,4C7.58,4 4,7.58 4,12C4,16.42 7.58,20 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18C8.69,18 6,15.31 6,12C6,8.69 8.69,6 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" />
-                      </Button>
-                    </Grid>
-                    <Grid Grid.Row="1" Height="6" IsVisible="{Binding SelectedFile.IsDownloading}">
-                      <Border Background="#DFE6E9" CornerRadius="3" />
-                      <ProgressBar Minimum="0" Maximum="100" Value="{Binding SelectedFile.ProgressPercent}" Height="6" BorderThickness="0" Foreground="{StaticResource BrandPrimaryBrush}" Background="Transparent" />
-                    </Grid>
-                  </Grid>
+                  <TextBlock Grid.Row="3" Classes="label" Text="Status" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="3" Grid.Column="1" Classes="reviewValue" Text="{Binding SelectedFile.ReviewStatus}" Foreground="{Binding SelectedFile.StatusBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding SelectedFile.ReviewStatus}" />
 
                   <TextBlock Grid.Row="4" Classes="label" Text="Data Quality" VerticalAlignment="Center" />
                   <TextBlock Grid.Row="4" Grid.Column="1" Classes="reviewValue" Text="{Binding SelectedFile.DataQualityDetail}" Foreground="{Binding SelectedFile.DataQualityBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding SelectedFile.DataQualityDetail}" />
+                </Grid>
 
-                  <TextBlock Grid.Row="5" Classes="label" Text="Cursor Sample" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="5" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorSample}" />
-                  <TextBlock Grid.Row="6" Classes="label" Text="Elapsed Time" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="6" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorElapsed}" />
-                  <TextBlock Grid.Row="7" Classes="label" Text="Pressure" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="7" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorPressure}" Foreground="{StaticResource BrandPrimaryBrush}" />
-                  <TextBlock Grid.Row="8" Classes="label" Text="Temperature" VerticalAlignment="Center" />
-                  <TextBlock Grid.Row="8" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorTemperature}" Foreground="{StaticResource BrandAccentBrush}" />
+                <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
+
+                <Grid ColumnDefinitions="104,*" RowDefinitions="24,24,24,24" ColumnSpacing="14" RowSpacing="10">
+                  <TextBlock Classes="label" Text="Cursor Sample" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Classes="reviewValue" Text="{Binding CursorSample}" />
+                  <TextBlock Grid.Row="1" Classes="label" Text="Elapsed Time" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="1" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorElapsed}" />
+                  <TextBlock Grid.Row="2" Classes="label" Text="Pressure" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="2" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorPressure}" Foreground="{StaticResource BrandPrimaryBrush}" />
+                  <TextBlock Grid.Row="3" Classes="label" Text="Temperature" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="3" Grid.Column="1" Classes="reviewValue" Text="{Binding CursorTemperature}" Foreground="{StaticResource BrandAccentBrush}" />
                 </Grid>
 
                 <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
