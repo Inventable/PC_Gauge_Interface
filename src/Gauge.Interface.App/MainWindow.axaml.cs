@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using Gauge.Core;
@@ -11,6 +12,29 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+    }
+
+    private void Window_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        if (viewModel.IsSettingsOverlayVisible && viewModel.CloseSettingsOverlayCommand.CanExecute(null))
+        {
+            viewModel.CloseSettingsOverlayCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        if (viewModel.IsGraphVisible && viewModel.BackToFilesCommand.CanExecute(null))
+        {
+            GraphZoomWindowButton.IsChecked = false;
+            GaugeTrend.SetZoomWindowMode(false);
+            viewModel.BackToFilesCommand.Execute(null);
+            e.Handled = true;
+        }
     }
 
     private async void BrowseOutputDirectory_Click(object? sender, RoutedEventArgs e)
@@ -32,6 +56,30 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void SerialSettings_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel && viewModel.OpenSettingsCommand.CanExecute(null))
+        {
+            viewModel.OpenSettingsCommand.Execute(null);
+        }
+    }
+
+    private void GaugeSettings_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel && viewModel.OpenGaugeSettingsCommand.CanExecute(null))
+        {
+            viewModel.OpenGaugeSettingsCommand.Execute(null);
+        }
+    }
+
+    private void EngineeringMode_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel && viewModel.OpenEngineeringModeCommand.CanExecute(null))
+        {
+            viewModel.OpenEngineeringModeCommand.Execute(null);
+        }
+    }
+
     private async void FileAction_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel viewModel || sender is not Control control)
@@ -50,6 +98,7 @@ public sealed partial class MainWindow : Window
         {
             if (viewModel.ShowGraphCommand.CanExecute(null))
             {
+                GaugeTrend.ResetCursor();
                 viewModel.ShowGraphCommand.Execute(null);
                 GaugeTrend.Fit();
             }
@@ -73,6 +122,40 @@ public sealed partial class MainWindow : Window
         if (DataContext is MainWindowViewModel viewModel)
         {
             viewModel.SortFiles(FileListSortColumn.Size);
+        }
+    }
+
+    private void CancelFileDownload_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel &&
+            sender is Control { DataContext: GaugeFileRowViewModel file })
+        {
+            viewModel.CancelDownload(file);
+        }
+    }
+
+    private async void RetryFileDownload_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel &&
+            sender is Control { DataContext: GaugeFileRowViewModel file })
+        {
+            await viewModel.RetryDownloadAsync(file).ConfigureAwait(true);
+        }
+    }
+
+    private void CancelSelectedDownload_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel { SelectedFile: not null } viewModel)
+        {
+            viewModel.CancelDownload(viewModel.SelectedFile);
+        }
+    }
+
+    private async void RetrySelectedDownload_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel { SelectedFile: not null } viewModel)
+        {
+            await viewModel.RetryDownloadAsync(viewModel.SelectedFile).ConfigureAwait(true);
         }
     }
 
@@ -134,6 +217,14 @@ public sealed partial class MainWindow : Window
         if (sender is ToggleButton toggle)
         {
             GaugeTrend.SetZoomWindowMode(toggle.IsChecked == true);
+        }
+    }
+
+    private void GaugeTrend_CursorChanged(object? sender, ChartCursorEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.UpdateGraphCursor(e);
         }
     }
 

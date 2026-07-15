@@ -380,6 +380,10 @@ Current status:
 - Automatic downloads run from the highest file index to the lowest so the latest file becomes available first; the suggested marker affects only the operator's manual choice.
 - The file table starts in descending file-number order and supports ascending/descending sorting by file number or file size. It shows an immediate estimated duration derived from file bytes and measurement interval; `Suggested` marks the latest file whose estimate exceeds one hour.
 - A downloading file becomes graphable as soon as its first complete records are calibrated. The Review graph refreshes from incremental samples every two seconds and mirrors the file row's percentage and estimated time remaining; final completion replaces the preview with the fully parsed dataset.
+- Automatic and manual downloads can be cancelled explicitly. Cancellation pauses the automatic queue, preserves any partial graph for inspection, and exposes a clear retry action that restarts the selected file before automatic work resumes.
+- Review now provides a sample-snapped cursor with elapsed time, pressure, and temperature readout. Data quality reports file/data CRC errors and samples carrying battery warnings, using the same green/amber/red state language as the file table.
+- The header gear opens a compact menu for Serial Settings, read-only Gauge Settings, and Engineering Mode. Raw identity, transport, file-table, and calibration details remain outside the normal operator workflow.
+- Additional converted export formats are deferred until the required downstream/website format is known; legacy ASCII `.rec` remains the supported operator export.
 - A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
 
 ### Phase 6: Acoustic Gauge Support
@@ -405,17 +409,17 @@ Deliverable: field-deployable application with a path beyond serial.
 ## Immediate Next Steps
 
 1. Validate automatic downloads, live graph streaming, completion, and reconnect behaviour with a live gauge and a large file.
-2. Add explicit cancellation and retry controls for long or interrupted downloads.
-3. Add graph cursor readout and clearer record-level data-quality indications.
-4. Add converted CSV/JSON export and open-folder actions alongside the legacy ASCII `.rec` export.
-5. Add a focused settings page and keep raw protocol/device diagnostics behind a separate engineering view.
+2. Hardware-test cancellation during both automatic and operator-selected downloads, followed by retry and queue resumption.
+3. Decide which gauge settings should become editable and define the required firmware commands and operator confirmations before enabling writes.
+4. Expand Engineering Mode only as concrete diagnostic workflows are identified.
+5. Begin Windows packaging and field deployment work once the live-gauge workflow passes validation.
 
 ## TODO Reminder
 
 - Hardware-test live graph updates and progress/ETA accuracy during a large automatic download.
-- Add operator cancellation/retry without compromising serial-operation locking or partial-data cleanup.
-- Add graph cursor/data-quality tools and converted CSV/JSON export actions.
-- Move device details, raw protocol data, and future acoustic tools into settings/engineering mode.
+- Verify cancel/retry and automatic queue resumption against a connected gauge.
+- Define safe editable gauge settings before adding any device-write controls.
+- Keep additional export formats deferred until downstream requirements are confirmed.
 
 ## Open Questions
 

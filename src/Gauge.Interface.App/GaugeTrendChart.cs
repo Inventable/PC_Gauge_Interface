@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using ScottPlot.Avalonia;
 using ScottPlot.Interactivity;
 using ScottPlot.Interactivity.UserActionResponses;
@@ -14,6 +15,8 @@ public sealed class GaugeTrendChart : UserControl
     private static readonly ScottPlot.Color GridColor = ScottPlot.Color.FromHex("#E2E7EA");
     private readonly AvaPlot _plot = new();
     private bool _followData = true;
+    private ScottPlot.Plottables.VerticalLine? _cursorLine;
+    private int _cursorIndex = -1;
 
     public static readonly StyledProperty<ChartDataSet?> DataProperty =
         AvaloniaProperty.Register<GaugeTrendChart, ChartDataSet?>(nameof(Data));
@@ -23,7 +26,10 @@ public sealed class GaugeTrendChart : UserControl
         Content = _plot;
         ClipToBounds = true;
         ConfigurePlot();
+        _plot.PointerMoved += Plot_PointerMoved;
     }
+
+    public event EventHandler<ChartCursorEventArgs>? CursorChanged;
 
     public ChartDataSet? Data
     {
@@ -42,6 +48,17 @@ public sealed class GaugeTrendChart : UserControl
     {
         _followData = true;
         FitPlot();
+    }
+
+    public void ResetCursor()
+    {
+        _cursorIndex = -1;
+        if (_cursorLine is not null)
+        {
+            _plot.Plot.Remove(_cursorLine);
+            _cursorLine = null;
+            _plot.Refresh();
+        }
     }
 
     private void FitPlot()
@@ -117,10 +134,12 @@ public sealed class GaugeTrendChart : UserControl
     {
         var plot = _plot.Plot;
         plot.Clear();
+        _cursorLine = null;
         var data = Data;
 
         if (data is null || data.Count < 2)
         {
+            _cursorIndex = -1;
             _plot.Refresh();
             return;
         }
@@ -140,6 +159,16 @@ public sealed class GaugeTrendChart : UserControl
         temperature.Axes.XAxis = plot.Axes.Bottom;
         temperature.Axes.YAxis = plot.Axes.Right;
 
+        if (_cursorIndex >= data.Count)
+        {
+            _cursorIndex = data.Count - 1;
+        }
+
+        if (_cursorIndex >= 0)
+        {
+            AddCursorLine(data.ElapsedSeconds[_cursorIndex]);
+        }
+
         if (_followData)
         {
             FitPlot();
@@ -148,6 +177,74 @@ public sealed class GaugeTrendChart : UserControl
         {
             _plot.Refresh();
         }
+    }
+
+    private void Plot_PointerMoved(object? sender, PointerEventArgs e)
+    {
+        var data = Data;
+        if (IsZoomWindowMode || data is null || data.Count < 2)
+        {
+            return;
+        }
+
+        var position = e.GetPosition(_plot);
+        var coordinates = _plot.Plot.GetCoordinates(
+            (float)position.X,
+            (float)position.Y,
+            _plot.Plot.Axes.Bottom,
+            _plot.Plot.Axes.Left);
+        var index = FindNearestIndex(data.ElapsedSeconds, coordinates.X);
+        if (index == _cursorIndex)
+        {
+            return;
+        }
+
+        _cursorIndex = index;
+        if (_cursorLine is not null)
+        {
+            _plot.Plot.Remove(_cursorLine);
+        }
+
+        AddCursorLine(data.ElapsedSeconds[index]);
+        _plot.Refresh();
+        CursorChanged?.Invoke(this, new ChartCursorEventArgs(
+            index,
+            data.ElapsedSeconds[index],
+            data.Pressure[index],
+            data.Temperature[index]));
+    }
+
+    private void AddCursorLine(double elapsedSeconds)
+    {
+        _cursorLine = _plot.Plot.Add.VerticalLine(elapsedSeconds);
+        _cursorLine.Color = TextColor.WithAlpha(0.55);
+        _cursorLine.LineWidth = 1;
+        _cursorLine.LinePattern = ScottPlot.LinePattern.Dotted;
+        _cursorLine.EnableAutoscale = false;
+    }
+
+    private static int FindNearestIndex(double[] values, double target)
+    {
+        var index = Array.BinarySearch(values, target);
+        if (index >= 0)
+        {
+            return index;
+        }
+
+        var next = ~index;
+        if (next <= 0)
+        {
+            return 0;
+        }
+
+        if (next >= values.Length)
+        {
+            return values.Length - 1;
+        }
+
+        return target - values[next - 1] <= values[next] - target
+            ? next - 1
+            : next;
     }
 
     private static string FormatElapsedTime(double value)
@@ -173,3 +270,9 @@ public sealed class GaugeTrendChart : UserControl
         return $"{sign}{elapsed.TotalSeconds:F0}s";
     }
 }
+
+public sealed record ChartCursorEventArgs(
+    int SampleIndex,
+    double ElapsedSeconds,
+    double Pressure,
+    double Temperature);
