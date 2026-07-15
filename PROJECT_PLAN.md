@@ -385,6 +385,9 @@ Current status:
 - The Review side panel uses consistent label/value tables for file, quality, cursor, duration, and explicit pressure/temperature minima and maxima. Live download progress and ETA remain in the Review header so metadata rows stay evenly spaced. Data values use a bundled, licensed Cascadia Mono face for stable live readouts. Cursor inspection is an explicit graph mode that can be restored after rectangle zoom, and downloaded files can be exported directly from Review.
 - The header gear opens a compact menu for Serial Settings, read-only Gauge Settings, and Engineering Mode. Raw identity, transport, file-table, and calibration details remain outside the normal operator workflow.
 - Additional converted export formats are deferred until the required downstream/website format is known; legacy ASCII `.rec` remains the supported operator export.
+- Automatic/manual priority, cancellation, retry, partial review, ETA accuracy, graceful close, and powered-gauge reconnect have been validated on live memory-gauge hardware. See `docs/LIVE_GAUGE_VALIDATION.md`.
+- Firmware write commands have been classified by operator risk and readback requirements. Gauge Settings remains read-only until the measurement-interval contract is confirmed; destructive and service commands remain isolated from the operator workflow. See `docs/GAUGE_SETTINGS_SAFETY.md`.
+- Engineering Mode's existing read-only connection snapshot is now the first defined diagnostic procedure; future controls require similarly concrete procedures and expected results. See `docs/ENGINEERING_DIAGNOSTICS.md`.
 - A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
 
 ### Phase 6: Acoustic Gauge Support
@@ -407,20 +410,24 @@ Deliverable: practical acoustic engineering tools.
 
 Deliverable: field-deployable application with a path beyond serial.
 
+Current status:
+
+- A repeatable `win-x64` self-contained publish script and zipped engineering distribution are available. The packaged executable has connected to live gauge hardware without the development runtime; clean-machine verification, code signing, installer selection, and update policy remain outstanding.
+
 ## Immediate Next Steps
 
-1. Validate automatic downloads, live graph streaming, completion, and reconnect behaviour with a live gauge and a large file.
-2. Hardware-test cancellation during both automatic and operator-selected downloads, followed by retry and queue resumption.
-3. Decide which gauge settings should become editable and define the required firmware commands and operator confirmations before enabling writes.
-4. Expand Engineering Mode only as concrete diagnostic workflows are identified.
-5. Begin Windows packaging and field deployment work once the live-gauge workflow passes validation.
+1. Physically unplug/reconnect a gauge while the app is running, then repeat live validation with a representative multi-day file.
+2. Confirm measurement-interval units, limits, file-boundary behaviour, and verified readback before making it editable.
+3. Add an exportable support bundle around the connection snapshot once the required communication-error fields are defined.
+4. Verify the self-contained package on a clean Windows field laptop and decide code-signing and installer requirements.
+5. Keep additional export formats deferred until the website/downstream contract is known.
 
 ## TODO Reminder
 
-- Hardware-test live graph updates and progress/ETA accuracy during a large automatic download.
-- Verify cancel/retry and automatic queue resumption against a connected gauge.
-- Define safe editable gauge settings before adding any device-write controls.
-- Keep additional export formats deferred until downstream requirements are confirmed.
+- Test physical disconnect/reconnect and a representative multi-day job.
+- Confirm the measurement-interval setting contract before enabling writes.
+- Test the self-contained archive on a clean field laptop.
+- Define the bounded communication-error fields needed by an Engineering support bundle.
 
 ## Open Questions
 

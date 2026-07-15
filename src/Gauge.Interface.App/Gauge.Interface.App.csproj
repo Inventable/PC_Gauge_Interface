@@ -1,7 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <ApplicationIcon>Assets\northstar-app.ico</ApplicationIcon>
     <UsedAvaloniaProducts></UsedAvaloniaProducts>
+    <Product>Northstar Gauge Interface</Product>
+    <Title>Northstar Gauge Interface</Title>
+    <AssemblyTitle>Northstar Gauge Interface</AssemblyTitle>
+    <Company>Northstar Downhole Specialists</Company>
+    <Description>Operator interface for Northstar memory and acoustic gauges.</Description>
+    <Copyright>Copyright Northstar Downhole Specialists</Copyright>
   </PropertyGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
