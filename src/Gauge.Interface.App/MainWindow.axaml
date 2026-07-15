@@ -252,101 +252,99 @@
         </Grid>
 
         <Grid IsVisible="{Binding IsGraphVisible}" RowDefinitions="Auto,*" RowSpacing="10">
-          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
             <TextBlock Text="Review" FontSize="26" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" VerticalAlignment="Center" />
-            <ToggleButton x:Name="GraphZoomWindowButton" Grid.Column="1" Classes="chartTool" Click="GraphZoomWindow_Click" ToolTip.Tip="Zoom window">
+            <ToggleButton x:Name="GraphCursorButton" Grid.Column="1" Classes="chartTool" IsChecked="True" Click="GraphCursor_Click" ToolTip.Tip="Inspect data">
+              <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
+                        Data="M13,1H11V4.07C7.39,4.52 4.52,7.39 4.07,11H1V13H4.07C4.52,16.61 7.39,19.48 11,19.93V23H13V19.93C16.61,19.48 19.48,16.61 19.93,13H23V11H19.93C19.48,7.39 16.61,4.52 13,4.07V1M12,6C15.31,6 18,8.69 18,12C18,15.31 15.31,18 12,18C8.69,18 6,15.31 6,12C6,8.69 8.69,6 12,6M12,9C10.34,9 9,10.34 9,12C9,13.66 10.34,15 12,15C13.66,15 15,13.66 15,12C15,10.34 13.66,9 12,9Z" />
+            </ToggleButton>
+            <ToggleButton x:Name="GraphZoomWindowButton" Grid.Column="2" Classes="chartTool" Click="GraphZoomWindow_Click" ToolTip.Tip="Zoom window">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M7,3H5C3.9,3 3,3.9 3,5V7H5V5H7V3M19,7V5C19,3.9 18.1,3 17,3H15V5H17V7H19M17,19H15V21H17C18.1,21 19,20.1 19,19V17H17V19M5,17H3V19C3,20.1 3.9,21 5,21H7V19H5V17M8,8V16H16V8H8Z" />
             </ToggleButton>
-            <Button Grid.Column="2" Classes="icon" Click="GraphZoomIn_Click" ToolTip.Tip="Zoom in">
+            <Button Grid.Column="3" Classes="icon" Click="GraphZoomIn_Click" ToolTip.Tip="Zoom in">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M9,3A6,6 0 0,1 15,9C15,10.61 14.37,12.09 13.34,13.19L13.71,13.56H14.79L20,18.77L18.77,20L13.56,14.79V13.71L13.19,13.34C12.09,14.37 10.61,15 9,15A6,6 0 1,1 9,3M8,6V8H6V10H8V12H10V10H12V8H10V6H8Z" />
             </Button>
-            <Button Grid.Column="3" Classes="icon" Click="GraphZoomOut_Click" ToolTip.Tip="Zoom out">
+            <Button Grid.Column="4" Classes="icon" Click="GraphZoomOut_Click" ToolTip.Tip="Zoom out">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M9,3A6,6 0 0,1 15,9C15,10.61 14.37,12.09 13.34,13.19L13.71,13.56H14.79L20,18.77L18.77,20L13.56,14.79V13.71L13.19,13.34C12.09,14.37 10.61,15 9,15A6,6 0 1,1 9,3M6,8V10H12V8H6Z" />
             </Button>
-            <Button Grid.Column="4" Classes="icon" Click="GraphFit_Click" ToolTip.Tip="Fit all data">
+            <Button Grid.Column="5" Classes="icon" Click="GraphFit_Click" ToolTip.Tip="Fit all data">
               <PathIcon Width="21" Height="21" Foreground="{StaticResource BrandTextBrush}"
                         Data="M5,5H10V7H7V10H5V5M14,5H19V10H17V7H14V5M17,14H19V19H14V17H17V14M10,17V19H5V14H7V17H10Z" />
             </Button>
-            <Button Grid.Column="5" Classes="icon" Command="{Binding BackToFilesCommand}" Click="BackToFiles_Click" ToolTip.Tip="Back to files">
+            <Button Grid.Column="6" Classes="icon" Click="SaveSelectedRecord_Click" IsVisible="{Binding SelectedFile.IsDownloaded}" ToolTip.Tip="Save record file">
+              <Svg Path="/Assets/ico-case.svg" Width="30" Height="26" Stretch="Uniform" />
+            </Button>
+            <Button Grid.Column="7" Classes="icon" Command="{Binding BackToFilesCommand}" Click="BackToFiles_Click" ToolTip.Tip="Back to files">
               <PathIcon Width="22" Height="22" Foreground="{StaticResource BrandTextBrush}"
                         Data="M20,11H7.83L13.42,5.41L12,4L4,12L12,20L13.41,18.59L7.83,13H20V11Z" />
             </Button>
           </Grid>
-          <Grid Grid.Row="1" ColumnDefinitions="250,*" ColumnSpacing="14">
+          <Grid Grid.Row="1" ColumnDefinitions="290,*" ColumnSpacing="14">
             <Border Grid.Column="1" Classes="panel" Padding="8" ClipToBounds="True">
               <local:GaugeTrendChart x:Name="GaugeTrend" Data="{Binding ChartData}" CursorChanged="GaugeTrend_CursorChanged" />
             </Border>
             <Border Classes="panel">
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-              <StackPanel Spacing="12">
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
-                  <StackPanel Spacing="3">
-                    <TextBlock Classes="label" Text="File" />
-                    <TextBlock Text="{Binding ReviewFile}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+              <StackPanel Spacing="16">
+                <Grid ColumnDefinitions="104,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="12">
+                  <TextBlock Classes="label" Text="File" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Binding ReviewFile}" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" TextAlignment="Right" />
+
+                  <TextBlock Grid.Row="1" Classes="label" Text="Samples" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ReviewSampleCount}" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" TextAlignment="Right" />
+
+                  <TextBlock Grid.Row="2" Classes="label" Text="Status" VerticalAlignment="Top" Margin="0,7,0,0" />
+                  <Grid Grid.Row="2" Grid.Column="1" RowDefinitions="Auto,6" RowSpacing="7">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                      <TextBlock Text="{Binding SelectedFile.RowStatus}" Foreground="{Binding SelectedFile.StatusBrush}" TextWrapping="Wrap" HorizontalAlignment="Right" TextAlignment="Right" VerticalAlignment="Center" />
+                      <Button Grid.Column="1" Classes="icon" Width="30" Height="30" Padding="6" Click="CancelSelectedDownload_Click" IsVisible="{Binding SelectedFile.IsDownloading}" ToolTip.Tip="Cancel download">
+                        <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandPrimaryBrush}"
+                                  Data="M18.3,5.71L16.89,4.29L12,9.17L7.11,4.29L5.7,5.71L10.59,10.59L5.7,15.48L7.11,16.89L12,12L16.89,16.89L18.3,15.48L13.41,10.59L18.3,5.71Z" />
+                      </Button>
+                      <Button Grid.Column="1" Classes="icon" Width="30" Height="30" Padding="6" Click="RetrySelectedDownload_Click" IsVisible="{Binding SelectedFile.IsRetryAvailable}" ToolTip.Tip="Retry download">
+                        <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandPrimaryBrush}"
+                                  Data="M17.65,6.35C16.2,4.9 14.21,4 12,4C7.58,4 4,7.58 4,12C4,16.42 7.58,20 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18C8.69,18 6,15.31 6,12C6,8.69 8.69,6 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" />
+                      </Button>
+                    </Grid>
+                    <Grid Grid.Row="1" Height="6" IsVisible="{Binding SelectedFile.IsDownloading}">
+                      <Border Background="#DFE6E9" CornerRadius="3" />
+                      <ProgressBar Minimum="0" Maximum="100" Value="{Binding SelectedFile.ProgressPercent}" Height="6" BorderThickness="0" Foreground="{StaticResource BrandPrimaryBrush}" Background="Transparent" />
+                    </Grid>
+                  </Grid>
+
+                  <TextBlock Grid.Row="3" Classes="label" Text="Data Quality" VerticalAlignment="Top" />
+                  <StackPanel Grid.Row="3" Grid.Column="1" Spacing="3" HorizontalAlignment="Right">
+                    <TextBlock Text="{Binding SelectedFile.DataQualityStatus}" Foreground="{Binding SelectedFile.DataQualityBrush}" FontWeight="SemiBold" TextAlignment="Right" HorizontalAlignment="Right" />
+                    <TextBlock Text="{Binding SelectedFile.DataQualityDetail}" Foreground="{StaticResource BrandMutedBrush}" FontSize="12" TextWrapping="Wrap" TextAlignment="Right" HorizontalAlignment="Right" MaxWidth="150" />
                   </StackPanel>
-                  <StackPanel Grid.Column="1" Spacing="3">
-                    <TextBlock Classes="label" Text="Samples" />
-                    <TextBlock Text="{Binding ReviewSampleCount}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
-                  </StackPanel>
+
+                  <TextBlock Grid.Row="4" Classes="label" Text="Cursor Sample" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding CursorSample}" Foreground="{StaticResource BrandTextBrush}" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Row="5" Classes="label" Text="Elapsed Time" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding CursorElapsed}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Row="6" Classes="label" Text="Pressure" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding CursorPressure}" Foreground="{StaticResource BrandPrimaryBrush}" FontWeight="SemiBold" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Row="7" Classes="label" Text="Temperature" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding CursorTemperature}" Foreground="{StaticResource BrandAccentBrush}" FontWeight="SemiBold" HorizontalAlignment="Right" />
                 </Grid>
-                <StackPanel Spacing="7">
-                  <TextBlock Classes="label" Text="Status" />
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <TextBlock Text="{Binding SelectedFile.RowStatus}" Foreground="{Binding SelectedFile.StatusBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                    <Button Grid.Column="1" Classes="icon" Width="34" Height="34" Padding="7" Click="CancelSelectedDownload_Click" IsVisible="{Binding SelectedFile.IsDownloading}" ToolTip.Tip="Cancel download">
-                      <PathIcon Width="19" Height="19" Foreground="{StaticResource BrandPrimaryBrush}"
-                                Data="M18.3,5.71L16.89,4.29L12,9.17L7.11,4.29L5.7,5.71L10.59,10.59L5.7,15.48L7.11,16.89L12,12L16.89,16.89L18.3,15.48L13.41,10.59L18.3,5.71Z" />
-                    </Button>
-                    <Button Grid.Column="1" Classes="icon" Width="34" Height="34" Padding="7" Click="RetrySelectedDownload_Click" IsVisible="{Binding SelectedFile.IsRetryAvailable}" ToolTip.Tip="Retry download">
-                      <PathIcon Width="19" Height="19" Foreground="{StaticResource BrandPrimaryBrush}"
-                                Data="M17.65,6.35C16.2,4.9 14.21,4 12,4C7.58,4 4,7.58 4,12C4,16.42 7.58,20 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18C8.69,18 6,15.31 6,12C6,8.69 8.69,6 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" />
-                    </Button>
-                  </Grid>
-                  <Grid Height="7" IsVisible="{Binding SelectedFile.IsDownloading}">
-                    <Border Background="#DFE6E9" CornerRadius="3.5" />
-                    <ProgressBar Minimum="0" Maximum="100" Value="{Binding SelectedFile.ProgressPercent}" Height="7" BorderThickness="0" Foreground="{StaticResource BrandPrimaryBrush}" Background="Transparent" />
-                  </Grid>
-                </StackPanel>
-                <StackPanel Spacing="4">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                    <TextBlock Classes="label" Text="Data Quality" />
-                    <TextBlock Grid.Column="1" Text="{Binding SelectedFile.DataQualityStatus}" Foreground="{Binding SelectedFile.DataQualityBrush}" FontWeight="SemiBold" />
-                  </Grid>
-                  <TextBlock Text="{Binding SelectedFile.DataQualityDetail}" Foreground="{StaticResource BrandMutedBrush}" FontSize="12" TextWrapping="Wrap" />
-                </StackPanel>
-                <StackPanel Spacing="4">
-                  <TextBlock Classes="label" Text="Cursor" />
-                  <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="3">
-                    <TextBlock Text="{Binding CursorSample}" Foreground="{StaticResource BrandTextBrush}" FontWeight="SemiBold" />
-                    <TextBlock Grid.Column="1" Text="{Binding CursorElapsed}" Foreground="{StaticResource BrandMutedBrush}" />
-                    <TextBlock Grid.Row="1" Text="{Binding CursorPressure}" Foreground="{StaticResource BrandPrimaryBrush}" />
-                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding CursorTemperature}" Foreground="{StaticResource BrandAccentBrush}" />
-                  </Grid>
-                </StackPanel>
+
                 <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
-                <StackPanel Spacing="4">
-                  <TextBlock Classes="label" Text="Duration" />
-                  <TextBlock Text="{Binding JobDuration}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
-                </StackPanel>
-                <StackPanel Spacing="4">
-                  <TextBlock Classes="label" Text="Pressure Range" />
-                  <TextBlock Text="{Binding PressureRange}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
-                </StackPanel>
-                <StackPanel Spacing="4">
-                  <TextBlock Classes="label" Text="Temperature Range" />
-                  <TextBlock Text="{Binding TemperatureRange}" FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
-                </StackPanel>
-                <StackPanel Spacing="4">
-                  <TextBlock Classes="label" Text="Latest Pressure" />
-                  <TextBlock Text="{Binding LatestPressure}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
-                </StackPanel>
-                <StackPanel Spacing="4">
-                  <TextBlock Classes="label" Text="Latest Temperature" />
-                  <TextBlock Text="{Binding LatestTemperature}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
-                </StackPanel>
+
+                <Grid ColumnDefinitions="104,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="14" RowSpacing="12">
+                  <TextBlock Classes="label" Text="Duration" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Binding JobDuration}" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Row="1" Classes="label" Text="Pressure Min" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding PressureMinimum}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Row="2" Classes="label" Text="Pressure Max" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding PressureMaximum}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Row="3" Classes="label" Text="Temperature Min" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding TemperatureMinimum}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Row="4" Classes="label" Text="Temperature Max" VerticalAlignment="Center" />
+                  <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding TemperatureMaximum}" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Right" />
+                </Grid>
               </StackPanel>
               </ScrollViewer>
             </Border>

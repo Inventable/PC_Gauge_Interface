@@ -30,8 +30,7 @@ public sealed partial class MainWindow : Window
 
         if (viewModel.IsGraphVisible && viewModel.BackToFilesCommand.CanExecute(null))
         {
-            GraphZoomWindowButton.IsChecked = false;
-            GaugeTrend.SetZoomWindowMode(false);
+            ActivateCursorMode();
             viewModel.BackToFilesCommand.Execute(null);
             e.Handled = true;
         }
@@ -98,6 +97,7 @@ public sealed partial class MainWindow : Window
         {
             if (viewModel.ShowGraphCommand.CanExecute(null))
             {
+                ActivateCursorMode();
                 GaugeTrend.ResetCursor();
                 viewModel.ShowGraphCommand.Execute(null);
                 GaugeTrend.Fit();
@@ -162,8 +162,25 @@ public sealed partial class MainWindow : Window
     private async void SaveRecord_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel viewModel ||
-            sender is not Control { DataContext: GaugeFileRowViewModel file } ||
-            file.Samples is not { Count: > 0 } samples)
+            sender is not Control { DataContext: GaugeFileRowViewModel file })
+        {
+            return;
+        }
+
+        await SaveRecordAsync(viewModel, file);
+    }
+
+    private async void SaveSelectedRecord_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel { SelectedFile: not null } viewModel)
+        {
+            await SaveRecordAsync(viewModel, viewModel.SelectedFile);
+        }
+    }
+
+    private async Task SaveRecordAsync(MainWindowViewModel viewModel, GaugeFileRowViewModel file)
+    {
+        if (file.Samples is not { Count: > 0 } samples)
         {
             return;
         }
@@ -216,8 +233,21 @@ public sealed partial class MainWindow : Window
     {
         if (sender is ToggleButton toggle)
         {
-            GaugeTrend.SetZoomWindowMode(toggle.IsChecked == true);
+            if (toggle.IsChecked == true)
+            {
+                GraphCursorButton.IsChecked = false;
+                GaugeTrend.SetZoomWindowMode(true);
+            }
+            else
+            {
+                ActivateCursorMode();
+            }
         }
+    }
+
+    private void GraphCursor_Click(object? sender, RoutedEventArgs e)
+    {
+        ActivateCursorMode();
     }
 
     private void GaugeTrend_CursorChanged(object? sender, ChartCursorEventArgs e)
@@ -230,21 +260,30 @@ public sealed partial class MainWindow : Window
 
     private void GraphZoomIn_Click(object? sender, RoutedEventArgs e)
     {
+        ActivateCursorMode();
         GaugeTrend.ZoomIn();
     }
 
     private void GraphZoomOut_Click(object? sender, RoutedEventArgs e)
     {
+        ActivateCursorMode();
         GaugeTrend.ZoomOut();
     }
 
     private void GraphFit_Click(object? sender, RoutedEventArgs e)
     {
+        ActivateCursorMode();
         GaugeTrend.Fit();
     }
 
     private void BackToFiles_Click(object? sender, RoutedEventArgs e)
     {
+        ActivateCursorMode();
+    }
+
+    private void ActivateCursorMode()
+    {
+        GraphCursorButton.IsChecked = true;
         GraphZoomWindowButton.IsChecked = false;
         GaugeTrend.SetZoomWindowMode(false);
     }

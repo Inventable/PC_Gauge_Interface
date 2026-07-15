@@ -50,8 +50,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _jobName = "Gauge Job";
     private string _status = "Select serial port";
     private string _connectionStatus = "Setup";
-    private string _latestTemperature = "--";
-    private string _latestPressure = "--";
     private string _deviceSummary = "No gauge connected";
     private string _deviceDetails = string.Empty;
     private string _fileSummary = "No file table loaded";
@@ -61,8 +59,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _cursorElapsed = "--";
     private string _cursorPressure = "--";
     private string _cursorTemperature = "--";
-    private string _pressureRange = "--";
-    private string _temperatureRange = "--";
+    private string _pressureMinimum = "--";
+    private string _pressureMaximum = "--";
+    private string _temperatureMinimum = "--";
+    private string _temperatureMaximum = "--";
     private string _jobDuration = "--";
     private string _downloadProgressText = "";
     private ChartDataSet _chartData = ChartDataSet.Empty;
@@ -215,18 +215,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         set => SetField(ref _connectionBrush, value);
     }
 
-    public string LatestTemperature
-    {
-        get => _latestTemperature;
-        set => SetField(ref _latestTemperature, value);
-    }
-
-    public string LatestPressure
-    {
-        get => _latestPressure;
-        set => SetField(ref _latestPressure, value);
-    }
-
     public string DeviceSummary
     {
         get => _deviceSummary;
@@ -293,16 +281,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         private set => SetField(ref _chartData, value);
     }
 
-    public string PressureRange
+    public string PressureMinimum
     {
-        get => _pressureRange;
-        set => SetField(ref _pressureRange, value);
+        get => _pressureMinimum;
+        private set => SetField(ref _pressureMinimum, value);
     }
 
-    public string TemperatureRange
+    public string PressureMaximum
     {
-        get => _temperatureRange;
-        set => SetField(ref _temperatureRange, value);
+        get => _pressureMaximum;
+        private set => SetField(ref _pressureMaximum, value);
+    }
+
+    public string TemperatureMinimum
+    {
+        get => _temperatureMinimum;
+        private set => SetField(ref _temperatureMinimum, value);
+    }
+
+    public string TemperatureMaximum
+    {
+        get => _temperatureMaximum;
+        private set => SetField(ref _temperatureMaximum, value);
     }
 
     public string JobDuration
@@ -623,7 +623,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public void UpdateGraphCursor(ChartCursorEventArgs cursor)
     {
-        CursorSample = $"Sample {cursor.SampleIndex:N0}";
+        CursorSample = cursor.SampleIndex.ToString("N0");
         CursorElapsed = FormatElapsedTime(cursor.ElapsedSeconds);
         CursorPressure = $"{cursor.Pressure:F2} psi";
         CursorTemperature = $"{cursor.Temperature:F2} C";
@@ -668,8 +668,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         SelectedFile = null;
         _calibration = null;
         _connectedDevice = null;
-        LatestTemperature = "--";
-        LatestPressure = "--";
         ResetReview();
 
         try
@@ -1263,9 +1261,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         ChartData = ChartDataSet.FromSamples(samples);
 
-        var latest = samples[^1];
-        LatestTemperature = $"{latest.Temperature:F2} C";
-        LatestPressure = $"{latest.Pressure:F2} psi";
         UpdateReview(file, samples);
     }
 
@@ -1399,8 +1394,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         ReviewFile = "--";
         ReviewSampleCount = "--";
         ResetCursorReadout();
-        PressureRange = "--";
-        TemperatureRange = "--";
+        PressureMinimum = "--";
+        PressureMaximum = "--";
+        TemperatureMinimum = "--";
+        TemperatureMaximum = "--";
         JobDuration = "--";
     }
 
@@ -1423,8 +1420,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         ReviewFile = $"File {file.Index}";
         ReviewSampleCount = samples.Count.ToString("N0");
-        PressureRange = $"{pressureMin:F2} to {pressureMax:F2} psi";
-        TemperatureRange = $"{temperatureMin:F2} to {temperatureMax:F2} C";
+        PressureMinimum = $"{pressureMin:F2} psi";
+        PressureMaximum = $"{pressureMax:F2} psi";
+        TemperatureMinimum = $"{temperatureMin:F2} C";
+        TemperatureMaximum = $"{temperatureMax:F2} C";
         JobDuration = duration.TotalHours >= 1
             ? $"{duration.TotalHours:F1} h"
             : $"{duration.TotalMinutes:F1} min";
