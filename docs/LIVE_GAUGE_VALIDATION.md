@@ -26,6 +26,7 @@ Date: 15 July 2026
 - Closing the app during an automatic download released COM5 in under one second.
 - Restarting connected to the powered gauge in under one second and displayed the file table in about 1.5 seconds.
 - The self-contained `win-x64` packaged executable launched without `dotnet`, connected to COM5, and displayed the file table in 0.8 seconds.
+- Bootloader `1.3` programmed the validated Offset production firmware image at `115200` baud in approximately 62 seconds. All 992 application rows were erased and verified, 317 populated rows were programmed and verified in descending order, and `0x0800` was committed last. Firmware `2.0`, file-table access, calibration access, and P&T memory reads were confirmed after reset. See `docs/BOOTLOADER.md`.
 
 ## Remaining Hardware Checks
 

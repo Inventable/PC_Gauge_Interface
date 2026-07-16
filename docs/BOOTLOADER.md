@@ -85,14 +85,27 @@ The loader reported:
 
 At `460800`, version discovery succeeded but the reset acknowledgement timed out. The reset command is intentionally never repeated blindly. The CLI now immediately checks for the application after reset even when its acknowledgement is missing. Until flash programming and interruption recovery have been characterized at higher rates, use the fully validated `115200` rate.
 
+### First Live Firmware Update
+
+On 16 July 2026, memory gauge `3807522001` was successfully programmed through bootloader `1.3` at `115200` baud using `PIC_Memory_Gauge/dist/Offset/production/Memory_Gauge.X.production.hex`.
+
+The normalized application image SHA-256 was `A055A8574D5E174A28CA97BD2D279BCA819166D1DD6C426D6EE598091DA85D62`. The updater erased and verified all 992 application rows, programmed and verified 317 populated rows in descending order, performed the second non-start verification pass, and committed row `0x0800` last. Total command runtime was approximately 62 seconds.
+
+After loader reset, the application returned as firmware `2.0` with the same device, PCB, measurement interval, memory mode, and erase-state identity. Follow-up checks passed:
+
+- Application communication at `460800` baud.
+- Twelve logical memory files with valid file-table CRCs and EOF `0x000A5800`.
+- Sensor initialization and calibration header read for sensor ID `1777`.
+- A 64-byte P&T memory read from the latest file at `0x000A1D60`.
+
+This proves normal update and application recovery. Deliberate interruption/recovery testing remains required before exposing firmware update in the desktop UI.
+
 ## Programming Work Still Required
 
 The engineering CLI now implements Intel HEX validation, complete application erase, descending row programming, readback-resolved communication failures, a second non-start verification pass, start-row commit last, and loader-only recovery. The parser refuses StandAlone, Combined, and unified build paths and never sends recognized PIC ID/configuration metadata to flash commands.
 
 Before firmware writing is exposed in the desktop application:
 
-1. Perform the first controlled live write using the inspected Memory Gauge Offset production image.
-2. Confirm application identity, firmware `2.0`, memory table, calibration capture, and data download after update.
-3. Test interruption during erase, middle-write, pre-vector, and start-vector stages with a hardware programmer available.
-4. Package each approved HEX with a signed release manifest containing device type, displayed firmware version, image SHA-256, build configuration, and release notes.
-5. Add the proven workflow to Engineering Mode with explicit device and image confirmation.
+1. Test interruption during erase, middle-write, pre-vector, and start-vector stages with a hardware programmer available.
+2. Package each approved HEX with a signed release manifest containing device type, displayed firmware version, image SHA-256, build configuration, and release notes.
+3. Add the proven workflow to Engineering Mode with explicit device and image confirmation.

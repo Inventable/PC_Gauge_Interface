@@ -424,7 +424,7 @@ Current status:
 
 ## Immediate Next Steps
 
-1. Run the first controlled live update using the validated Memory Gauge Offset production HEX, confirm firmware `2.0` and normal gauge operation, then run staged interruption/recovery tests. The recovery-first CLI updater is implemented at `115200`. See `docs/BOOTLOADER.md`.
+1. Run staged bootloader interruption/recovery tests with hardware-programmer fallback, then package approved firmware with signed manifests. The first complete live update and application recovery passed at `115200`. See `docs/BOOTLOADER.md`.
 2. Define the firmware changes needed for safe editable measurement intervals: sensor-specific limits, clean file boundary, immediate application, and failure recovery.
 3. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
 4. Verify the self-contained package on a clean Windows field laptop, confirm corporate/FTDI prerequisites, and start Northstar code-signing procurement before routine field distribution.
@@ -432,7 +432,7 @@ Current status:
 
 ## TODO Reminder
 
-- Live-test the reverse-order CLI updater and its loader-only recovery path, then package approved images with signed manifests.
+- Interruption-test the loader-only recovery path, then package approved images with signed manifests.
 - Test physical disconnect/reconnect with both gauge types.
 - Define and implement the firmware side of safe measurement-interval changes before enabling writes.
 - Test the self-contained archive on a clean field laptop.
