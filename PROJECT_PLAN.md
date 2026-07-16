@@ -419,12 +419,13 @@ Deliverable: field-deployable application with a path beyond serial.
 Current status:
 
 - A repeatable `win-x64` self-contained publish script and zipped engineering distribution are available. The packaged executable has connected to live gauge hardware without the development runtime; clean-machine verification, code signing, installer selection, and update policy remain outstanding.
+- The latest archive was rebuilt after support diagnostics were added and its packaged executable connected to the live acoustic gauge on COM5. Workshop pilots should continue with versioned self-contained ZIPs; routine field release should use Northstar signing, with a managed per-machine MSI deferred until field-image requirements are confirmed. Automatic updates remain deferred until offline and rollback ownership is defined.
 
 ## Immediate Next Steps
 
 1. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
 2. Define the firmware changes needed for safe editable measurement intervals: sensor-specific limits, clean file boundary, immediate application, and failure recovery.
-3. Verify the self-contained package on a clean Windows field laptop and decide code-signing and installer requirements.
+3. Verify the self-contained package on a clean Windows field laptop, confirm corporate/FTDI prerequisites, and start Northstar code-signing procurement before routine field distribution.
 4. Keep additional export formats deferred until the website/downstream contract is known.
 
 ## TODO Reminder
