@@ -38,4 +38,4 @@ Code-signing procurement and installer/update implementation remain deployment t
 
 ## Latest Local Preflight
 
-On 16 July 2026 the current `win-x64` archive was rebuilt with 240 entries (49,273,925 bytes). Its executable was launched directly from the publish folder, without `dotnet`, and connected to the live acoustic gauge on COM5 as device 1 running firmware 20.1. The file table loaded with interval and duration columns. This confirms the current release payload locally; it does not replace the clean-machine checklist above.
+On 16 July 2026 the current `win-x64` archive was rebuilt with 240 entries (49,273,925 bytes). Its executable was launched directly from the publish folder, without `dotnet`, and connected to the live acoustic gauge on COM5 as device 1 running firmware 1.20. The file table loaded with interval and duration columns. This confirms the current release payload locally; it does not replace the clean-machine checklist above.

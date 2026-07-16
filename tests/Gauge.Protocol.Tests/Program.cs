@@ -16,6 +16,9 @@ var tests = new (string Name, Action Run)[]
     ("Bootloader read-version request matches firmware frame", BootloaderReadVersionRequestMatchesFirmwareFrame),
     ("Bootloader write request carries keys and 24-bit address", BootloaderWriteRequestCarriesKeysAndAddress),
     ("Bootloader version response decodes", BootloaderVersionResponseDecodes),
+    ("Intel HEX validates checksums and extended addresses", IntelHexValidatesChecksumsAndExtendedAddresses),
+    ("Bootloader image rejects application data below offset", BootloaderImageRejectsDataBelowOffset),
+    ("Firmware updater erases start first and writes it last", FirmwareUpdaterErasesStartFirstAndWritesItLast),
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
     ("Memory gauge file table ignores continuation records", MemoryGaugeFileTableIgnoresContinuationRecords),
@@ -164,6 +167,87 @@ static void BootloaderVersionResponseDecodes()
     AssertSequenceEqual(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD }, version.ConfigurationBytes);
 }
 
+static void IntelHexValidatesChecksumsAndExtendedAddresses()
+{
+    var lines = new[]
+    {
+        BuildHexRecord(0x0800, 0x00, [0x54, 0xEF, 0x04, 0xF0]),
+        BuildHexRecord(0x0840, 0x00, [0x12, 0x34]),
+        BuildHexRecord(0x0000, 0x04, [0x00, 0x30]),
+        BuildHexRecord(0x0000, 0x00, [0x18, 0x82, 0x79, 0x36]),
+        BuildHexRecord(0x0000, 0x01, [])
+    };
+
+    var hex = IntelHexImage.Parse(lines);
+    var image = BootloaderApplicationImage.Create("Memory_Gauge.X.production.hex", hex);
+
+    AssertEqual((byte)0x54, hex.Bytes[0x0800]);
+    AssertEqual((byte)0x18, hex.Bytes[0x300000]);
+    AssertEqual(6, image.ExplicitProgramBytes);
+    AssertEqual(4, image.MetadataBytes);
+    AssertEqual(2, image.Rows.Count);
+    AssertEqual((uint)0x0800, image.StartRow.Address);
+
+    var badChecksum = lines[0][..^2] + "00";
+    try
+    {
+        _ = IntelHexImage.Parse([badChecksum, BuildHexRecord(0, 1, [])]);
+    }
+    catch (FormatException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException("Expected Intel HEX checksum failure.");
+}
+
+static void BootloaderImageRejectsDataBelowOffset()
+{
+    var hex = IntelHexImage.Parse(
+    [
+        BuildHexRecord(0x0000, 0x00, [0x01]),
+        BuildHexRecord(0x0000, 0x01, [])
+    ]);
+
+    try
+    {
+        _ = BootloaderApplicationImage.Create("standalone.hex", hex);
+    }
+    catch (InvalidDataException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException("Expected bootloader-address data to be rejected.");
+}
+
+static void FirmwareUpdaterErasesStartFirstAndWritesItLast()
+{
+    var hex = IntelHexImage.Parse(
+    [
+        BuildHexRecord(0x0800, 0x00, [0x54, 0xEF, 0x04, 0xF0]),
+        BuildHexRecord(0x0840, 0x00, [0x11, 0x22]),
+        BuildHexRecord(0x0900, 0x00, [0x33, 0x44]),
+        BuildHexRecord(0x0000, 0x01, [])
+    ]);
+    var image = BootloaderApplicationImage.Create("offset.hex", hex);
+    var bootloader = new FakeBootloaderClient { LoseFirstWriteAcknowledgement = true };
+    var version = new BootloaderVersion(1, 3, 256, 0x6126, 64, 64, []);
+    var updater = new GaugeFirmwareUpdater(bootloader, version);
+
+    var result = updater.ProgramAsync(image).GetAwaiter().GetResult();
+
+    AssertEqual("E:000800", bootloader.Mutations[0]);
+    AssertEqual("W:000800", bootloader.Mutations[^1]);
+    AssertEqual("000900,000840,000800", string.Join(',', bootloader.WrittenAddresses.Select(value => value.ToString("X6"))));
+    AssertEqual(992, result.ErasedRows);
+    AssertEqual(3, result.ProgrammedRows);
+    if (bootloader.Mutations.Any(value => ParseMutationAddress(value) < BootloaderApplicationImage.ApplicationStart))
+    {
+        throw new InvalidOperationException("Updater touched the resident bootloader address range.");
+    }
+}
+
 static void MemoryGaugeIdentifyPayloadDecodes()
 {
     var payload = new byte[22];
@@ -180,8 +264,8 @@ static void MemoryGaugeIdentifyPayloadDecodes()
 
     var device = DeviceData.DecodeMemoryGauge(payload);
 
-    AssertEqual((byte)20, device.FirmwareMinor);
-    AssertEqual((byte)1, device.FirmwareMajor);
+    AssertEqual((byte)20, device.FirmwareMajor);
+    AssertEqual((byte)1, device.FirmwareMinor);
     AssertEqual((uint)100200, device.DeviceType);
     AssertEqual((uint)1, device.DeviceSerial);
     AssertEqual((uint)100198, device.PcbType);
@@ -605,6 +689,35 @@ static void WriteUInt32LittleEndian(Span<byte> target, uint value)
     target[3] = (byte)(value >> 24);
 }
 
+static string BuildHexRecord(ushort address, byte recordType, ReadOnlySpan<byte> data)
+{
+    if (data.Length > byte.MaxValue)
+    {
+        throw new ArgumentOutOfRangeException(nameof(data));
+    }
+
+    var record = new byte[data.Length + 5];
+    record[0] = (byte)data.Length;
+    record[1] = (byte)(address >> 8);
+    record[2] = (byte)address;
+    record[3] = recordType;
+    data.CopyTo(record.AsSpan(4));
+
+    var sum = 0;
+    for (var index = 0; index < record.Length - 1; index++)
+    {
+        sum = (sum + record[index]) & 0xFF;
+    }
+
+    record[^1] = (byte)(-sum & 0xFF);
+    return $":{Convert.ToHexString(record)}";
+}
+
+static uint ParseMutationAddress(string mutation)
+{
+    return Convert.ToUInt32(mutation[2..], 16);
+}
+
 static void AssertEqual<T>(T expected, T actual)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
@@ -626,5 +739,72 @@ static void AssertNear(double expected, double actual, double tolerance)
     if (Math.Abs(expected - actual) > tolerance)
     {
         throw new InvalidOperationException($"Expected {expected}, got {actual}.");
+    }
+}
+
+sealed class FakeBootloaderClient : IBootloaderClient
+{
+    private readonly Dictionary<uint, byte> _flash = [];
+    private bool _writeAcknowledgementLost;
+
+    public bool LoseFirstWriteAcknowledgement { get; init; }
+    public List<string> Mutations { get; } = [];
+    public List<uint> WrittenAddresses { get; } = [];
+
+    public Task<byte[]> ReadFlashAsync(
+        uint address,
+        ushort length,
+        int maximumAttempts = 3,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var data = new byte[length];
+        for (var index = 0; index < data.Length; index++)
+        {
+            data[index] = _flash.GetValueOrDefault(address + (uint)index, (byte)0xFF);
+        }
+
+        return Task.FromResult(data);
+    }
+
+    public Task EraseFlashRowsOnceAsync(
+        uint address,
+        ushort rowCount,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        for (var row = 0; row < rowCount; row++)
+        {
+            var rowAddress = address + ((uint)row * BootloaderApplicationImage.RowSize);
+            Mutations.Add($"E:{rowAddress:X6}");
+            for (var index = 0; index < BootloaderApplicationImage.RowSize; index++)
+            {
+                _flash[rowAddress + (uint)index] = 0xFF;
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task WriteFlashOnceAsync(
+        uint address,
+        ReadOnlyMemory<byte> data,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Mutations.Add($"W:{address:X6}");
+        WrittenAddresses.Add(address);
+        for (var index = 0; index < data.Length; index++)
+        {
+            _flash[address + (uint)index] = data.Span[index];
+        }
+
+        if (LoseFirstWriteAcknowledgement && !_writeAcknowledgementLost)
+        {
+            _writeAcknowledgementLost = true;
+            throw new TimeoutException("Simulated lost write acknowledgement.");
+        }
+
+        return Task.CompletedTask;
     }
 }

@@ -50,6 +50,32 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootlo
 
 The reset command is sent once. Both `bootloader-probe` and `bootloader-reset` immediately check for the application at `57600` even when the reset acknowledgement is lost; they never repeat an ambiguous reset automatically.
 
+## Firmware Images And Programming
+
+Inspect the production application artifact before connecting a gauge:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 firmware-inspect C:\REPOS\PIC_Memory_Gauge\dist\Offset\production\Memory_Gauge.X.production.hex
+```
+
+The inspector requires an `Offset/production` path, validates every Intel HEX checksum, rejects data below `0x0800`, rejects unsupported address regions, and excludes recognized PIC ID/configuration metadata from programming. StandAlone, Combined, and unified artifacts are refused.
+
+After verifying serial mode, program a memory gauge by confirming its printed device serial explicitly:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 firmware-program COM5 C:\REPOS\PIC_Memory_Gauge\dist\Offset\production\Memory_Gauge.X.production.hex 3807522001 PROGRAM 460800 115200
+```
+
+Programming is capped at the validated `115200` loader baud. The updater erases `0x0800` first, erases the remaining application rows, writes populated rows in descending address order, verifies every row, performs a final non-start readback pass, and writes the `0x0800` start row last. It never writes PIC ID/configuration bytes or addresses occupied by the resident loader.
+
+If an interrupted update leaves the unit in loader mode, rerun the complete verified image through the explicit recovery path:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 firmware-recover COM5 C:\REPOS\PIC_Memory_Gauge\dist\Offset\production\Memory_Gauge.X.production.hex RECOVER 115200
+```
+
+Recovery cannot read the gauge serial because the application is unavailable. It therefore requires the exact `RECOVER` token and validates loader device ID `0x6126` before mutation. Do not use `bootloader-reset` after an interrupted erase/write unless the complete image, including `0x0800`, has been verified.
+
 ## Memory
 
 Read the end-of-file address:

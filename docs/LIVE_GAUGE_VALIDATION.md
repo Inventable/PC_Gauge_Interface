@@ -6,7 +6,7 @@ Date: 15 July 2026
 
 - Port: COM5 through the workshop USB-to-serial adapter.
 - Memory gauge device serial: 3807522001.
-- Firmware: 0.2.
+- Firmware: 2.0.
 - Device type: 100230.
 - PCB type: 100228; PCB serial: 3807522063.
 - Gauge remained powered and in serial mode throughout the test.

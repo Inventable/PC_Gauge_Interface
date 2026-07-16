@@ -30,6 +30,17 @@ public sealed record BootloaderFrame(
         return new BootloaderFrame(command, dataLength, 0, 0, address, []);
     }
 
+    public static BootloaderFrame CreateDeclaredRequest(
+        BootloaderCommand command,
+        uint address,
+        ushort dataLength,
+        byte key1 = 0,
+        byte key2 = 0)
+    {
+        ValidateAddress(address);
+        return new BootloaderFrame(command, dataLength, key1, key2, address, []);
+    }
+
     private static void ValidateAddress(uint address)
     {
         if (address > 0x00FF_FFFF)

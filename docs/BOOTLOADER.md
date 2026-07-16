@@ -72,7 +72,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootlo
 
 ## Live Validation
 
-On 16 July 2026, memory gauge `3807522001` (application firmware `0.2`) completed non-writing bootloader entry, version discovery, reset, and application reacquisition at both `57600` and `115200` baud.
+On 16 July 2026, memory gauge `3807522001` (application firmware `2.0`) completed non-writing bootloader entry, version discovery, reset, and application reacquisition at both `57600` and `115200` baud. The application protocol carries the displayed major byte first; earlier PC builds incorrectly rendered these bytes in reverse order as `0.2`.
 
 The loader reported:
 
@@ -87,13 +87,12 @@ At `460800`, version discovery succeeded but the reset acknowledgement timed out
 
 ## Programming Work Still Required
 
+The engineering CLI now implements Intel HEX validation, complete application erase, descending row programming, readback-resolved communication failures, a second non-start verification pass, start-row commit last, and loader-only recovery. The parser refuses StandAlone, Combined, and unified build paths and never sends recognized PIC ID/configuration metadata to flash commands.
+
 Before firmware writing is exposed in the desktop application:
 
-1. Parse and validate Intel HEX files, including device family and application address bounds.
-2. Build an erased application image and reject data below `0x0800`.
-3. Erase application rows while preserving the resident loader.
-4. Program non-start rows in descending address order with readback verification.
-5. Verify the complete non-start image using readback and loader checksum support.
-6. Program and verify the `0x0800` start row last.
-7. Reset and confirm the expected application identity and firmware version.
-8. Test power interruption at erase, middle-write, pre-vector, and post-vector stages with a hardware programmer available for recovery.
+1. Perform the first controlled live write using the inspected Memory Gauge Offset production image.
+2. Confirm application identity, firmware `2.0`, memory table, calibration capture, and data download after update.
+3. Test interruption during erase, middle-write, pre-vector, and start-vector stages with a hardware programmer available.
+4. Package each approved HEX with a signed release manifest containing device type, displayed firmware version, image SHA-256, build configuration, and release notes.
+5. Add the proven workflow to Engineering Mode with explicit device and image confirmation.

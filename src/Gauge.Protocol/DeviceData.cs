@@ -1,8 +1,8 @@
 namespace Gauge.Protocol;
 
 public sealed record DeviceData(
-    byte FirmwareMinor,
     byte FirmwareMajor,
+    byte FirmwareMinor,
     uint DeviceType,
     uint DeviceSerial,
     uint PcbType,
@@ -59,4 +59,3 @@ public sealed record DeviceData(
         return (uint)(value[0] | (value[1] << 8) | (value[2] << 16) | (value[3] << 24));
     }
 }
-

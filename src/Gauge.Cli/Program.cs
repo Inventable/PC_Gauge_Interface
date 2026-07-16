@@ -22,6 +22,9 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  bootloader-probe <port> [application-baud] [bootloader-baud]");
     Console.WriteLine("  bootloader-version <port> [bootloader-baud]");
     Console.WriteLine("  bootloader-reset <port> [bootloader-baud]");
+    Console.WriteLine("  firmware-inspect <offset-production-hex>");
+    Console.WriteLine("  firmware-program <port> <offset-production-hex> <device-serial> PROGRAM [application-baud] [bootloader-baud]");
+    Console.WriteLine("  firmware-recover <port> <offset-production-hex> RECOVER [bootloader-baud]");
     Console.WriteLine("  find-eof <port> [baud]");
     Console.WriteLine("  read-file-sector <port> [baud] [address] [length]");
     Console.WriteLine("  list-files <port> [baud] [table-bytes] [chunk-bytes]");
@@ -384,6 +387,37 @@ if (args[0] == "bootloader-reset")
         ? "Bootloader reset and application recovery verified."
         : "Application recovery confirms that reset succeeded despite the missing acknowledgement.");
     return 0;
+}
+
+if (args[0] == "firmware-inspect")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: firmware-inspect <offset-production-hex>");
+        return 1;
+    }
+
+    try
+    {
+        var image = BootloaderApplicationImage.LoadOffsetProduction(args[1]);
+        PrintFirmwareImage(image);
+        return 0;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or InvalidDataException)
+    {
+        Console.Error.WriteLine($"Firmware image rejected: {ex.Message}");
+        return 2;
+    }
+}
+
+if (args[0] == "firmware-program")
+{
+    return await RunFirmwareProgramAsync(args, recoveryMode: false).ConfigureAwait(false);
+}
+
+if (args[0] == "firmware-recover")
+{
+    return await RunFirmwareProgramAsync(args, recoveryMode: true).ConfigureAwait(false);
 }
 
 if (args[0] == "find-eof")
@@ -908,6 +942,170 @@ static void PrintBootloaderVersion(string portName, int baudRate, BootloaderVers
     Console.WriteLine($"Configuration bytes: {Convert.ToHexString(version.ConfigurationBytes)}");
 }
 
+static void PrintFirmwareImage(BootloaderApplicationImage image)
+{
+    Console.WriteLine("Bootloader-safe Offset production image.");
+    Console.WriteLine($"Path: {Path.GetFullPath(image.SourcePath)}");
+    Console.WriteLine($"Program range: 0x{BootloaderApplicationImage.ApplicationStart:X4}-0x{image.HighestProgramAddress:X4}");
+    Console.WriteLine($"Image rows: {image.Rows.Count}");
+    Console.WriteLine($"Rows containing program data: {image.DataRows.Count + 1}");
+    Console.WriteLine($"Explicit program bytes: {image.ExplicitProgramBytes}");
+    Console.WriteLine($"Ignored PIC ID/config metadata bytes: {image.MetadataBytes}");
+    Console.WriteLine($"Application start row: {Convert.ToHexString(image.StartRow.Data.AsSpan(0, 16))}");
+    Console.WriteLine($"Normalized image SHA-256: {image.Sha256}");
+    Console.WriteLine("Safety order: erase 0x0800 first; program descending; write 0x0800 last.");
+}
+
+static async Task<int> RunFirmwareProgramAsync(string[] arguments, bool recoveryMode)
+{
+    const uint MemoryGaugeDeviceType = 100230;
+    const ushort Pic18F26K80DeviceId = 0x6126;
+
+    var minimumArguments = recoveryMode ? 4 : 5;
+    if (arguments.Length < minimumArguments)
+    {
+        Console.Error.WriteLine(recoveryMode
+            ? "Usage: firmware-recover <port> <offset-production-hex> RECOVER [bootloader-baud]"
+            : "Usage: firmware-program <port> <offset-production-hex> <device-serial> PROGRAM [application-baud] [bootloader-baud]");
+        return 1;
+    }
+
+    var portName = arguments[1];
+    var imagePath = arguments[2];
+    var confirmation = recoveryMode ? arguments[3] : arguments[4];
+    if (!confirmation.Equals(recoveryMode ? "RECOVER" : "PROGRAM", StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine($"Confirmation token must be exactly {(recoveryMode ? "RECOVER" : "PROGRAM")}.");
+        return 2;
+    }
+
+    var applicationBaud = recoveryMode || arguments.Length < 6 ? 460800 : int.Parse(arguments[5]);
+    var bootloaderBaud = recoveryMode
+        ? (arguments.Length >= 5 ? int.Parse(arguments[4]) : 115200)
+        : (arguments.Length >= 7 ? int.Parse(arguments[6]) : 115200);
+    if (bootloaderBaud > 115200)
+    {
+        Console.Error.WriteLine("Firmware programming is limited to the validated maximum of 115200 baud.");
+        return 2;
+    }
+
+    BootloaderApplicationImage image;
+    try
+    {
+        image = BootloaderApplicationImage.LoadOffsetProduction(imagePath);
+        PrintFirmwareImage(image);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or InvalidDataException)
+    {
+        Console.Error.WriteLine($"Firmware image rejected: {ex.Message}");
+        return 3;
+    }
+
+    uint? expectedSerial = null;
+    if (!recoveryMode)
+    {
+        expectedSerial = ParseUInt32(arguments[3]);
+        var reply = await TryIdentifyAsync(portName, applicationBaud, CancellationToken.None).ConfigureAwait(false);
+        if (reply is null || reply.Payload.Length < 22)
+        {
+            Console.Error.WriteLine("The gauge application is not responding. Establish a verified serial connection first.");
+            return 4;
+        }
+
+        var device = DeviceData.DecodeMemoryGauge(reply.Payload);
+        PrintDevice(device);
+        if (device.DeviceType != MemoryGaugeDeviceType)
+        {
+            Console.Error.WriteLine($"Device type {device.DeviceType} is not the supported memory gauge type {MemoryGaugeDeviceType}.");
+            return 4;
+        }
+
+        if (device.DeviceSerial != expectedSerial.Value)
+        {
+            Console.Error.WriteLine($"Connected serial {device.DeviceSerial} does not match confirmed serial {expectedSerial.Value}.");
+            return 4;
+        }
+
+        Console.WriteLine("Entering bootloader once. No automatic retry.");
+        try
+        {
+            await EnterBootloaderOnceAsync(portName, applicationBaud, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedSerialFailure(ex))
+        {
+            Console.Error.WriteLine($"Bootloader entry failed: {ex.Message}");
+            return 5;
+        }
+
+        await Task.Delay(250).ConfigureAwait(false);
+    }
+    else
+    {
+        Console.WriteLine("RECOVERY MODE: application identity cannot be read; proceeding only if the PIC loader identity matches.");
+    }
+
+    FirmwareUpdateResult updateResult;
+    try
+    {
+        await using var bootloader = new SerialBootloaderClient(portName, bootloaderBaud, timeoutMs: 2000);
+        await bootloader.OpenAsync().ConfigureAwait(false);
+        var version = await bootloader.ReadVersionAsync(maximumAttempts: 3).ConfigureAwait(false);
+        PrintBootloaderVersion(portName, bootloaderBaud, version);
+        if (version.DeviceId != Pic18F26K80DeviceId)
+        {
+            throw new InvalidOperationException(
+                $"Loader device ID 0x{version.DeviceId:X4} does not match PIC18F26K80 ID 0x{Pic18F26K80DeviceId:X4}.");
+        }
+
+        var reporter = new FirmwareProgressReporter();
+        var updater = new GaugeFirmwareUpdater(bootloader, version);
+        updateResult = await updater.ProgramAsync(image, reporter, CancellationToken.None).ConfigureAwait(false);
+
+        Console.WriteLine("Resetting to the verified application once. No automatic retry.");
+        try
+        {
+            await bootloader.ResetToApplicationAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedBootloaderFailure(ex))
+        {
+            Console.WriteLine($"Reset acknowledgement was not received: {ex.Message}");
+            Console.WriteLine("Checking for the application before considering another reset.");
+        }
+    }
+    catch (Exception ex) when (IsExpectedBootloaderFailure(ex) || ex is InvalidOperationException)
+    {
+        Console.Error.WriteLine($"Firmware programming stopped: {ex.Message}");
+        Console.Error.WriteLine("Do not power-cycle blindly. The gauge should remain in loader mode; inspect it with bootloader-version, then rerun firmware-recover.");
+        return 6;
+    }
+
+    Console.WriteLine("Reacquiring the programmed application at 57600 baud.");
+    var restoredReply = await WaitForIdentifyAsync(
+        portName,
+        57600,
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromMilliseconds(100),
+        CancellationToken.None).ConfigureAwait(false);
+    if (restoredReply is null || restoredReply.Payload.Length < 22)
+    {
+        Console.Error.WriteLine("Image verified, but the application was not reacquired. Check loader mode before any further action.");
+        return 7;
+    }
+
+    var restoredDevice = DeviceData.DecodeMemoryGauge(restoredReply.Payload);
+    PrintDevice(restoredDevice);
+    if (restoredDevice.DeviceType != MemoryGaugeDeviceType
+        || (expectedSerial.HasValue && restoredDevice.DeviceSerial != expectedSerial.Value))
+    {
+        Console.Error.WriteLine("The application restarted with an unexpected device identity.");
+        return 8;
+    }
+
+    Console.WriteLine($"Firmware update complete: erased {updateResult.ErasedRows} rows, programmed {updateResult.ProgrammedRows} rows.");
+    Console.WriteLine($"Verified image SHA-256: {updateResult.ImageSha256}");
+    return 0;
+}
+
 static bool IsExpectedBootloaderFailure(Exception ex)
 {
     return IsExpectedSerialFailure(ex) || ex is GaugeProtocolException;
@@ -1316,4 +1514,28 @@ static uint ParseUInt32(string value)
     return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
         ? Convert.ToUInt32(value[2..], 16)
         : Convert.ToUInt32(value);
+}
+
+sealed class FirmwareProgressReporter : IProgress<FirmwareUpdateProgress>
+{
+    private FirmwareUpdatePhase? _lastPhase;
+    private int _lastBucket = -1;
+
+    public void Report(FirmwareUpdateProgress value)
+    {
+        var bucket = value.TotalOperations == 0
+            ? 100
+            : (value.CompletedOperations * 100 / value.TotalOperations) / 2;
+        if (_lastPhase == value.Phase && _lastBucket == bucket)
+        {
+            return;
+        }
+
+        _lastPhase = value.Phase;
+        _lastBucket = bucket;
+        var percent = value.TotalOperations == 0
+            ? 100
+            : value.CompletedOperations * 100.0 / value.TotalOperations;
+        Console.WriteLine($"{value.Phase,-22} {percent,6:F1}% 0x{value.Address:X4} {value.Message}");
+    }
 }
