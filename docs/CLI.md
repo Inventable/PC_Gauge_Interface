@@ -36,7 +36,7 @@ This command does not try `460800`. It reports the exact transmitted bytes, the 
 Once a gauge is already responding in fast serial mode, validate entry into the resident bootloader and return to the installed application without writing flash:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootloader-probe COM5 460800 57600
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootloader-probe COM5 460800 115200
 ```
 
 The application bootload request and loader reset request are each sent once without automatic retry. Read-only bootloader version discovery may make three attempts. The probe does not send erase, flash-write, EEPROM-write, or configuration-write commands. See `docs/BOOTLOADER.md` for the protocol and recovery rules.
@@ -48,7 +48,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootlo
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootloader-reset COM5 57600
 ```
 
-The reset command is sent once. If its acknowledgement is lost, check for the application at `57600` before deciding whether any further command is required.
+The reset command is sent once. Both `bootloader-probe` and `bootloader-reset` immediately check for the application at `57600` even when the reset acknowledgement is lost; they never repeat an ambiguous reset automatically.
 
 ## Memory
 

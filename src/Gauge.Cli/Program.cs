@@ -237,7 +237,7 @@ if (args[0] == "bootloader-probe")
 
     var portName = args[1];
     var applicationBaud = args.Length >= 3 ? int.Parse(args[2]) : 460800;
-    var bootloaderBaud = args.Length >= 4 ? int.Parse(args[3]) : 57600;
+    var bootloaderBaud = args.Length >= 4 ? int.Parse(args[3]) : 115200;
 
     Console.WriteLine("Non-programming bootloader probe. No flash erase or write commands are sent.");
     Console.WriteLine($"Checking the application on {portName} at {applicationBaud} baud.");
@@ -263,20 +263,29 @@ if (args[0] == "bootloader-probe")
 
     await Task.Delay(250).ConfigureAwait(false);
 
-    BootloaderVersion version;
+    Exception? resetAcknowledgementFailure = null;
     try
     {
         await using var bootloader = new SerialBootloaderClient(portName, bootloaderBaud, timeoutMs: 1000);
         await bootloader.OpenAsync().ConfigureAwait(false);
-        version = await bootloader.ReadVersionAsync(maximumAttempts: 3).ConfigureAwait(false);
+        var version = await bootloader.ReadVersionAsync(maximumAttempts: 3).ConfigureAwait(false);
         PrintBootloaderVersion(portName, bootloaderBaud, version);
 
         Console.WriteLine("Resetting from bootloader to the installed application once (automatic retry disabled).");
-        await bootloader.ResetToApplicationAsync().ConfigureAwait(false);
+        try
+        {
+            await bootloader.ResetToApplicationAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedBootloaderFailure(ex))
+        {
+            resetAcknowledgementFailure = ex;
+            Console.WriteLine($"Reset acknowledgement was not received: {ex.Message}");
+            Console.WriteLine("Checking for the application before considering another reset.");
+        }
     }
     catch (Exception ex) when (IsExpectedBootloaderFailure(ex))
     {
-        Console.Error.WriteLine($"Bootloader probe failed: {ex.Message}");
+        Console.Error.WriteLine($"Bootloader discovery failed: {ex.Message}");
         Console.Error.WriteLine("The loader remains recoverable; reconnect to it and issue the reset command before power cycling.");
         return 4;
     }
@@ -290,11 +299,18 @@ if (args[0] == "bootloader-probe")
         CancellationToken.None).ConfigureAwait(false);
     if (restoredReply is null)
     {
-        Console.Error.WriteLine("Bootloader reset was acknowledged, but the application was not reacquired at 57600 baud.");
+        Console.Error.WriteLine(resetAcknowledgementFailure is null
+            ? "Bootloader reset was acknowledged, but the application was not reacquired at 57600 baud."
+            : "Neither a reset acknowledgement nor an application response was received. Check loader mode before repeating reset.");
         return 5;
     }
 
     PrintIdentifyResult(portName, 57600, restoredReply);
+    if (resetAcknowledgementFailure is not null)
+    {
+        Console.WriteLine("Application recovery confirms that reset succeeded despite the missing acknowledgement.");
+    }
+
     Console.WriteLine("Bootloader entry and exit verified without writing flash.");
     return 0;
 }
@@ -335,19 +351,39 @@ if (args[0] == "bootloader-reset")
     var portName = args[1];
     var bootloaderBaud = args.Length >= 3 ? int.Parse(args[2]) : 57600;
     Console.WriteLine("Sending one bootloader reset request. Automatic retry is disabled.");
+    Exception? resetAcknowledgementFailure = null;
     try
     {
         await using var bootloader = new SerialBootloaderClient(portName, bootloaderBaud, timeoutMs: 1000);
         await bootloader.OpenAsync().ConfigureAwait(false);
         await bootloader.ResetToApplicationAsync().ConfigureAwait(false);
-        Console.WriteLine("Bootloader acknowledged reset to the installed application.");
-        return 0;
     }
     catch (Exception ex) when (IsExpectedBootloaderFailure(ex))
     {
-        Console.Error.WriteLine($"Bootloader reset failed or its acknowledgement was lost: {ex.Message}");
+        resetAcknowledgementFailure = ex;
+        Console.WriteLine($"Reset acknowledgement was not received: {ex.Message}");
+    }
+
+    Console.WriteLine("Checking immediately for the application at 57600 baud.");
+    var applicationReply = await WaitForIdentifyAsync(
+        portName,
+        57600,
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromMilliseconds(100),
+        CancellationToken.None).ConfigureAwait(false);
+    if (applicationReply is null)
+    {
+        Console.Error.WriteLine(resetAcknowledgementFailure is null
+            ? "Reset was acknowledged, but the application was not reacquired."
+            : "Reset remains ambiguous. Run bootloader-version before deciding whether to repeat it.");
         return 2;
     }
+
+    PrintIdentifyResult(portName, 57600, applicationReply);
+    Console.WriteLine(resetAcknowledgementFailure is null
+        ? "Bootloader reset and application recovery verified."
+        : "Application recovery confirms that reset succeeded despite the missing acknowledgement.");
+    return 0;
 }
 
 if (args[0] == "find-eof")

@@ -16,7 +16,7 @@ The updater must never write bootloader addresses below `0x0800`.
 
 ## Serial Protocol
 
-The loader uses hardware autobaud on every transaction. `57600` baud remains the conservative initial update rate, but the protocol is not fixed to that rate and higher rates can be validated later.
+The loader uses hardware autobaud on every transaction. Live non-programming tests passed completely at both `57600` and `115200` baud. Use `115200` as the initial firmware-programming rate; it doubles the historical rate while retaining clean command acknowledgements and application recovery.
 
 Each host request is:
 
@@ -50,6 +50,7 @@ Some loader responses do not update the echoed header length. The host must use 
 - Read-only discovery and verification commands may use the normal three-attempt communication rule.
 - Bootloader entry, reset, erase, write, and configuration writes must not be retried blindly after a missing acknowledgement.
 - A failed state-changing command must be resolved using a readback or a fresh loader discovery before deciding whether to repeat it.
+- A missing reset acknowledgement is resolved by immediately probing for the application at `57600`; reset is not repeated when application recovery proves it succeeded.
 - The application start block must only be written after every other block has passed readback/checksum verification.
 
 ## Non-Programming Probe
@@ -57,7 +58,7 @@ Some loader responses do not update the echoed header length. The host must use 
 The CLI probe validates loader entry, version discovery, reset, and application reacquisition without erasing or writing flash:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootloader-probe COM5 460800 57600
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootloader-probe COM5 460800 115200
 ```
 
 The gauge must already have a verified application serial connection. The probe sends the application `BOOTLOAD` command once, reads loader version information, sends loader reset once, and aggressively reacquires the application at `57600` baud.
@@ -68,6 +69,21 @@ An already-running loader can be inspected or exited without first contacting th
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootloader-version COM5 57600
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootloader-reset COM5 57600
 ```
+
+## Live Validation
+
+On 16 July 2026, memory gauge `3807522001` (application firmware `0.2`) completed non-writing bootloader entry, version discovery, reset, and application reacquisition at both `57600` and `115200` baud.
+
+The loader reported:
+
+- Bootloader version `1.3`.
+- PIC device ID `0x6126`.
+- Maximum packet size 256 bytes.
+- Erase block size 64 bytes.
+- Write block size 64 bytes.
+- Configuration bytes `18827936`.
+
+At `460800`, version discovery succeeded but the reset acknowledgement timed out. The reset command is intentionally never repeated blindly. The CLI now immediately checks for the application after reset even when its acknowledgement is missing. Until flash programming and interruption recovery have been characterized at higher rates, use the fully validated `115200` rate.
 
 ## Programming Work Still Required
 
