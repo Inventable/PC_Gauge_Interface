@@ -19,6 +19,9 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  scan-identify [baud|auto] [seconds]");
     Console.WriteLine("  wait-identify <port> [baud] [seconds] [interval-ms]");
     Console.WriteLine("  verify-serial <port> [slow-baud] [fast-baud] [delay-ms]");
+    Console.WriteLine("  bootloader-probe <port> [application-baud] [bootloader-baud]");
+    Console.WriteLine("  bootloader-version <port> [bootloader-baud]");
+    Console.WriteLine("  bootloader-reset <port> [bootloader-baud]");
     Console.WriteLine("  find-eof <port> [baud]");
     Console.WriteLine("  read-file-sector <port> [baud] [address] [length]");
     Console.WriteLine("  list-files <port> [baud] [table-bytes] [chunk-bytes]");
@@ -222,6 +225,129 @@ if (args[0] == "scan-identify")
 
     Console.Error.WriteLine("No gauge responded before the scan timed out.");
     return 2;
+}
+
+if (args[0] == "bootloader-probe")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: bootloader-probe <port> [application-baud] [bootloader-baud]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var applicationBaud = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    var bootloaderBaud = args.Length >= 4 ? int.Parse(args[3]) : 57600;
+
+    Console.WriteLine("Non-programming bootloader probe. No flash erase or write commands are sent.");
+    Console.WriteLine($"Checking the application on {portName} at {applicationBaud} baud.");
+    var applicationReply = await TryIdentifyAsync(portName, applicationBaud, CancellationToken.None).ConfigureAwait(false);
+    if (applicationReply is null)
+    {
+        Console.Error.WriteLine(
+            $"No application response on {portName} at {applicationBaud} baud. Establish a verified serial connection first.");
+        return 2;
+    }
+
+    PrintIdentifyResult(portName, applicationBaud, applicationReply);
+    Console.WriteLine("Requesting bootloader entry once (automatic retry disabled).");
+    try
+    {
+        await EnterBootloaderOnceAsync(portName, applicationBaud, CancellationToken.None).ConfigureAwait(false);
+    }
+    catch (Exception ex) when (IsExpectedSerialFailure(ex))
+    {
+        Console.Error.WriteLine($"Bootloader entry failed: {ex.Message}");
+        return 3;
+    }
+
+    await Task.Delay(250).ConfigureAwait(false);
+
+    BootloaderVersion version;
+    try
+    {
+        await using var bootloader = new SerialBootloaderClient(portName, bootloaderBaud, timeoutMs: 1000);
+        await bootloader.OpenAsync().ConfigureAwait(false);
+        version = await bootloader.ReadVersionAsync(maximumAttempts: 3).ConfigureAwait(false);
+        PrintBootloaderVersion(portName, bootloaderBaud, version);
+
+        Console.WriteLine("Resetting from bootloader to the installed application once (automatic retry disabled).");
+        await bootloader.ResetToApplicationAsync().ConfigureAwait(false);
+    }
+    catch (Exception ex) when (IsExpectedBootloaderFailure(ex))
+    {
+        Console.Error.WriteLine($"Bootloader probe failed: {ex.Message}");
+        Console.Error.WriteLine("The loader remains recoverable; reconnect to it and issue the reset command before power cycling.");
+        return 4;
+    }
+
+    Console.WriteLine("Reacquiring the application at 57600 baud after reset.");
+    var restoredReply = await WaitForIdentifyAsync(
+        portName,
+        57600,
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromMilliseconds(100),
+        CancellationToken.None).ConfigureAwait(false);
+    if (restoredReply is null)
+    {
+        Console.Error.WriteLine("Bootloader reset was acknowledged, but the application was not reacquired at 57600 baud.");
+        return 5;
+    }
+
+    PrintIdentifyResult(portName, 57600, restoredReply);
+    Console.WriteLine("Bootloader entry and exit verified without writing flash.");
+    return 0;
+}
+
+if (args[0] == "bootloader-version")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: bootloader-version <port> [bootloader-baud]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var bootloaderBaud = args.Length >= 3 ? int.Parse(args[2]) : 57600;
+    try
+    {
+        await using var bootloader = new SerialBootloaderClient(portName, bootloaderBaud, timeoutMs: 1000);
+        await bootloader.OpenAsync().ConfigureAwait(false);
+        var version = await bootloader.ReadVersionAsync(maximumAttempts: 3).ConfigureAwait(false);
+        PrintBootloaderVersion(portName, bootloaderBaud, version);
+        return 0;
+    }
+    catch (Exception ex) when (IsExpectedBootloaderFailure(ex))
+    {
+        Console.Error.WriteLine($"Bootloader version read failed: {ex.Message}");
+        return 2;
+    }
+}
+
+if (args[0] == "bootloader-reset")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: bootloader-reset <port> [bootloader-baud]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var bootloaderBaud = args.Length >= 3 ? int.Parse(args[2]) : 57600;
+    Console.WriteLine("Sending one bootloader reset request. Automatic retry is disabled.");
+    try
+    {
+        await using var bootloader = new SerialBootloaderClient(portName, bootloaderBaud, timeoutMs: 1000);
+        await bootloader.OpenAsync().ConfigureAwait(false);
+        await bootloader.ResetToApplicationAsync().ConfigureAwait(false);
+        Console.WriteLine("Bootloader acknowledged reset to the installed application.");
+        return 0;
+    }
+    catch (Exception ex) when (IsExpectedBootloaderFailure(ex))
+    {
+        Console.Error.WriteLine($"Bootloader reset failed or its acknowledgement was lost: {ex.Message}");
+        return 2;
+    }
 }
 
 if (args[0] == "find-eof")
@@ -710,6 +836,45 @@ static async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, C
     {
         return null;
     }
+}
+
+static async Task EnterBootloaderOnceAsync(
+    string portName,
+    int baudRate,
+    CancellationToken cancellationToken)
+{
+    var options = new SerialGaugeTransportOptions(
+        portName,
+        baudRate,
+        ReadTimeoutMs: 1000,
+        WriteTimeoutMs: 1000,
+        MaxAttempts: 1);
+    await using var transport = new SerialGaugeTransport(options);
+    await transport.OpenAsync(cancellationToken).ConfigureAwait(false);
+    var reply = await transport
+        .TransactAsync(GaugeFrame.Create(GaugeCommand.Bootload), cancellationToken)
+        .ConfigureAwait(false);
+
+    if (reply.Command != GaugeCommand.Bootload || reply.Payload is not [BootloaderProtocolConstants.CommandSuccess])
+    {
+        throw new GaugeProtocolException("Gauge rejected the bootloader-entry command.");
+    }
+}
+
+static void PrintBootloaderVersion(string portName, int baudRate, BootloaderVersion version)
+{
+    Console.WriteLine($"Bootloader found on {portName} at {baudRate} baud.");
+    Console.WriteLine($"Bootloader version: {version.Major}.{version.Minor}");
+    Console.WriteLine($"Device ID: 0x{version.DeviceId:X4}");
+    Console.WriteLine($"Maximum packet size: {version.MaximumPacketSize} bytes");
+    Console.WriteLine($"Erase block: {version.EraseBlockSize} bytes");
+    Console.WriteLine($"Write block: {version.WriteBlockSize} bytes");
+    Console.WriteLine($"Configuration bytes: {Convert.ToHexString(version.ConfigurationBytes)}");
+}
+
+static bool IsExpectedBootloaderFailure(Exception ex)
+{
+    return IsExpectedSerialFailure(ex) || ex is GaugeProtocolException;
 }
 
 static async Task<GaugeFrame?> WaitForIdentifyAsync(

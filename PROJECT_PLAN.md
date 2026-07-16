@@ -424,13 +424,15 @@ Current status:
 
 ## Immediate Next Steps
 
-1. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
+1. Validate non-programming bootloader entry/version/reset on live hardware, then implement a recovery-first Intel HEX updater that writes the `0x0800` application start block last. See `docs/BOOTLOADER.md`.
 2. Define the firmware changes needed for safe editable measurement intervals: sensor-specific limits, clean file boundary, immediate application, and failure recovery.
-3. Verify the self-contained package on a clean Windows field laptop, confirm corporate/FTDI prerequisites, and start Northstar code-signing procurement before routine field distribution.
-4. Keep additional export formats deferred until the website/downstream contract is known.
+3. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
+4. Verify the self-contained package on a clean Windows field laptop, confirm corporate/FTDI prerequisites, and start Northstar code-signing procurement before routine field distribution.
+5. Keep additional export formats deferred until the website/downstream contract is known.
 
 ## TODO Reminder
 
+- Prove bootloader entry/exit, then build and interruption-test reverse-order firmware programming.
 - Test physical disconnect/reconnect with both gauge types.
 - Define and implement the firmware side of safe measurement-interval changes before enabling writes.
 - Test the self-contained archive on a clean field laptop.
@@ -442,5 +444,4 @@ Current status:
 - Should exported jobs include both raw and converted data?
 - How should field operators name jobs, wells, runs, or tools?
 - Are multiple gauges ever connected at once?
-- Should the app support firmware bootload/update in the first release or later?
 - What safety confirmations are required before erase/reset/bootload commands?

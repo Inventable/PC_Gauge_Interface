@@ -13,6 +13,9 @@ var tests = new (string Name, Action Run)[]
     ("Read request encodes declared length without request payload", ReadRequestEncodesDeclaredLengthWithoutRequestPayload),
     ("Encoded frame decodes back to original values", EncodedFrameDecodesBack),
     ("Bad CRC is rejected", BadCrcIsRejected),
+    ("Bootloader read-version request matches firmware frame", BootloaderReadVersionRequestMatchesFirmwareFrame),
+    ("Bootloader write request carries keys and 24-bit address", BootloaderWriteRequestCarriesKeysAndAddress),
+    ("Bootloader version response decodes", BootloaderVersionResponseDecodes),
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
     ("Memory gauge file table ignores continuation records", MemoryGaugeFileTableIgnoresContinuationRecords),
@@ -115,6 +118,50 @@ static void BadCrcIsRejected()
     }
 
     throw new InvalidOperationException("Expected bad CRC frame to be rejected.");
+}
+
+static void BootloaderReadVersionRequestMatchesFirmwareFrame()
+{
+    var frame = BootloaderFrame.Create(BootloaderCommand.ReadVersion);
+    var wire = BootloaderFrameCodec.EncodeRequest(frame);
+
+    AssertEqual("55000000000000000000", Convert.ToHexString(wire));
+}
+
+static void BootloaderWriteRequestCarriesKeysAndAddress()
+{
+    var frame = BootloaderFrame.Create(
+        BootloaderCommand.WriteFlash,
+        0x001234,
+        new byte[] { 0xAA, 0xBB },
+        key1: 0x55,
+        key2: 0xAA);
+    var wire = BootloaderFrameCodec.EncodeRequest(frame);
+
+    AssertEqual("5502020055AA34120000AABB", Convert.ToHexString(wire));
+}
+
+static void BootloaderVersionResponseDecodes()
+{
+    byte[] wire =
+    [
+        0x55,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x03, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFE, 0x67,
+        0x00, 0x00, 0x40, 0x40, 0xAA, 0xBB, 0xCC, 0xDD
+    ];
+
+    var frame = BootloaderFrameCodec.DecodeResponse(wire, BootloaderProtocolConstants.VersionPayloadLength);
+    var version = BootloaderVersion.Decode(frame.Payload);
+
+    AssertEqual(BootloaderCommand.ReadVersion, frame.Command);
+    AssertEqual((byte)1, version.Major);
+    AssertEqual((byte)3, version.Minor);
+    AssertEqual((uint)256, version.MaximumPacketSize);
+    AssertEqual((ushort)0x67FE, version.DeviceId);
+    AssertEqual((byte)64, version.EraseBlockSize);
+    AssertEqual((byte)64, version.WriteBlockSize);
+    AssertSequenceEqual(new byte[] { 0xAA, 0xBB, 0xCC, 0xDD }, version.ConfigurationBytes);
 }
 
 static void MemoryGaugeIdentifyPayloadDecodes()
