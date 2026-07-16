@@ -22,7 +22,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private const int WakeScanTimeoutMs = 30000;
     private const int BackgroundWakeScanTimeoutMs = 1500;
     private const int ConnectedPollTransactionTimeoutMs = 250;
-    private const int SuggestedMinimumDurationSeconds = 3600;
     private static readonly TimeSpan LiveChartRefreshInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AppPollInterval = TimeSpan.FromMilliseconds(100);
@@ -724,8 +723,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             return;
         }
 
-        SelectedFile ??= Files.FirstOrDefault(file => file.Suggestion == "Suggested")
-            ?? Files.LastOrDefault();
+        SelectedFile ??= Files.OrderByDescending(file => file.Index).FirstOrDefault();
 
         if (SelectedFile is null)
         {
@@ -1160,7 +1158,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             var processedBytes = 0;
             var lastPreviewElapsed = TimeSpan.Zero;
             var batteryWarningCount = 0;
-            var crcErrorCount = 0;
+            var recordSummary = MemoryGaugeRecordSummary.Empty;
             var progress = new Progress<MemoryReadProgress>(progress =>
             {
                 if (!file.IsDownloading)
@@ -1185,15 +1183,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 }
 
                 var firstRecordIndex = processedBytes / MemoryGaugeDataRecord.Length;
+                var batchBytes = progress.Buffer.Span.Slice(processedBytes, completeBytes - processedBytes);
                 var batch = converter.Convert(
-                    progress.Buffer.Span.Slice(processedBytes, completeBytes - processedBytes),
-                    firstRecordIndex);
+                    batchBytes,
+                    firstRecordIndex,
+                    streamingSamples.Count);
+                recordSummary = recordSummary.Combine(MemoryGaugeRecordSummary.Analyze(batchBytes));
                 streamingSamples.AddRange(batch);
                 processedBytes = completeBytes;
                 lastPreviewElapsed = timer.Elapsed;
                 batteryWarningCount += batch.Count(sample => sample.BatteryStatus != 0);
-                crcErrorCount += batch.Count(sample => sample.CrcError);
-                file.MarkPartialSamples(streamingSamples, batteryWarningCount, crcErrorCount);
+                file.MarkPartialSamples(streamingSamples, batteryWarningCount, recordSummary);
                 RaiseCommandStates();
 
                 if (IsGraphVisible && ReferenceEquals(SelectedFile, file))
@@ -1203,11 +1203,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             });
             var download = await service.DownloadFileAsync(_fileTable, file.Index, progress: progress, cancellationToken: cancellationToken).ConfigureAwait(true);
             var samples = GaugeJobService.BuildCalibratedSamples(download, _calibration);
+            var finalRecordSummary = MemoryGaugeRecordSummary.Analyze(download.RawBytes, download.FileRecord.DataAddress.Value);
             file.MarkDownloaded(
                 download,
                 samples,
                 batteryWarningCount: samples.Count(sample => sample.BatteryStatus != 0),
-                crcErrorCount: samples.Count(sample => sample.CrcError));
+                finalRecordSummary);
             RaiseCommandStates();
             if (!manual && IsGraphVisible && ReferenceEquals(SelectedFile, file))
             {
@@ -1293,7 +1294,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             .Select((record, index) => EstimateBytes(table, index))
             .ToArray();
         var largest = sizes.Length == 0 ? 0 : sizes.Max();
-        var suggestedIndex = ChooseSuggestedFileIndex(table, sizes);
 
         for (var index = 0; index < table.Records.Count; index++)
         {
@@ -1307,7 +1307,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
             if (existingRows.TryGetValue(index, out var existing))
             {
-                existing.SetSuggestion(index == suggestedIndex);
                 Files.Add(existing);
                 continue;
             }
@@ -1316,10 +1315,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 index,
                 bytes,
                 samples,
+                record.MeasurementInterval,
                 (long)samples * record.MeasurementInterval,
                 FormatBytes(bytes),
                 largest == 0 ? 0 : Math.Max(4, bytes * 100.0 / largest),
-                index == suggestedIndex ? "Suggested" : string.Empty,
                 record.IsCrcValid));
         }
 
@@ -1348,21 +1347,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         SelectedFile = selectedIndex is null
             ? null
             : Files.FirstOrDefault(file => file.Index == selectedIndex.Value);
-    }
-
-    private static int ChooseSuggestedFileIndex(GaugeFileTable table, IReadOnlyList<int> sizes)
-    {
-        for (var index = sizes.Count - 1; index >= 0; index--)
-        {
-            var sampleCount = sizes[index] / MemoryGaugeDataRecord.Length * 2L;
-            var durationSeconds = sampleCount * table.Records[index].MeasurementInterval;
-            if (durationSeconds > SuggestedMinimumDurationSeconds)
-            {
-                return index;
-            }
-        }
-
-        return -1;
     }
 
     private static int EstimateBytes(GaugeFileTable table, int index)
@@ -1701,7 +1685,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     private int _batteryWarningCount;
     private int _crcErrorCount;
     private double _progressPercent;
-    private string _suggestion;
+    private string _duration;
     private string _state = "Queued";
     private string _progressText = string.Empty;
 
@@ -1709,20 +1693,20 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         int index,
         int bytes,
         int estimatedSamples,
+        ushort measurementInterval,
         long estimatedDurationSeconds,
         string size,
         double sizePercent,
-        string suggestion,
         bool isCrcValid)
     {
         Index = index;
         Bytes = bytes;
         EstimatedSamples = estimatedSamples;
+        MeasurementInterval = measurementInterval;
         EstimatedDurationSeconds = estimatedDurationSeconds;
-        Duration = FormatFileDuration(estimatedDurationSeconds);
+        _duration = FormatFileDuration(estimatedDurationSeconds);
         Size = size;
         SizePercent = sizePercent;
-        _suggestion = suggestion;
         IsCrcValid = isCrcValid;
     }
 
@@ -1734,19 +1718,21 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public int EstimatedSamples { get; }
 
+    public ushort MeasurementInterval { get; }
+
+    public string Interval => MeasurementInterval == 1 ? "1 sec" : $"{MeasurementInterval} sec";
+
     public long EstimatedDurationSeconds { get; }
 
-    public string Duration { get; }
+    public string Duration
+    {
+        get => _duration;
+        private set => SetField(ref _duration, value);
+    }
 
     public string Size { get; }
 
     public double SizePercent { get; }
-
-    public string Suggestion
-    {
-        get => _suggestion;
-        private set => SetField(ref _suggestion, value);
-    }
 
     public bool IsCrcValid { get; }
 
@@ -1799,6 +1785,26 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         get => _crcErrorCount;
         private set => SetField(ref _crcErrorCount, value);
     }
+
+    public int AcousticRecordCount { get; private set; }
+
+    public int FailedAcousticRecordCount { get; private set; }
+
+    public int AcousticDiagnosticRecordCount { get; private set; }
+
+    public int RawAcousticRecordCount { get; private set; }
+
+    public int TimestampRecordCount { get; private set; }
+
+    public int AuxiliaryRecordCount { get; private set; }
+
+    public int UnknownRecordCount { get; private set; }
+
+    public int ExcludedRecordCount => AcousticRecordCount + AuxiliaryRecordCount + UnknownRecordCount;
+
+    public bool ContainsAcousticData => AcousticRecordCount > 0 || AcousticDiagnosticRecordCount > 0;
+
+    public bool ContainsRawAcousticData => RawAcousticRecordCount > 0;
 
     public double ProgressPercent
     {
@@ -1869,18 +1875,28 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
                 details.Add($"{BatteryWarningCount:N0} battery warning{(BatteryWarningCount == 1 ? string.Empty : "s")}");
             }
 
-            return details.Count == 0 ? "No warnings" : string.Join(", ", details);
+            if (FailedAcousticRecordCount > 0)
+            {
+                details.Add($"{FailedAcousticRecordCount:N0} failed acoustic packet{(FailedAcousticRecordCount == 1 ? string.Empty : "s")}");
+            }
+
+            if (UnknownRecordCount > 0)
+            {
+                details.Add($"{UnknownRecordCount:N0} unknown record{(UnknownRecordCount == 1 ? string.Empty : "s")}");
+            }
+
+            if (details.Count > 0)
+            {
+                return string.Join(", ", details);
+            }
+
+            return "No warnings";
         }
     }
 
     public string ActionToolTip => HasPlotData
         ? "View pressure and temperature graph"
         : IsRetryAvailable ? "Retry download" : IsDownloading ? "Download in progress" : "Download this file";
-
-    public void SetSuggestion(bool isSuggested)
-    {
-        Suggestion = isSuggested ? "Suggested" : string.Empty;
-    }
 
     public void MarkDownloading()
     {
@@ -1891,6 +1907,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         CrcErrorCount = 0;
         HasWarnings = false;
         HasErrors = false;
+        ResetRecordSummary();
         State = "Downloading";
         ProgressPercent = 0;
         ProgressText = "0%";
@@ -1908,6 +1925,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         CrcErrorCount = 0;
         HasWarnings = false;
         HasErrors = false;
+        ResetRecordSummary();
         State = "Queued";
         ProgressPercent = 0;
         ProgressText = string.Empty;
@@ -1951,14 +1969,14 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     public void MarkPartialSamples(
         IReadOnlyList<CalibratedGaugeSample> samples,
         int batteryWarningCount,
-        int crcErrorCount)
+        MemoryGaugeRecordSummary recordSummary)
     {
         Samples = samples;
         SampleCount = samples.Count;
         BatteryWarningCount = batteryWarningCount;
-        CrcErrorCount = crcErrorCount;
-        HasWarnings = batteryWarningCount > 0;
-        HasErrors = !IsCrcValid || crcErrorCount > 0;
+        ApplyRecordSummary(recordSummary);
+        HasWarnings = batteryWarningCount > 0 || recordSummary.FailedAcousticRecordCount > 0;
+        HasErrors = !IsCrcValid || recordSummary.CrcErrorCount > 0 || recordSummary.UnknownRecordCount > 0;
         OnPropertyChanged(nameof(Samples));
         OnPropertyChanged(nameof(HasPlotData));
         RaisePresentationChanged();
@@ -1968,15 +1986,16 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         GaugeMemoryDownload download,
         IReadOnlyList<CalibratedGaugeSample> samples,
         int batteryWarningCount,
-        int crcErrorCount)
+        MemoryGaugeRecordSummary recordSummary)
     {
         Download = download;
         Samples = samples;
         SampleCount = samples.Count;
         BatteryWarningCount = batteryWarningCount;
-        CrcErrorCount = crcErrorCount;
-        HasWarnings = batteryWarningCount > 0;
-        HasErrors = !IsCrcValid || crcErrorCount > 0;
+        ApplyRecordSummary(recordSummary);
+        Duration = FormatFileDuration(samples.Count <= 1 ? 0 : (long)(samples.Count - 1) * MeasurementInterval);
+        HasWarnings = batteryWarningCount > 0 || recordSummary.FailedAcousticRecordCount > 0;
+        HasErrors = !IsCrcValid || recordSummary.CrcErrorCount > 0 || recordSummary.UnknownRecordCount > 0;
         ProgressPercent = 100;
         ProgressText = "100%";
         State = "Downloaded";
@@ -1991,6 +2010,37 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         State = "Error";
         ProgressText = message;
         RaisePresentationChanged();
+    }
+
+    private void ApplyRecordSummary(MemoryGaugeRecordSummary summary)
+    {
+        CrcErrorCount = summary.CrcErrorCount;
+        AcousticRecordCount = summary.AcousticRecordCount;
+        FailedAcousticRecordCount = summary.FailedAcousticRecordCount;
+        AcousticDiagnosticRecordCount = summary.AcousticDiagnosticRecordCount;
+        RawAcousticRecordCount = summary.RawAcousticRecordCount;
+        TimestampRecordCount = summary.TimestampRecordCount;
+        AuxiliaryRecordCount = summary.AuxiliaryRecordCount;
+        UnknownRecordCount = summary.UnknownRecordCount;
+        OnPropertyChanged(nameof(ExcludedRecordCount));
+        OnPropertyChanged(nameof(ContainsAcousticData));
+        OnPropertyChanged(nameof(ContainsRawAcousticData));
+        RaisePresentationChanged();
+    }
+
+    private void ResetRecordSummary()
+    {
+        CrcErrorCount = 0;
+        AcousticRecordCount = 0;
+        FailedAcousticRecordCount = 0;
+        AcousticDiagnosticRecordCount = 0;
+        RawAcousticRecordCount = 0;
+        TimestampRecordCount = 0;
+        AuxiliaryRecordCount = 0;
+        UnknownRecordCount = 0;
+        OnPropertyChanged(nameof(ExcludedRecordCount));
+        OnPropertyChanged(nameof(ContainsAcousticData));
+        OnPropertyChanged(nameof(ContainsRawAcousticData));
     }
 
     private static string FormatDuration(TimeSpan duration)

@@ -239,7 +239,7 @@ The main path should be:
 1. Select or auto-detect connection.
 2. Identify gauge.
 3. Show device readiness and memory summary.
-4. Show the file table with clear size indicators and a suggested file.
+4. Show the file table with clear size and interval information, newest file first.
 5. Choose the file/run to download.
 6. Download with clear progress, retry, and cancel handling.
 7. Show completion summary.
@@ -377,8 +377,8 @@ Current status:
 - Chart data is passed as packed numeric arrays and rendered with `SignalXY`; a 259,200-sample-per-series verification (three days at one-second intervals) rendered successfully during development.
 - Downloaded file rows can export legacy-compatible ASCII `.rec` files through the native save dialog. The export includes the device/sensor preamble and tab-separated calibrated P&T rows, and the app remembers the last record-export directory for subsequent saves.
 - Serial activity is exclusive: automatic/manual downloads take priority, then idle connected-state polling verifies the fast link every 500 ms. A failed three-attempt liveness transaction enters the disconnected state and resumes aggressive `57600`-baud wake polling.
-- Automatic downloads run from the highest file index to the lowest so the latest file becomes available first; the suggested marker affects only the operator's manual choice.
-- The file table starts in descending file-number order and supports ascending/descending sorting by file number or file size. It shows an immediate estimated duration derived from file bytes and measurement interval; `Suggested` marks the latest file whose estimate exceeds one hour.
+- Automatic downloads run from the highest file index to the lowest so the latest file becomes available first.
+- The file table starts in descending file-number order and supports ascending/descending sorting by file number or file size. It shows each file's measurement interval and an immediate calculated duration; duration remains stable during transfer and is corrected once after mixed records are classified.
 - A downloading file becomes graphable as soon as its first complete records are calibrated. The Review graph refreshes from incremental samples every two seconds and mirrors the file row's percentage and estimated time remaining; final completion replaces the preview with the fully parsed dataset.
 - Automatic and manual downloads can be cancelled explicitly. Cancellation pauses the automatic queue, preserves any partial graph for inspection, and exposes a clear retry action that restarts the selected file before automatic work resumes.
 - Review now provides a sample-snapped cursor with elapsed time, pressure, and temperature readout. Data quality reports file/data CRC errors and samples carrying battery warnings, using the same green/amber/red state language as the file table.
@@ -400,6 +400,10 @@ Current status:
 
 Deliverable: practical acoustic engineering tools.
 
+Current status:
+
+- Mixed acoustic-gauge memory files are safely classified by firmware record type. Only P&T records are calibrated and plotted; packet/bit-count data gets a ping indicator and raw ADC logging gets a scope-trace indicator. Multi-day files 6 and 14 have been validated on live acoustic hardware. See `docs/ACOUSTIC_GAUGE_VALIDATION.md`.
+
 ### Phase 7: Deployment And Future USB
 
 - Package Windows installer or self-contained application.
@@ -416,7 +420,7 @@ Current status:
 
 ## Immediate Next Steps
 
-1. Physically unplug/reconnect a gauge while the app is running, then repeat live validation with a representative multi-day file.
+1. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
 2. Confirm measurement-interval units, limits, file-boundary behaviour, and verified readback before making it editable.
 3. Add an exportable support bundle around the connection snapshot once the required communication-error fields are defined.
 4. Verify the self-contained package on a clean Windows field laptop and decide code-signing and installer requirements.
@@ -424,7 +428,7 @@ Current status:
 
 ## TODO Reminder
 
-- Test physical disconnect/reconnect and a representative multi-day job.
+- Test physical disconnect/reconnect with both gauge types.
 - Confirm the measurement-interval setting contract before enabling writes.
 - Test the self-contained archive on a clean field laptop.
 - Define the bounded communication-error fields needed by an Engineering support bundle.

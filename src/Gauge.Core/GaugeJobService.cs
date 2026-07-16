@@ -180,22 +180,34 @@ public sealed class GaugeSampleConverter
 
     public IReadOnlyList<CalibratedGaugeSample> Convert(
         ReadOnlySpan<byte> bytes,
-        int firstRecordIndex = 0)
+        int firstRecordIndex = 0,
+        int firstSampleIndex = -1)
     {
         if (firstRecordIndex < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(firstRecordIndex));
         }
 
+        if (firstSampleIndex < -1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(firstSampleIndex));
+        }
+
         var completeLength = bytes.Length / MemoryGaugeDataRecord.Length * MemoryGaugeDataRecord.Length;
         var startAddress = _fileStartAddress + checked((uint)(firstRecordIndex * MemoryGaugeDataRecord.Length));
         var records = MemoryGaugeDataRecord.ParseMany(startAddress, bytes[..completeLength], firstRecordIndex);
         var samples = new List<CalibratedGaugeSample>(records.Count * 2);
+        var sampleIndex = firstSampleIndex < 0 ? firstRecordIndex * 2 : firstSampleIndex;
 
         foreach (var record in records)
         {
-            samples.Add(BuildCalibratedSample(record, record.FirstSample));
-            samples.Add(BuildCalibratedSample(record, record.SecondSample));
+            if (!record.IsPressureTemperature)
+            {
+                continue;
+            }
+
+            samples.Add(BuildCalibratedSample(record, record.FirstSample, sampleIndex++));
+            samples.Add(BuildCalibratedSample(record, record.SecondSample, sampleIndex++));
         }
 
         return samples;
@@ -203,7 +215,8 @@ public sealed class GaugeSampleConverter
 
     private CalibratedGaugeSample BuildCalibratedSample(
         MemoryGaugeDataRecord record,
-        MemoryGaugeSample sample)
+        MemoryGaugeSample sample,
+        int sampleIndex)
     {
         var pressureCounts = sample.PressureCounts + _countBias;
         var temperatureCounts = sample.TemperatureCounts + _countBias;
@@ -215,10 +228,10 @@ public sealed class GaugeSampleConverter
             temperatureCounts,
             _calibration.PressurePsiFromFrequency(pressureFrequency, temperatureFrequency),
             _calibration.TemperatureCelsiusFromFrequency(temperatureFrequency),
-            sample.SampleIndex,
+            sampleIndex,
             record.Counter,
             record.Address,
-            checked((uint)(sample.SampleIndex * _measurementInterval)),
+            checked((uint)(sampleIndex * _measurementInterval)),
             temperatureFrequency,
             pressureFrequency,
             !record.IsCrcValid,

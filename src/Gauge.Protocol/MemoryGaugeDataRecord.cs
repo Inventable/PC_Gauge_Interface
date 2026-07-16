@@ -2,9 +2,18 @@ namespace Gauge.Protocol;
 
 public enum MemoryGaugeDataRecordType : byte
 {
+    LegacyPressureTemperature = 1,
     PressureTemperature = 2,
     LowBatteryPressureTemperature = 3,
-    VeryLowBatteryPressureTemperature = 4
+    VeryLowBatteryPressureTemperature = 4,
+    AcousticReceived = 5,
+    AcousticReceiveFailed = 6,
+    AcousticSent = 7,
+    Timestamp = 8,
+    AcousticBitCountsLow = 9,
+    AcousticBitCountsHigh = 10,
+    AcousticAdc = 11,
+    RecordTypeError = 0xFE
 }
 
 public sealed record MemoryGaugeSample(
@@ -25,6 +34,31 @@ public sealed record MemoryGaugeDataRecord(
     public const int Length = 16;
 
     public bool IsCrcValid => StoredCrc == ComputedCrc;
+
+    public bool IsPressureTemperature => RecordType is
+        MemoryGaugeDataRecordType.LegacyPressureTemperature or
+        MemoryGaugeDataRecordType.PressureTemperature or
+        MemoryGaugeDataRecordType.LowBatteryPressureTemperature or
+        MemoryGaugeDataRecordType.VeryLowBatteryPressureTemperature;
+
+    public bool IsAcoustic => RecordType is
+        MemoryGaugeDataRecordType.AcousticReceived or
+        MemoryGaugeDataRecordType.AcousticReceiveFailed or
+        MemoryGaugeDataRecordType.AcousticSent;
+
+    public bool IsKnownAuxiliary => RecordType is
+        MemoryGaugeDataRecordType.Timestamp or
+        MemoryGaugeDataRecordType.AcousticBitCountsLow or
+        MemoryGaugeDataRecordType.AcousticBitCountsHigh or
+        MemoryGaugeDataRecordType.AcousticAdc;
+
+    public bool IsAcousticDiagnostic => RecordType is
+        MemoryGaugeDataRecordType.AcousticBitCountsLow or
+        MemoryGaugeDataRecordType.AcousticBitCountsHigh;
+
+    public bool IsRawAcoustic => RecordType == MemoryGaugeDataRecordType.AcousticAdc;
+
+    public bool IsTimestamp => RecordType == MemoryGaugeDataRecordType.Timestamp;
 
     public byte BatteryStatus => RecordType switch
     {
@@ -82,5 +116,54 @@ public sealed record MemoryGaugeDataRecord(
         }
 
         return (uint)(bytes[0] | (bytes[1] << 8) | (bytes[2] << 16));
+    }
+}
+
+public sealed record MemoryGaugeRecordSummary(
+    int TotalRecordCount,
+    int PressureTemperatureRecordCount,
+    int AcousticRecordCount,
+    int FailedAcousticRecordCount,
+    int AcousticDiagnosticRecordCount,
+    int RawAcousticRecordCount,
+    int TimestampRecordCount,
+    int UnknownRecordCount,
+    int CrcErrorCount)
+{
+    public static MemoryGaugeRecordSummary Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+    public int ExcludedRecordCount => TotalRecordCount - PressureTemperatureRecordCount;
+
+    public int AuxiliaryRecordCount => AcousticDiagnosticRecordCount + RawAcousticRecordCount + TimestampRecordCount;
+
+    public static MemoryGaugeRecordSummary Analyze(ReadOnlySpan<byte> bytes, uint startAddress = 0)
+    {
+        var completeLength = bytes.Length / MemoryGaugeDataRecord.Length * MemoryGaugeDataRecord.Length;
+        var records = MemoryGaugeDataRecord.ParseMany(startAddress, bytes[..completeLength]);
+
+        return new MemoryGaugeRecordSummary(
+            records.Count,
+            records.Count(record => record.IsPressureTemperature),
+            records.Count(record => record.IsAcoustic),
+            records.Count(record => record.RecordType == MemoryGaugeDataRecordType.AcousticReceiveFailed),
+            records.Count(record => record.IsAcousticDiagnostic),
+            records.Count(record => record.IsRawAcoustic),
+            records.Count(record => record.IsTimestamp),
+            records.Count(record => !record.IsPressureTemperature && !record.IsAcoustic && !record.IsKnownAuxiliary),
+            records.Count(record => !record.IsCrcValid));
+    }
+
+    public MemoryGaugeRecordSummary Combine(MemoryGaugeRecordSummary other)
+    {
+        return new MemoryGaugeRecordSummary(
+            TotalRecordCount + other.TotalRecordCount,
+            PressureTemperatureRecordCount + other.PressureTemperatureRecordCount,
+            AcousticRecordCount + other.AcousticRecordCount,
+            FailedAcousticRecordCount + other.FailedAcousticRecordCount,
+            AcousticDiagnosticRecordCount + other.AcousticDiagnosticRecordCount,
+            RawAcousticRecordCount + other.RawAcousticRecordCount,
+            TimestampRecordCount + other.TimestampRecordCount,
+            UnknownRecordCount + other.UnknownRecordCount,
+            CrcErrorCount + other.CrcErrorCount);
     }
 }

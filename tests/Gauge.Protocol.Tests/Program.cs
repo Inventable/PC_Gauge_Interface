@@ -17,6 +17,7 @@ var tests = new (string Name, Action Run)[]
     ("Memory gauge file table ignores continuation records", MemoryGaugeFileTableIgnoresContinuationRecords),
     ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
     ("Memory gauge data records preserve incremental indexes", MemoryGaugeDataRecordsPreserveIncrementalIndexes),
+    ("Acoustic records are classified and excluded from P&T conversion", AcousticRecordsAreExcludedFromPressureTemperatureConversion),
     ("Sensor hex double coefficients parse", SensorHexDoubleCoefficientsParse),
     ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
     ("Quartz calibration converts counts to frequencies", QuartzCalibrationConvertsCountsToFrequencies),
@@ -229,6 +230,93 @@ static void MemoryGaugeDataRecordsPreserveIncrementalIndexes()
     AssertEqual(3, records[1].Index);
     AssertEqual(7, records[1].SecondSample.SampleIndex);
     AssertEqual((uint)0x4030, records[1].Address);
+}
+
+static void AcousticRecordsAreExcludedFromPressureTemperatureConversion()
+{
+    var bytes = new byte[MemoryGaugeDataRecord.Length * 6];
+    WriteDataRecord(bytes.AsSpan(0, MemoryGaugeDataRecord.Length), MemoryGaugeDataRecordType.PressureTemperature, 1000, 1001);
+    WriteDataRecord(bytes.AsSpan(MemoryGaugeDataRecord.Length, MemoryGaugeDataRecord.Length), MemoryGaugeDataRecordType.AcousticSent, 0, 0);
+    WriteDataRecord(bytes.AsSpan(MemoryGaugeDataRecord.Length * 2, MemoryGaugeDataRecord.Length), MemoryGaugeDataRecordType.AcousticReceiveFailed, 0, 0);
+    WriteDataRecord(bytes.AsSpan(MemoryGaugeDataRecord.Length * 3, MemoryGaugeDataRecord.Length), MemoryGaugeDataRecordType.AcousticBitCountsLow, 0, 0);
+    WriteDataRecord(bytes.AsSpan(MemoryGaugeDataRecord.Length * 4, MemoryGaugeDataRecord.Length), MemoryGaugeDataRecordType.AcousticAdc, 0, 0);
+    WriteDataRecord(bytes.AsSpan(MemoryGaugeDataRecord.Length * 5, MemoryGaugeDataRecord.Length), MemoryGaugeDataRecordType.PressureTemperature, 1002, 1003);
+
+    var summary = MemoryGaugeRecordSummary.Analyze(bytes, 0x4000);
+    AssertEqual(6, summary.TotalRecordCount);
+    AssertEqual(2, summary.PressureTemperatureRecordCount);
+    AssertEqual(2, summary.AcousticRecordCount);
+    AssertEqual(1, summary.FailedAcousticRecordCount);
+    AssertEqual(1, summary.AcousticDiagnosticRecordCount);
+    AssertEqual(1, summary.RawAcousticRecordCount);
+    AssertEqual(4, summary.ExcludedRecordCount);
+    AssertEqual(0, summary.CrcErrorCount);
+
+    var converter = new GaugeSampleConverter(0x4000, 3, BuildFlatCalibrationBundle());
+    var samples = converter.Convert(bytes);
+    AssertEqual(4, samples.Count);
+    AssertEqual(0, samples[0].Sequence);
+    AssertEqual(1, samples[1].Sequence);
+    AssertEqual((uint)6, samples[2].Timestamp);
+    AssertEqual((uint)9, samples[3].Timestamp);
+    AssertEqual((uint)0x4050, samples[2].Address);
+
+    var firstBatch = converter.Convert(bytes.AsSpan(0, MemoryGaugeDataRecord.Length * 2), 0, 0);
+    var secondBatch = converter.Convert(bytes.AsSpan(MemoryGaugeDataRecord.Length * 2), 2, firstBatch.Count);
+    AssertEqual(2, firstBatch.Count);
+    AssertEqual(2, secondBatch.Count);
+    AssertEqual(2, secondBatch[0].Sequence);
+    AssertEqual((uint)6, secondBatch[0].Timestamp);
+}
+
+static SensorCalibrationBundle BuildFlatCalibrationBundle()
+{
+    double[][] pressureRows =
+    [
+        [1, 2],
+        [1, 2],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0]
+    ];
+    double[][] temperatureRows =
+    [
+        [1, 2],
+        [0]
+    ];
+
+    return new SensorCalibrationBundle(
+        [],
+        "S: RefClk 0 Id 1 Bias 0 PStartupMs 0 PLLClk 1000\r\n=\r\n"u8.ToArray(),
+        BuildSensorCoefficientPayload(pressureRows),
+        BuildSensorCoefficientPayload(temperatureRows));
+}
+
+static byte[] BuildSensorCoefficientPayload(IReadOnlyList<IReadOnlyList<double>> rows)
+{
+    var text = string.Join("\r\n", rows.Select(row =>
+        string.Join(',', row.Select(value => BitConverter.DoubleToInt64Bits(value).ToString("X16"))))) + "\r\n=\r\n";
+    return Encoding.ASCII.GetBytes(text);
+}
+
+static void WriteDataRecord(Span<byte> bytes, MemoryGaugeDataRecordType type, uint firstCounts, uint secondCounts)
+{
+    bytes.Clear();
+    bytes[0] = (byte)type;
+    WriteUInt24LittleEndian(bytes[1..4], firstCounts);
+    WriteUInt24LittleEndian(bytes[4..7], firstCounts);
+    WriteUInt24LittleEndian(bytes[7..10], secondCounts);
+    WriteUInt24LittleEndian(bytes[10..13], secondCounts);
+    bytes[15] = Crc8.Compute(bytes[..15]);
+}
+
+static void WriteUInt24LittleEndian(Span<byte> bytes, uint value)
+{
+    bytes[0] = (byte)value;
+    bytes[1] = (byte)(value >> 8);
+    bytes[2] = (byte)(value >> 16);
 }
 
 static void WriteFileRecord(Span<byte> bytes, uint address, MemoryGaugeFileRecordType type)
