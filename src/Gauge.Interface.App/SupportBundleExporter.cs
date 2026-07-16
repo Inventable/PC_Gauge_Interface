@@ -61,7 +61,17 @@ internal sealed record GaugeSupportBundle(
     IReadOnlyList<SupportFileSnapshot> Files,
     CommunicationSessionSummary CommunicationSummary,
     IReadOnlyList<CommunicationEventLogEntry> CommunicationEvents,
+    SupportFirmwareSnapshot Firmware,
     string RawIdentity);
+
+internal sealed record SupportFirmwareSnapshot(
+    string ImageFileName,
+    string? ImageSha256,
+    string Status,
+    double ProgressPercent,
+    string Loader,
+    bool IsUpdating,
+    bool IsRecoveryRequired);
 
 internal sealed record SupportConnectionSnapshot(
     string Port,

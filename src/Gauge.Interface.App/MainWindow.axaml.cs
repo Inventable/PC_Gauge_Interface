@@ -14,6 +14,14 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
     }
 
+    private void Window_Closing(object? sender, WindowClosingEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel { IsFirmwareUpdating: true })
+        {
+            e.Cancel = true;
+        }
+    }
+
     private void Window_KeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.Escape || DataContext is not MainWindowViewModel viewModel)
@@ -273,6 +281,46 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             viewModel.SupportBundleExportFailed(ex.Message);
+        }
+    }
+
+    private async void ChooseFirmware_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel || !viewModel.CanChooseFirmware)
+        {
+            return;
+        }
+
+        try
+        {
+            var startDirectory = string.IsNullOrWhiteSpace(viewModel.LastFirmwareDirectory)
+                ? viewModel.OutputDirectory
+                : viewModel.LastFirmwareDirectory;
+            var startFolder = string.IsNullOrWhiteSpace(startDirectory)
+                ? null
+                : await StorageProvider.TryGetFolderFromPathAsync(startDirectory);
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                AllowMultiple = false,
+                Title = "Select Offset production firmware",
+                SuggestedStartLocation = startFolder,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("PIC firmware image")
+                    {
+                        Patterns = ["*.hex"]
+                    }
+                ]
+            });
+
+            if (files.Count > 0)
+            {
+                viewModel.SelectFirmwareImage(files[0].Path.LocalPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            viewModel.FirmwareImageSelectionFailed(ex.Message);
         }
     }
 

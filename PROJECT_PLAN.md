@@ -421,10 +421,11 @@ Current status:
 
 - A repeatable `win-x64` self-contained publish script and zipped engineering distribution are available. The packaged executable has connected to live gauge hardware without the development runtime; clean-machine verification, code signing, installer selection, and update policy remain outstanding.
 - The latest archive was rebuilt after support diagnostics were added and its packaged executable connected to the live acoustic gauge on COM5. Workshop pilots should continue with versioned self-contained ZIPs; routine field release should use Northstar signing, with a managed per-machine MSI deferred until field-image requirements are confirmed. Automatic updates remain deferred until offline and rollback ownership is defined.
+- Engineering Mode now integrates the recovery-first memory-gauge firmware updater: production-offset image validation, device-serial confirmation, exclusive serial ownership, live progress, loader-only recovery state, post-reset identity verification, and firmware diagnostics in support bundles. The connected memory gauge and known production image were rechecked non-destructively after integration; staged interruption tests remain the release gate.
 
 ## Immediate Next Steps
 
-1. Run staged bootloader interruption/recovery tests with hardware-programmer fallback, then package approved firmware with signed manifests. The first complete live update and application recovery passed at `115200`. See `docs/BOOTLOADER.md`.
+1. Run staged bootloader interruption/recovery tests through the new Engineering Mode control with hardware-programmer fallback, then package approved firmware with signed manifests. The first complete live update and application recovery passed at `115200`. See `docs/BOOTLOADER.md`.
 2. Define the firmware changes needed for safe editable measurement intervals: sensor-specific limits, clean file boundary, immediate application, and failure recovery.
 3. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
 4. Verify the self-contained package on a clean Windows field laptop, confirm corporate/FTDI prerequisites, and start Northstar code-signing procurement before routine field distribution.

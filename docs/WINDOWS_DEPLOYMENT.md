@@ -34,6 +34,8 @@ Before calling a build field-ready:
 4. Disconnect and reconnect the gauge while the app remains open.
 5. Confirm Windows security policy, antivirus, and driver installation requirements on the field laptop image.
 
+Firmware Update is an Engineering Mode pilot feature. Do not approve it for routine field deployment until the erase, middle-write, pre-vector, and start-vector interruption/recovery cases in `docs/BOOTLOADER.md` have passed with hardware-programmer fallback available.
+
 Code-signing procurement and installer/update implementation remain deployment tasks. The self-contained archive is the engineering-pilot distribution format.
 
 ## Latest Local Preflight

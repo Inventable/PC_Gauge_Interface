@@ -24,6 +24,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private const int WakeScanTimeoutMs = 30000;
     private const int BackgroundWakeScanTimeoutMs = 1500;
     private const int ConnectedPollTransactionTimeoutMs = 250;
+    private const int BootloaderBaud = 115200;
+    private const uint MemoryGaugeDeviceType = 100230;
+    private const ushort Pic18F26K80DeviceId = 0x6126;
     private static readonly TimeSpan LiveChartRefreshInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AppPollInterval = TimeSpan.FromMilliseconds(100);
@@ -86,6 +89,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private DateTime _nextConnectedPollUtc = DateTime.MinValue;
     private FileListSortColumn _fileSortColumn = FileListSortColumn.FileNumber;
     private bool _fileSortDescending = true;
+    private BootloaderApplicationImage? _firmwareImage;
+    private FirmwareAction _pendingFirmwareAction;
+    private string _firmwareImageName = "No image selected";
+    private string _firmwareImageSummary = "Select an Offset production HEX file";
+    private string _firmwareStatus = "Ready";
+    private string _firmwareConfirmationText = string.Empty;
+    private string _firmwareLoaderDetails = "Not connected";
+    private double _firmwareProgressPercent;
+    private bool _isFirmwareUpdating;
+    private bool _isFirmwareConfirmationVisible;
+    private bool _isFirmwareRecoveryRequired;
 
     public MainWindowViewModel()
     {
@@ -101,8 +115,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OpenSettingsCommand = new RelayCommand(OpenSettingsAsync);
         OpenGaugeSettingsCommand = new RelayCommand(OpenGaugeSettingsAsync);
         OpenEngineeringModeCommand = new RelayCommand(OpenEngineeringModeAsync);
-        CloseSettingsOverlayCommand = new RelayCommand(CloseSettingsOverlayAsync);
+        CloseSettingsOverlayCommand = new RelayCommand(CloseSettingsOverlayAsync, () => !IsFirmwareUpdating);
         ToggleDeviceDetailsCommand = new RelayCommand(ToggleDeviceDetailsAsync);
+        BeginFirmwareProgramCommand = new RelayCommand(BeginFirmwareProgramAsync, CanBeginFirmwareProgram);
+        BeginFirmwareRecoveryCommand = new RelayCommand(BeginFirmwareRecoveryAsync, CanBeginFirmwareRecovery);
+        ConfirmFirmwareActionCommand = new RelayCommand(ConfirmFirmwareActionAsync, CanConfirmFirmwareAction);
+        CancelFirmwareConfirmationCommand = new RelayCommand(CancelFirmwareConfirmationAsync, () => !IsFirmwareUpdating);
         RefreshPorts();
         _isInitialising = false;
         _ = PollGaugeAsync(_pollingCancellation.Token);
@@ -147,6 +165,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public ICommand CloseSettingsOverlayCommand { get; }
 
     public ICommand ToggleDeviceDetailsCommand { get; }
+
+    public ICommand BeginFirmwareProgramCommand { get; }
+
+    public ICommand BeginFirmwareRecoveryCommand { get; }
+
+    public ICommand ConfirmFirmwareActionCommand { get; }
+
+    public ICommand CancelFirmwareConfirmationCommand { get; }
 
     public string SelectedPort
     {
@@ -195,6 +221,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public string LastRecordExportDirectory => _settings.LastRecordExportDirectory;
 
     public string LastSupportBundleDirectory => _settings.LastSupportBundleDirectory;
+
+    public string LastFirmwareDirectory => _settings.LastFirmwareDirectory;
 
     public string JobName
     {
@@ -367,6 +395,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             {
                 OnPropertyChanged(nameof(IsDisconnectedVisible));
                 OnPropertyChanged(nameof(IsFileTableVisible));
+                RaiseFirmwareCommandStates();
             }
         }
     }
@@ -537,6 +566,112 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
+    public string FirmwareImageName
+    {
+        get => _firmwareImageName;
+        private set => SetField(ref _firmwareImageName, value);
+    }
+
+    public string FirmwareImageSummary
+    {
+        get => _firmwareImageSummary;
+        private set => SetField(ref _firmwareImageSummary, value);
+    }
+
+    public string FirmwareStatus
+    {
+        get => _firmwareStatus;
+        private set
+        {
+            if (SetField(ref _firmwareStatus, value))
+            {
+                OnPropertyChanged(nameof(FirmwareStatusBrush));
+            }
+        }
+    }
+
+    public string FirmwareLoaderDetails
+    {
+        get => _firmwareLoaderDetails;
+        private set => SetField(ref _firmwareLoaderDetails, value);
+    }
+
+    public double FirmwareProgressPercent
+    {
+        get => _firmwareProgressPercent;
+        private set => SetField(ref _firmwareProgressPercent, value);
+    }
+
+    public string FirmwareConfirmationText
+    {
+        get => _firmwareConfirmationText;
+        set
+        {
+            if (SetField(ref _firmwareConfirmationText, value))
+            {
+                RaiseFirmwareCommandStates();
+            }
+        }
+    }
+
+    public bool IsFirmwareUpdating
+    {
+        get => _isFirmwareUpdating;
+        private set
+        {
+            if (SetField(ref _isFirmwareUpdating, value))
+            {
+                OnPropertyChanged(nameof(CanChooseFirmware));
+                RaiseCommandStates();
+            }
+        }
+    }
+
+    public bool IsFirmwareConfirmationVisible
+    {
+        get => _isFirmwareConfirmationVisible;
+        private set => SetField(ref _isFirmwareConfirmationVisible, value);
+    }
+
+    public bool IsFirmwareRecoveryRequired
+    {
+        get => _isFirmwareRecoveryRequired;
+        private set
+        {
+            if (SetField(ref _isFirmwareRecoveryRequired, value))
+            {
+                OnPropertyChanged(nameof(IsFirmwareNormalActionVisible));
+                OnPropertyChanged(nameof(IsFirmwareRecoveryActionVisible));
+                RaiseFirmwareCommandStates();
+            }
+        }
+    }
+
+    public bool IsFirmwareImageSelected => _firmwareImage is not null;
+
+    public bool CanChooseFirmware => !IsFirmwareUpdating;
+
+    public bool IsFirmwareNormalActionVisible => !IsFirmwareRecoveryRequired;
+
+    public bool IsFirmwareRecoveryActionVisible => IsFirmwareRecoveryRequired;
+
+    public string FirmwareConfirmationPrompt => _pendingFirmwareAction == FirmwareAction.Recover
+        ? "Type RECOVER to rewrite the application while the gauge remains in bootloader mode."
+        : $"Type device serial {GaugeDeviceSerial} to confirm this firmware update.";
+
+    public string FirmwareConfirmationAction => _pendingFirmwareAction == FirmwareAction.Recover
+        ? "Recover Firmware"
+        : "Program Firmware";
+
+    public IBrush FirmwareStatusBrush => IsFirmwareRecoveryRequired
+        ? new SolidColorBrush(Color.Parse("#D97706"))
+        : FirmwareStatus.StartsWith("Complete", StringComparison.OrdinalIgnoreCase)
+            ? new SolidColorBrush(Color.Parse("#2DA55D"))
+            : FirmwareStatus.StartsWith("Rejected", StringComparison.OrdinalIgnoreCase)
+                || FirmwareStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)
+                ? new SolidColorBrush(Color.Parse("#CE0E2D"))
+                : new SolidColorBrush(Color.Parse("#5D5D66"));
+
     public bool IgnoreSmallFiles
     {
         get => _ignoreSmallFiles;
@@ -630,6 +765,320 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         return Task.CompletedTask;
     }
 
+    public void SelectFirmwareImage(string path)
+    {
+        FirmwareProgressPercent = 0;
+        FirmwareLoaderDetails = "Not connected";
+        FirmwareImageName = Path.GetFileName(path);
+
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            _settings = _settings with { LastFirmwareDirectory = directory };
+            SaveSettings();
+        }
+
+        try
+        {
+            var image = BootloaderApplicationImage.LoadOffsetProduction(path);
+            _firmwareImage = image;
+            FirmwareImageSummary =
+                $"0x{BootloaderApplicationImage.ApplicationStart:X4}-0x{image.HighestProgramAddress:X4} | " +
+                $"{image.DataRows.Count + 1:N0} programmed rows | SHA-256 {image.Sha256[..12]}...";
+            FirmwareStatus = "Validated Offset production image";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or InvalidDataException)
+        {
+            _firmwareImage = null;
+            FirmwareImageSummary = ex.Message;
+            FirmwareStatus = "Rejected firmware image";
+        }
+
+        OnPropertyChanged(nameof(IsFirmwareImageSelected));
+        RaiseFirmwareCommandStates();
+    }
+
+    public void FirmwareImageSelectionFailed(string message)
+    {
+        FirmwareStatus = $"Failed to select image: {message}";
+    }
+
+    private Task BeginFirmwareProgramAsync()
+    {
+        _pendingFirmwareAction = FirmwareAction.Program;
+        ShowFirmwareConfirmation();
+        return Task.CompletedTask;
+    }
+
+    private Task BeginFirmwareRecoveryAsync()
+    {
+        _pendingFirmwareAction = FirmwareAction.Recover;
+        ShowFirmwareConfirmation();
+        return Task.CompletedTask;
+    }
+
+    private void ShowFirmwareConfirmation()
+    {
+        FirmwareConfirmationText = string.Empty;
+        IsFirmwareConfirmationVisible = true;
+        OnPropertyChanged(nameof(FirmwareConfirmationPrompt));
+        OnPropertyChanged(nameof(FirmwareConfirmationAction));
+        RaiseFirmwareCommandStates();
+    }
+
+    private Task CancelFirmwareConfirmationAsync()
+    {
+        IsFirmwareConfirmationVisible = false;
+        FirmwareConfirmationText = string.Empty;
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmFirmwareActionAsync()
+    {
+        var recoveryMode = _pendingFirmwareAction == FirmwareAction.Recover;
+        IsFirmwareConfirmationVisible = false;
+        FirmwareConfirmationText = string.Empty;
+        await ProgramFirmwareAsync(recoveryMode).ConfigureAwait(true);
+    }
+
+    private async Task ProgramFirmwareAsync(bool recoveryMode)
+    {
+        var image = _firmwareImage;
+        if (image is null || string.IsNullOrWhiteSpace(SelectedPort))
+        {
+            FirmwareStatus = "Failed: select a validated firmware image and serial port";
+            return;
+        }
+
+        var expectedSerial = recoveryMode ? null : _connectedDevice?.DeviceSerial;
+        var enteredBootloader = recoveryMode || IsFirmwareRecoveryRequired;
+        var updateSucceeded = false;
+
+        CancelBackgroundDownloads();
+        _manualDownloadCancellation?.Cancel();
+        _autoDownloadsPaused = true;
+        IsFirmwareUpdating = true;
+        IsBusy = true;
+        FirmwareProgressPercent = 0;
+        FirmwareLoaderDetails = "Discovering loader";
+        FirmwareStatus = recoveryMode ? "Starting firmware recovery" : "Verifying connected gauge";
+
+        await _serialGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            if (!recoveryMode)
+            {
+                if (!expectedSerial.HasValue)
+                {
+                    throw new InvalidOperationException("No connected gauge identity is available.");
+                }
+
+                await using (var connection = await OpenVerifiedConnectionAsync(preferFast: true).ConfigureAwait(true))
+                {
+                    var device = DecodeDevice(connection.Identity.Payload)
+                        ?? throw new InvalidDataException("The connected gauge returned an incomplete identity.");
+                    if (device.DeviceType != MemoryGaugeDeviceType)
+                    {
+                        throw new InvalidOperationException(
+                            $"Device type {device.DeviceType} is not the supported memory gauge type {MemoryGaugeDeviceType}.");
+                    }
+
+                    if (device.DeviceSerial != expectedSerial.Value)
+                    {
+                        throw new InvalidOperationException(
+                            $"Connected serial {device.DeviceSerial} does not match confirmed serial {expectedSerial.Value}.");
+                    }
+                }
+
+                FirmwareStatus = "Entering bootloader";
+                await EnterBootloaderOnceAsync(SelectedPort, FastBaud).ConfigureAwait(true);
+                enteredBootloader = true;
+                IsGaugeConnected = false;
+                ConnectionStatus = "Bootloader";
+                ConnectionBrush = new SolidColorBrush(Color.Parse("#D97706"));
+                await Task.Delay(TimeSpan.FromMilliseconds(250)).ConfigureAwait(true);
+            }
+
+            FirmwareStatus = "Reading bootloader identity";
+            FirmwareUpdateResult result;
+            BootloaderVersion version;
+            await using (var bootloader = new SerialBootloaderClient(SelectedPort, BootloaderBaud, timeoutMs: 2000))
+            {
+                await bootloader.OpenAsync().ConfigureAwait(true);
+                version = await bootloader.ReadVersionAsync(maximumAttempts: 3).ConfigureAwait(true);
+                FirmwareLoaderDetails =
+                    $"Loader {version.Major}.{version.Minor} | PIC ID 0x{version.DeviceId:X4} | {BootloaderBaud:N0} baud";
+                if (version.DeviceId != Pic18F26K80DeviceId)
+                {
+                    throw new InvalidOperationException(
+                        $"Loader device ID 0x{version.DeviceId:X4} does not match PIC18F26K80 ID 0x{Pic18F26K80DeviceId:X4}.");
+                }
+
+                var progress = new Progress<FirmwareUpdateProgress>(UpdateFirmwareProgress);
+                var updater = new GaugeFirmwareUpdater(bootloader, version);
+                result = await updater.ProgramAsync(image, progress, CancellationToken.None).ConfigureAwait(true);
+
+                FirmwareStatus = "Resetting to verified application";
+                try
+                {
+                    await bootloader.ResetToApplicationAsync(CancellationToken.None).ConfigureAwait(true);
+                }
+                catch (Exception ex) when (IsExpectedUiFailure(ex))
+                {
+                    FirmwareStatus = $"Reset acknowledgement missed; checking application ({ex.Message})";
+                }
+            }
+
+            FirmwareStatus = "Reacquiring application at 57,600 baud";
+            var restoredIdentity = await WaitForIdentifyAsync(
+                SelectedPort,
+                WakeBaud,
+                timeoutMs: 5000,
+                intervalMs: WakePollIntervalMs,
+                transactionTimeoutMs: 1000).ConfigureAwait(true);
+            var restoredDevice = restoredIdentity is null
+                ? null
+                : DecodeDevice(restoredIdentity.Payload);
+            if (restoredDevice is null)
+            {
+                throw new IOException("The programmed application was not reacquired after reset.");
+            }
+
+            if (restoredDevice.DeviceType != MemoryGaugeDeviceType
+                || (expectedSerial.HasValue && restoredDevice.DeviceSerial != expectedSerial.Value))
+            {
+                throw new InvalidDataException("The application restarted with an unexpected device identity.");
+            }
+
+            _connectedDevice = restoredDevice;
+            DeviceSummary = DescribeGauge(restoredDevice);
+            DeviceDetails = BuildDeviceDetails(restoredDevice, restoredIdentity!.Payload);
+            IsFirmwareRecoveryRequired = false;
+            IsGaugeConnected = true;
+            ConnectionStatus = "Connected";
+            ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
+            FirmwareProgressPercent = 100;
+            FirmwareStatus = $"Complete | {result.ProgrammedRows:N0} rows programmed and verified";
+            Status = $"Firmware updated on device {restoredDevice.DeviceSerial}";
+            RaiseDeviceInformationChanged();
+            updateSucceeded = true;
+        }
+        catch (Exception ex) when (IsExpectedUiFailure(ex) || ex is FormatException)
+        {
+            if (enteredBootloader)
+            {
+                EnterFirmwareRecoveryState(ex.Message);
+            }
+            else
+            {
+                FirmwareStatus = $"Failed before bootloader entry: {ex.Message}";
+                Status = "Firmware update did not start";
+            }
+        }
+        finally
+        {
+            _serialGate.Release();
+            IsBusy = false;
+            IsFirmwareUpdating = false;
+        }
+
+        if (updateSucceeded)
+        {
+            _autoDownloadsPaused = false;
+            await Task.Delay(FastVerifyDelay).ConfigureAwait(true);
+            await ReadFilesAsync().ConfigureAwait(true);
+            return;
+        }
+
+        if (!IsFirmwareRecoveryRequired && IsGaugeConnected)
+        {
+            _autoDownloadsPaused = false;
+            StartBackgroundDownloads();
+        }
+    }
+
+    private async Task EnterBootloaderOnceAsync(string portName, int baudRate)
+    {
+        var options = new SerialGaugeTransportOptions(
+            portName,
+            baudRate,
+            ReadTimeoutMs: 1000,
+            WriteTimeoutMs: 1000,
+            MaxAttempts: 1,
+            EventSink: RecordCommunicationEvent);
+        await using var transport = new SerialGaugeTransport(options);
+        await transport.OpenAsync().ConfigureAwait(false);
+        var response = await transport
+            .TransactAsync(GaugeFrame.Create(GaugeCommand.Bootload), CancellationToken.None)
+            .ConfigureAwait(false);
+        if (response.Command != GaugeCommand.Bootload
+            || response.Payload is not [BootloaderProtocolConstants.CommandSuccess])
+        {
+            throw new GaugeProtocolException("Gauge rejected the bootloader-entry command.");
+        }
+    }
+
+    private void UpdateFirmwareProgress(FirmwareUpdateProgress progress)
+    {
+        FirmwareProgressPercent = progress.TotalOperations <= 0
+            ? 0
+            : Math.Clamp(progress.CompletedOperations * 100.0 / progress.TotalOperations, 0, 100);
+        var phase = progress.Phase switch
+        {
+            FirmwareUpdatePhase.CommittingStartVector => "Committing application",
+            FirmwareUpdatePhase.Complete => "Verifying complete",
+            _ => progress.Phase.ToString()
+        };
+        FirmwareStatus = $"{phase} | 0x{progress.Address:X4} | {FirmwareProgressPercent:F0}%";
+    }
+
+    private void EnterFirmwareRecoveryState(string message)
+    {
+        CancelBackgroundDownloads();
+        _autoDownloadsPaused = true;
+        IsFirmwareRecoveryRequired = true;
+        IsGaugeConnected = false;
+        IsGraphVisible = false;
+        ConnectionStatus = "Bootloader";
+        ConnectionBrush = new SolidColorBrush(Color.Parse("#D97706"));
+        DeviceSummary = _connectedDevice is null
+            ? "Gauge in bootloader"
+            : $"Bootloader | Device {_connectedDevice.DeviceSerial}";
+        FirmwareStatus = $"Recovery required: {message}";
+        Status = "Gauge remains in bootloader mode";
+    }
+
+    private bool CanBeginFirmwareProgram()
+    {
+        return !IsBusy
+            && !IsFirmwareUpdating
+            && !IsFirmwareRecoveryRequired
+            && _firmwareImage is not null
+            && _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+    }
+
+    private bool CanBeginFirmwareRecovery()
+    {
+        return !IsBusy
+            && !IsFirmwareUpdating
+            && IsFirmwareRecoveryRequired
+            && _firmwareImage is not null
+            && !string.IsNullOrWhiteSpace(SelectedPort);
+    }
+
+    private bool CanConfirmFirmwareAction()
+    {
+        if (!IsFirmwareConfirmationVisible || IsFirmwareUpdating)
+        {
+            return false;
+        }
+
+        var expected = _pendingFirmwareAction == FirmwareAction.Recover
+            ? "RECOVER"
+            : GaugeDeviceSerial;
+        return FirmwareConfirmationText.Equals(expected, StringComparison.Ordinal);
+    }
+
     private Task CloseSettingsOverlayAsync()
     {
         CloseSettingsOverlay();
@@ -638,6 +1087,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void CloseSettingsOverlay()
     {
+        if (IsFirmwareUpdating)
+        {
+            return;
+        }
+
+        IsFirmwareConfirmationVisible = false;
+        FirmwareConfirmationText = string.Empty;
         IsGaugeSettingsVisible = false;
         IsEngineeringModeVisible = false;
     }
@@ -736,6 +1192,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             files,
             _communicationEvents.Summary(),
             _communicationEvents.Snapshot(),
+            new SupportFirmwareSnapshot(
+                FirmwareImageName,
+                _firmwareImage?.Sha256,
+                FirmwareStatus,
+                FirmwareProgressPercent,
+                FirmwareLoaderDetails,
+                IsFirmwareUpdating,
+                IsFirmwareRecoveryRequired),
             EngineeringDeviceDetails);
 
         SupportBundleExporter.Write(output, diagnostics, _calibration);
@@ -992,7 +1456,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             try
             {
                 await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(true);
-                if (!IsPortConfigured || IsBusy || string.IsNullOrWhiteSpace(SelectedPort))
+                if (!IsPortConfigured
+                    || IsBusy
+                    || IsFirmwareRecoveryRequired
+                    || string.IsNullOrWhiteSpace(SelectedPort))
                 {
                     continue;
                 }
@@ -1743,6 +2210,36 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             showGraph.RaiseCanExecuteChanged();
         }
+
+        if (CloseSettingsOverlayCommand is RelayCommand closeSettings)
+        {
+            closeSettings.RaiseCanExecuteChanged();
+        }
+
+        RaiseFirmwareCommandStates();
+    }
+
+    private void RaiseFirmwareCommandStates()
+    {
+        if (BeginFirmwareProgramCommand is RelayCommand program)
+        {
+            program.RaiseCanExecuteChanged();
+        }
+
+        if (BeginFirmwareRecoveryCommand is RelayCommand recover)
+        {
+            recover.RaiseCanExecuteChanged();
+        }
+
+        if (ConfirmFirmwareActionCommand is RelayCommand confirm)
+        {
+            confirm.RaiseCanExecuteChanged();
+        }
+
+        if (CancelFirmwareConfirmationCommand is RelayCommand cancel)
+        {
+            cancel.RaiseCanExecuteChanged();
+        }
     }
 
     private void UpdateSelectedFileActions()
@@ -1766,6 +2263,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EngineeringFileTable));
         OnPropertyChanged(nameof(EngineeringCalibration));
         OnPropertyChanged(nameof(EngineeringDeviceDetails));
+        RaiseFirmwareCommandStates();
         RaiseEngineeringCommunicationChanged();
     }
 
@@ -1879,7 +2377,14 @@ public sealed record AppSettings(
     string LastPort = "",
     string OutputDirectory = "",
     string LastRecordExportDirectory = "",
-    string LastSupportBundleDirectory = "");
+    string LastSupportBundleDirectory = "",
+    string LastFirmwareDirectory = "");
+
+internal enum FirmwareAction
+{
+    Program,
+    Recover
+}
 
 public enum FileListSortColumn
 {

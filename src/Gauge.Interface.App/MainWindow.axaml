@@ -8,6 +8,7 @@
         Height="740"
         MinWidth="940"
         MinHeight="620"
+        Closing="Window_Closing"
         KeyDown="Window_KeyDown"
         Background="{StaticResource BrandBackgroundBrush}">
   <Window.Styles>
@@ -402,7 +403,7 @@
         </Grid>
       </Border>
 
-      <Border IsVisible="{Binding IsEngineeringModeVisible}" Background="#FFFFFF" BorderBrush="{StaticResource BrandBorderBrush}" BorderThickness="1" CornerRadius="6" Width="760" Padding="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+      <Border IsVisible="{Binding IsEngineeringModeVisible}" Background="#FFFFFF" BorderBrush="{StaticResource BrandBorderBrush}" BorderThickness="1" CornerRadius="6" Width="880" Height="560" Padding="24" HorizontalAlignment="Center" VerticalAlignment="Center">
         <Grid RowDefinitions="Auto,*" RowSpacing="18">
           <Grid ColumnDefinitions="*,Auto">
             <StackPanel Spacing="2">
@@ -414,59 +415,101 @@
                         Data="M18.3,5.71L16.89,4.29L12,9.17L7.11,4.29L5.7,5.71L10.59,10.59L5.7,15.48L7.11,16.89L12,12L16.89,16.89L18.3,15.48L13.41,10.59L18.3,5.71Z" />
             </Button>
           </Grid>
-          <StackPanel Grid.Row="1" Spacing="14">
-            <StackPanel Spacing="4">
-              <TextBlock Classes="label" Text="Serial Transport" />
-              <TextBlock Text="{Binding EngineeringTransport}" Foreground="{StaticResource BrandTextBrush}" />
-            </StackPanel>
-            <Grid ColumnDefinitions="*,*" ColumnSpacing="18">
-              <StackPanel Spacing="4">
-                <TextBlock Classes="label" Text="File Table" />
-                <TextBlock Text="{Binding EngineeringFileTable}" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" />
-              </StackPanel>
-              <StackPanel Grid.Column="1" Spacing="4">
-                <TextBlock Classes="label" Text="Sensor Calibration" />
-                <TextBlock Text="{Binding EngineeringCalibration}" Foreground="{StaticResource BrandTextBrush}" />
-              </StackPanel>
-            </Grid>
-            <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
-            <Grid ColumnDefinitions="0.9*,1.1*" ColumnSpacing="28">
-              <StackPanel Spacing="5">
-                <TextBlock Classes="label" Text="Device Identity" />
-                <TextBlock Text="{Binding EngineeringDeviceDetails}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" FontSize="13" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" />
-              </StackPanel>
-              <StackPanel Grid.Column="1" Spacing="6">
-                <Grid ColumnDefinitions="*,Auto">
-                  <TextBlock Classes="label" Text="Communication Integrity" />
-                  <TextBlock Grid.Column="1" Text="{Binding EngineeringCommunicationHealth}" FontWeight="SemiBold" Foreground="{Binding EngineeringCommunicationBrush}" />
-                </Grid>
-                <TextBlock Text="{Binding EngineeringCommunicationSession}" FontSize="13" Foreground="{StaticResource BrandMutedBrush}" />
-                <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="5">
-                  <TextBlock Classes="label" Text="Transactions" />
-                  <TextBlock Grid.Column="1" Text="{Binding EngineeringCommunicationTransactions}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{StaticResource BrandTextBrush}" />
-                  <TextBlock Grid.Column="2" Classes="label" Text="Retries" />
-                  <TextBlock Grid.Column="3" Text="{Binding EngineeringCommunicationRetries}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{StaticResource BrandTextBrush}" />
-                  <TextBlock Grid.Row="1" Classes="label" Text="CRC errors" />
-                  <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding EngineeringCommunicationCrcErrors}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{StaticResource BrandTextBrush}" />
-                  <TextBlock Grid.Row="1" Grid.Column="2" Classes="label" Text="Recovered" />
-                  <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding EngineeringCommunicationRecovered}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{StaticResource BrandTextBrush}" />
-                  <TextBlock Grid.Row="2" Classes="label" Text="Failures" />
-                  <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding EngineeringCommunicationFailures}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{Binding EngineeringCommunicationBrush}" />
-                </Grid>
-                <StackPanel Spacing="2">
-                  <TextBlock Classes="label" Text="Last issue" />
-                  <TextBlock Text="{Binding EngineeringCommunicationLastIssue}" FontSize="12" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" MaxLines="2" />
+          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="14" Margin="0,0,10,0">
+              <Grid ColumnDefinitions="1.2*,0.8*,0.8*" ColumnSpacing="18">
+                <StackPanel Spacing="4">
+                  <TextBlock Classes="label" Text="Serial Transport" />
+                  <TextBlock Text="{Binding EngineeringTransport}" Foreground="{StaticResource BrandTextBrush}" />
                 </StackPanel>
-              </StackPanel>
-            </Grid>
-            <Button Classes="secondary" Click="SaveSupportBundle_Click" HorizontalAlignment="Left" ToolTip.Tip="Save connection, gauge, file-table and calibration diagnostics">
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandTextBrush}"
-                          Data="M19,9H15V3H9V9H5L12,16L19,9M5,18V20H19V18H5Z" />
-                <TextBlock Text="Save Support Bundle" VerticalAlignment="Center" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="4">
+                  <TextBlock Classes="label" Text="File Table" />
+                  <TextBlock Text="{Binding EngineeringFileTable}" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="4">
+                  <TextBlock Classes="label" Text="Sensor Calibration" />
+                  <TextBlock Text="{Binding EngineeringCalibration}" Foreground="{StaticResource BrandTextBrush}" />
+                </StackPanel>
+              </Grid>
+              <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
+              <Grid ColumnDefinitions="0.9*,1.1*" ColumnSpacing="28">
+                <StackPanel Spacing="5">
+                  <TextBlock Classes="label" Text="Device Identity" />
+                  <TextBlock Text="{Binding EngineeringDeviceDetails}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" FontSize="13" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="6">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Classes="label" Text="Communication Integrity" />
+                    <TextBlock Grid.Column="1" Text="{Binding EngineeringCommunicationHealth}" FontWeight="SemiBold" Foreground="{Binding EngineeringCommunicationBrush}" />
+                  </Grid>
+                  <TextBlock Text="{Binding EngineeringCommunicationSession}" FontSize="13" Foreground="{StaticResource BrandMutedBrush}" />
+                  <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="5">
+                    <TextBlock Classes="label" Text="Transactions" />
+                    <TextBlock Grid.Column="1" Text="{Binding EngineeringCommunicationTransactions}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{StaticResource BrandTextBrush}" />
+                    <TextBlock Grid.Column="2" Classes="label" Text="Retries" />
+                    <TextBlock Grid.Column="3" Text="{Binding EngineeringCommunicationRetries}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{StaticResource BrandTextBrush}" />
+                    <TextBlock Grid.Row="1" Classes="label" Text="CRC errors" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding EngineeringCommunicationCrcErrors}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{StaticResource BrandTextBrush}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Classes="label" Text="Recovered" />
+                    <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding EngineeringCommunicationRecovered}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{StaticResource BrandTextBrush}" />
+                    <TextBlock Grid.Row="2" Classes="label" Text="Failures" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding EngineeringCommunicationFailures}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" Foreground="{Binding EngineeringCommunicationBrush}" />
+                  </Grid>
+                  <StackPanel Spacing="2">
+                    <TextBlock Classes="label" Text="Last issue" />
+                    <TextBlock Text="{Binding EngineeringCommunicationLastIssue}" FontSize="12" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" MaxLines="2" />
+                  </StackPanel>
+                </StackPanel>
+              </Grid>
+              <Button Classes="secondary" Click="SaveSupportBundle_Click" HorizontalAlignment="Left" ToolTip.Tip="Save connection, gauge, file-table and calibration diagnostics">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandTextBrush}"
+                            Data="M19,9H15V3H9V9H5L12,16L19,9M5,18V20H19V18H5Z" />
+                  <TextBlock Text="Save Support Bundle" VerticalAlignment="Center" />
+                </StackPanel>
+              </Button>
+
+              <Border Height="2" Background="{StaticResource BrandPrimaryBrush}" Margin="0,4" />
+              <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="16" RowSpacing="4">
+                <TextBlock Text="Firmware Update" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                <Button Grid.Column="1" Grid.RowSpan="2" Classes="secondary" Click="ChooseFirmware_Click" IsEnabled="{Binding CanChooseFirmware}" VerticalAlignment="Center">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandTextBrush}"
+                              Data="M10,4H4C2.9,4 2,4.9 2,6V18C2,19.1 2.9,20 4,20H20C21.1,20 22,19.1 22,18V8C22,6.9 21.1,6 20,6H12L10,4Z" />
+                    <TextBlock Text="Choose HEX" VerticalAlignment="Center" />
+                  </StackPanel>
+                </Button>
+                <TextBlock Grid.Row="1" Text="{Binding FirmwareImageName}" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+              </Grid>
+              <TextBlock Text="{Binding FirmwareImageSummary}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" FontSize="12" Foreground="{StaticResource BrandMutedBrush}" TextWrapping="Wrap" />
+              <Grid ColumnDefinitions="120,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="6">
+                <TextBlock Classes="label" Text="Loader" />
+                <TextBlock Grid.Column="1" Text="{Binding FirmwareLoaderDetails}" Foreground="{StaticResource BrandTextBrush}" />
+                <TextBlock Grid.Row="1" Classes="label" Text="Status" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding FirmwareStatus}" Foreground="{Binding FirmwareStatusBrush}" FontWeight="SemiBold" TextWrapping="Wrap" />
+              </Grid>
+              <ProgressBar Minimum="0" Maximum="100" Value="{Binding FirmwareProgressPercent}" Height="8" IsVisible="{Binding IsFirmwareImageSelected}" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                <TextBlock Text="Application flash is replaced; gauge memory and calibration are retained." Foreground="{StaticResource BrandMutedBrush}" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Classes="primary" Content="Program Firmware" Command="{Binding BeginFirmwareProgramCommand}" IsVisible="{Binding IsFirmwareNormalActionVisible}" />
+                <Button Grid.Column="1" Classes="primary" Content="Recover Firmware" Command="{Binding BeginFirmwareRecoveryCommand}" IsVisible="{Binding IsFirmwareRecoveryActionVisible}" />
+              </Grid>
+
+              <Border IsVisible="{Binding IsFirmwareConfirmationVisible}" Background="#FFF3F5" Margin="-24,2,-14,0" Padding="24,16">
+                <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" ColumnSpacing="14" RowSpacing="10">
+                  <StackPanel Spacing="4">
+                    <TextBlock Text="Confirm Firmware Operation" FontWeight="SemiBold" Foreground="{StaticResource BrandPrimaryBrush}" />
+                    <TextBlock Text="{Binding FirmwareConfirmationPrompt}" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Button Classes="secondary" Content="Cancel" Command="{Binding CancelFirmwareConfirmationCommand}" />
+                    <Button Classes="primary" Content="{Binding FirmwareConfirmationAction}" Command="{Binding ConfirmFirmwareActionCommand}" />
+                  </StackPanel>
+                  <TextBox Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding FirmwareConfirmationText}" Watermark="Confirmation" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" />
+                </Grid>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
         </Grid>
       </Border>
     </Grid>

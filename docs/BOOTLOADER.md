@@ -98,14 +98,28 @@ After loader reset, the application returned as firmware `2.0` with the same dev
 - Sensor initialization and calibration header read for sensor ID `1777`.
 - A 64-byte P&T memory read from the latest file at `0x000A1D60`.
 
-This proves normal update and application recovery. Deliberate interruption/recovery testing remains required before exposing firmware update in the desktop UI.
+This proves normal update and application recovery. Deliberate interruption/recovery testing remains required before the desktop control is approved for routine field use.
+
+## Desktop Engineering Mode
+
+The proven updater is available in **Settings > Engineering Mode > Firmware Update**. The desktop workflow:
+
+1. Uses the native file picker and accepts only an `Offset/production` HEX artifact. StandAlone, Combined, unified, below-`0x0800`, and unsupported-address images are rejected before a command is sent.
+2. Displays the normalized program range, populated-row count, and SHA-256 before enabling programming.
+3. Enables normal programming only for a connected memory gauge (`100230`) and requires the operator to type the connected device serial.
+4. Cancels background downloads, takes exclusive ownership of the serial port, verifies the gauge identity again, and sends `BOOTLOAD` once without an automatic retry.
+5. Discovers and verifies the PIC18F26K80 loader at the validated maximum of `115200` baud, then reports erase, programming, verification, and start-vector commit progress.
+6. Blocks app exit while flash work is active. If any failure occurs after loader entry, normal identify polling remains suspended and the same validated image is retained for the explicit `RECOVER` path.
+7. Resets once, reacquires the application at `57600`, verifies device identity, then refreshes the file table and calibration before automatic downloads resume.
+
+The current firmware state, loader identity, image hash, progress, and recovery requirement are included in the Engineering Mode support bundle.
 
 ## Programming Work Still Required
 
 The engineering CLI now implements Intel HEX validation, complete application erase, descending row programming, readback-resolved communication failures, a second non-start verification pass, start-row commit last, and loader-only recovery. The parser refuses StandAlone, Combined, and unified build paths and never sends recognized PIC ID/configuration metadata to flash commands.
 
-Before firmware writing is exposed in the desktop application:
+Before firmware writing is approved for routine field use:
 
 1. Test interruption during erase, middle-write, pre-vector, and start-vector stages with a hardware programmer available.
 2. Package each approved HEX with a signed release manifest containing device type, displayed firmware version, image SHA-256, build configuration, and release notes.
-3. Add the proven workflow to Engineering Mode with explicit device and image confirmation.
+3. Replace unrestricted HEX selection with an approved signed release manifest once release ownership and signing are defined.
