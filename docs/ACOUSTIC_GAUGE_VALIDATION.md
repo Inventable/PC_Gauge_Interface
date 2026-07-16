@@ -58,4 +58,4 @@ The app's normal 1024-byte memory reads completed both multi-day files. A diagno
 
 ## Engineering Support Bundle
 
-The Engineering save workflow was exercised against the same live gauge. The resulting ZIP reported COM5 connected, device type 100200, serial 1, firmware 20.1, all 16 logical files, EOF `0x008E06F0`, and captured calibration. Its entries were `diagnostics.json` plus the four sensor calibration payloads, and the app persisted the selected support-bundle folder for the next export.
+The Engineering save workflow was exercised against the same live gauge. The resulting ZIP reported COM5 connected, device type 100200, serial 1, firmware 20.1, all 16 logical files, EOF `0x008E06F0`, and captured calibration. Its entries were `diagnostics.json` plus the four sensor calibration payloads, and the app persisted the selected support-bundle folder for the next export. A second healthy connection produced an empty communication-event list, as expected.

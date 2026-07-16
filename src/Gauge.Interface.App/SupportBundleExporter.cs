@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Gauge.Core;
 using Gauge.Protocol;
+using Gauge.Transport;
 
 namespace Gauge.Interface.App;
 
@@ -58,6 +59,7 @@ internal sealed record GaugeSupportBundle(
     SupportMemorySnapshot Memory,
     SupportCalibrationSnapshot Calibration,
     IReadOnlyList<SupportFileSnapshot> Files,
+    IReadOnlyList<CommunicationEventLogEntry> CommunicationEvents,
     string RawIdentity);
 
 internal sealed record SupportConnectionSnapshot(

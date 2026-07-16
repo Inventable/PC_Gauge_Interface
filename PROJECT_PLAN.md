@@ -385,6 +385,7 @@ Current status:
 - The Review side panel uses consistent label/value tables for file, quality, cursor, duration, and explicit pressure/temperature minima and maxima. Live download progress and ETA remain in the Review header so metadata rows stay evenly spaced. Data values use a bundled, licensed Cascadia Mono face for stable live readouts. Cursor inspection is an explicit graph mode that can be restored after rectangle zoom, and downloaded files can be exported directly from Review.
 - The header gear opens a compact menu for Serial Settings, read-only Gauge Settings, and Engineering Mode. Raw identity, transport, file-table, and calibration details remain outside the normal operator workflow.
 - Engineering Mode can export a bounded support ZIP containing readable connection, runtime, identity, logical file-table, download-quality and calibration metadata plus the captured calibration payloads. It remembers its own last save folder and excludes downloaded job memory.
+- The support bundle includes the latest 100 port-open, retry, retry-recovery and final transaction-failure events. Repeated equivalent events are coalesced over five seconds with first/last timestamps and occurrence counts, avoiding an unbounded raw serial log.
 - Additional converted export formats are deferred until the required downstream/website format is known; legacy ASCII `.rec` remains the supported operator export.
 - Automatic/manual priority, cancellation, retry, partial review, ETA accuracy, graceful close, and powered-gauge reconnect have been validated on live memory-gauge hardware. See `docs/LIVE_GAUGE_VALIDATION.md`.
 - Firmware write commands have been classified by operator risk and readback requirements. Gauge Settings remains read-only until firmware can safely validate and apply interval changes at a clean file boundary; destructive and service commands remain isolated from the operator workflow. See `docs/GAUGE_SETTINGS_SAFETY.md`.
@@ -423,16 +424,14 @@ Current status:
 
 1. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
 2. Define the firmware changes needed for safe editable measurement intervals: sensor-specific limits, clean file boundary, immediate application, and failure recovery.
-3. Add a bounded recent communication-event log to the support bundle after transport logging has a structured event model.
-4. Verify the self-contained package on a clean Windows field laptop and decide code-signing and installer requirements.
-5. Keep additional export formats deferred until the website/downstream contract is known.
+3. Verify the self-contained package on a clean Windows field laptop and decide code-signing and installer requirements.
+4. Keep additional export formats deferred until the website/downstream contract is known.
 
 ## TODO Reminder
 
 - Test physical disconnect/reconnect with both gauge types.
 - Define and implement the firmware side of safe measurement-interval changes before enabling writes.
 - Test the self-contained archive on a clean field laptop.
-- Define the bounded communication-event fields to append to Engineering support bundles.
 
 ## Open Questions
 

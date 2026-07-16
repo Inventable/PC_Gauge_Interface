@@ -36,6 +36,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         "settings.json");
     private readonly CancellationTokenSource _pollingCancellation = new();
     private readonly SemaphoreSlim _serialGate = new(1, 1);
+    private readonly BoundedCommunicationEventLog _communicationEvents = new();
 
     private GaugeFileTable? _fileTable;
     private SensorCalibrationBundle? _calibration;
@@ -647,6 +648,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 header?.PressureStartupMilliseconds,
                 header?.PllClock),
             files,
+            _communicationEvents.Snapshot(),
             EngineeringDeviceDetails);
 
         SupportBundleExporter.Write(output, diagnostics, _calibration);
@@ -1048,7 +1050,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             ?? Ports.FirstOrDefault();
     }
 
-    private static async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, int timeoutMs)
+    private async Task<GaugeFrame?> TryIdentifyAsync(string portName, int baudRate, int timeoutMs)
     {
         try
         {
@@ -1063,7 +1065,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    private static async Task<GaugeFrame?> WaitForIdentifyAsync(
+    private async Task<GaugeFrame?> WaitForIdentifyAsync(
         string portName,
         int baudRate,
         int timeoutMs,
@@ -1099,7 +1101,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         return null;
     }
 
-    private static async Task<VerifiedGaugeConnection> OpenIdentifiedTransportAsync(string portName, int baudRate, int timeoutMs)
+    private async Task<VerifiedGaugeConnection> OpenIdentifiedTransportAsync(string portName, int baudRate, int timeoutMs)
     {
         var transport = CreateTransport(portName, baudRate, timeoutMs);
         try
@@ -1129,13 +1131,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         }
     }
 
-    private static SerialGaugeTransport CreateTransport(string portName, int baudRate, int timeoutMs)
+    private SerialGaugeTransport CreateTransport(string portName, int baudRate, int timeoutMs)
     {
         return new SerialGaugeTransport(new SerialGaugeTransportOptions(
             portName,
             baudRate,
             ReadTimeoutMs: timeoutMs,
-            WriteTimeoutMs: timeoutMs));
+            WriteTimeoutMs: timeoutMs,
+            EventSink: _communicationEvents.Record));
     }
 
     private void StartBackgroundDownloads()

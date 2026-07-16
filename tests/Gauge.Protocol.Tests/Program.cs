@@ -2,6 +2,7 @@ using System.Text;
 using Gauge.Calibration;
 using Gauge.Core;
 using Gauge.Protocol;
+using Gauge.Transport;
 
 var tests = new (string Name, Action Run)[]
 {
@@ -23,7 +24,8 @@ var tests = new (string Name, Action Run)[]
     ("Quartz calibration converts counts to frequencies", QuartzCalibrationConvertsCountsToFrequencies),
     ("Quartz calibration evaluates live gauge measurement", QuartzCalibrationEvaluatesLiveGaugeMeasurement),
     ("Calibrated CSV exporter formats rows", CalibratedCsvExporterFormatsRows),
-    ("Legacy record exporter writes ASCII format", LegacyRecordExporterWritesAsciiFormat)
+    ("Legacy record exporter writes ASCII format", LegacyRecordExporterWritesAsciiFormat),
+    ("Communication event log coalesces and remains bounded", CommunicationEventLogCoalescesAndRemainsBounded)
 };
 
 var failures = 0;
@@ -468,6 +470,40 @@ static void LegacyRecordExporterWritesAsciiFormat()
     AssertEqual(
         "16995857\t16964453\t16.228902\t28.363889\t     0\t   240\t38832\t0.00000000\t262162.888482\t0\t0\t0",
         lines[11]);
+}
+
+static void CommunicationEventLogCoalescesAndRemainsBounded()
+{
+    var log = new BoundedCommunicationEventLog();
+    var timestamp = new DateTimeOffset(2026, 7, 16, 12, 0, 0, TimeSpan.Zero);
+    var repeated = new SerialGaugeTransportEvent(
+        timestamp,
+        SerialGaugeTransportEventKind.Retry,
+        "COM5",
+        57600,
+        GaugeCommand.Identify,
+        1,
+        3,
+        nameof(TimeoutException),
+        "Timed out");
+
+    log.Record(repeated);
+    log.Record(repeated with { TimestampUtc = timestamp.AddSeconds(1) });
+    var coalesced = log.Snapshot();
+    AssertEqual(1, coalesced.Count);
+    AssertEqual(2, coalesced[0].Occurrences);
+    AssertEqual(timestamp.AddSeconds(1), coalesced[0].LastTimestampUtc);
+
+    for (var index = 0; index < 110; index++)
+    {
+        log.Record(repeated with
+        {
+            TimestampUtc = timestamp.AddMinutes(index + 1),
+            Message = $"Failure {index}"
+        });
+    }
+
+    AssertEqual(100, log.Snapshot().Count);
 }
 
 static void WriteUInt32LittleEndian(Span<byte> target, uint value)

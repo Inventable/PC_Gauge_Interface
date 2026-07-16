@@ -24,9 +24,11 @@ If transport is unavailable, return to Serial Settings and verify the adapter/po
 
 Use **Save Support Bundle** to preserve this evidence as a timestamped ZIP. The app remembers the last support-bundle folder. The archive contains:
 
-- `diagnostics.json` with application/runtime details, selected transport, parsed gauge identity, complete logical file table, download and data-quality state, and parsed calibration metadata.
+- `diagnostics.json` with application/runtime details, selected transport, parsed gauge identity, complete logical file table, download and data-quality state, parsed calibration metadata, and recent communication events.
 - The four captured sensor calibration payloads under `calibration/`, when calibration is available.
 
-The archive is intentionally bounded and does not duplicate downloaded gauge memory or exported jobs. It may be saved while disconnected so the last captured state remains available for troubleshooting.
+The communication history records port-open failures, transaction retries, recovery after a retry, and final three-attempt failures. Each item includes port, baud, command, attempt count, exception type, first/last UTC timestamps, and occurrence count. Equivalent events within five seconds are coalesced, and only the latest 100 entries are retained.
 
-This procedure is read-only. A bounded recent communication-event log can be added after the transport has a structured logging model. Memory tests, sensor pass-through, reset, erase, and bootloader actions require separate documented procedures before UI controls are added.
+The archive is intentionally bounded and does not duplicate downloaded gauge memory or exported jobs. It may be saved while disconnected so the last captured state and failure history remain available for troubleshooting. A healthy session may legitimately contain no communication events.
+
+This procedure is read-only. Memory tests, sensor pass-through, reset, erase, and bootloader actions require separate documented procedures before UI controls are added.

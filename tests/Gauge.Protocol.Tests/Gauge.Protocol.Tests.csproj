@@ -6,5 +6,6 @@
     <ProjectReference Include="..\..\src\Gauge.Calibration\Gauge.Calibration.csproj" />
     <ProjectReference Include="..\..\src\Gauge.Core\Gauge.Core.csproj" />
     <ProjectReference Include="..\..\src\Gauge.Protocol\Gauge.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\Gauge.Transport\Gauge.Transport.csproj" />
   </ItemGroup>
 </Project>

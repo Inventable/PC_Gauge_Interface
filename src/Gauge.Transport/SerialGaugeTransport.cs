@@ -32,9 +32,17 @@ public sealed class SerialGaugeTransport : IGaugeTransport
             WriteTimeout = _options.WriteTimeoutMs
         };
 
-        _port.Open();
-        _port.DiscardInBuffer();
-        _port.DiscardOutBuffer();
+        try
+        {
+            _port.Open();
+            _port.DiscardInBuffer();
+            _port.DiscardOutBuffer();
+        }
+        catch (Exception ex)
+        {
+            Report(SerialGaugeTransportEventKind.OpenFailed, null, 1, 1, ex);
+            throw;
+        }
 
         return Task.CompletedTask;
     }
@@ -81,17 +89,25 @@ public sealed class SerialGaugeTransport : IGaugeTransport
 
             try
             {
-                return TransactOnce(port, request, cancellationToken);
+                var reply = TransactOnce(port, request, cancellationToken);
+                if (attempt > 1)
+                {
+                    Report(SerialGaugeTransportEventKind.Recovered, request.Command, attempt, attempts, lastFailure);
+                }
+
+                return reply;
             }
             catch (Exception ex) when (IsRetryableCommsFailure(ex) && attempt < attempts)
             {
                 lastFailure = ex;
+                Report(SerialGaugeTransportEventKind.Retry, request.Command, attempt, attempts, ex);
                 TryDiscardBuffers(port);
                 DelayBeforeRetry(cancellationToken);
             }
             catch (Exception ex) when (IsRetryableCommsFailure(ex))
             {
                 lastFailure = ex;
+                Report(SerialGaugeTransportEventKind.Failed, request.Command, attempt, attempts, ex);
             }
         }
 
@@ -115,6 +131,32 @@ public sealed class SerialGaugeTransport : IGaugeTransport
         return ex is TimeoutException
             or IOException
             or GaugeProtocolException;
+    }
+
+    private void Report(
+        SerialGaugeTransportEventKind kind,
+        GaugeCommand? command,
+        int attempt,
+        int maximumAttempts,
+        Exception? exception)
+    {
+        try
+        {
+            _options.EventSink?.Invoke(new SerialGaugeTransportEvent(
+                DateTimeOffset.UtcNow,
+                kind,
+                _options.PortName,
+                _options.BaudRate,
+                command,
+                attempt,
+                maximumAttempts,
+                exception?.GetType().Name,
+                exception?.Message));
+        }
+        catch
+        {
+            // Diagnostics must never alter serial behaviour.
+        }
     }
 
     private void DelayBeforeRetry(CancellationToken cancellationToken)
