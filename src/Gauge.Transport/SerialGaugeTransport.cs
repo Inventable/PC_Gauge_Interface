@@ -95,6 +95,7 @@ public sealed class SerialGaugeTransport : IGaugeTransport
                     Report(SerialGaugeTransportEventKind.Recovered, request.Command, attempt, attempts, lastFailure);
                 }
 
+                Report(SerialGaugeTransportEventKind.Succeeded, request.Command, attempt, attempts, null);
                 return reply;
             }
             catch (Exception ex) when (IsRetryableCommsFailure(ex) && attempt < attempts)
@@ -150,6 +151,7 @@ public sealed class SerialGaugeTransport : IGaugeTransport
                 command,
                 attempt,
                 maximumAttempts,
+                ClassifyFailure(exception),
                 exception?.GetType().Name,
                 exception?.Message));
         }
@@ -157,6 +159,21 @@ public sealed class SerialGaugeTransport : IGaugeTransport
         {
             // Diagnostics must never alter serial behaviour.
         }
+    }
+
+    private static SerialGaugeTransportFailureKind? ClassifyFailure(Exception? exception)
+    {
+        return exception switch
+        {
+            null => null,
+            TimeoutException => SerialGaugeTransportFailureKind.Timeout,
+            GaugeProtocolException when exception.Message.Contains("CRC", StringComparison.OrdinalIgnoreCase) =>
+                SerialGaugeTransportFailureKind.Crc,
+            GaugeProtocolException => SerialGaugeTransportFailureKind.Protocol,
+            UnauthorizedAccessException or ArgumentOutOfRangeException => SerialGaugeTransportFailureKind.PortAccess,
+            IOException => SerialGaugeTransportFailureKind.Io,
+            _ => SerialGaugeTransportFailureKind.Other
+        };
     }
 
     private void DelayBeforeRetry(CancellationToken cancellationToken)

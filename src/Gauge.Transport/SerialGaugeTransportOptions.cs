@@ -14,7 +14,18 @@ public enum SerialGaugeTransportEventKind
     OpenFailed,
     Retry,
     Recovered,
-    Failed
+    Failed,
+    Succeeded
+}
+
+public enum SerialGaugeTransportFailureKind
+{
+    Timeout,
+    Crc,
+    Io,
+    Protocol,
+    PortAccess,
+    Other
 }
 
 public sealed record SerialGaugeTransportEvent(
@@ -25,5 +36,6 @@ public sealed record SerialGaugeTransportEvent(
     Gauge.Protocol.GaugeCommand? Command,
     int Attempt,
     int MaximumAttempts,
+    SerialGaugeTransportFailureKind? FailureKind,
     string? ErrorType,
     string? Message);

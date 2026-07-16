@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Windows.Input;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Gauge.Core;
 using Gauge.Protocol;
 using Gauge.Transport;
@@ -37,6 +38,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private readonly CancellationTokenSource _pollingCancellation = new();
     private readonly SemaphoreSlim _serialGate = new(1, 1);
     private readonly BoundedCommunicationEventLog _communicationEvents = new();
+    private int _communicationRefreshPending;
 
     private GaugeFileTable? _fileTable;
     private SensorCalibrationBundle? _calibration;
@@ -453,6 +455,88 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         ? "No gauge identity available"
         : DeviceDetails.Trim();
 
+    public string EngineeringCommunicationHealth
+    {
+        get
+        {
+            var summary = _communicationEvents.Summary();
+            if (!summary.HasSession)
+            {
+                return "No session";
+            }
+
+            if (summary.FailedTransactions + summary.OpenFailures > 0)
+            {
+                return "Error";
+            }
+
+            return summary.RetryAttempts + summary.CrcErrors > 0 ? "Review" : "Good";
+        }
+    }
+
+    public IBrush EngineeringCommunicationBrush => EngineeringCommunicationHealth switch
+    {
+        "Good" => new SolidColorBrush(Color.Parse("#2DA55D")),
+        "Review" => new SolidColorBrush(Color.Parse("#D97706")),
+        "Error" => new SolidColorBrush(Color.Parse("#CE0E2D")),
+        _ => new SolidColorBrush(Color.Parse("#5D5D66"))
+    };
+
+    public string EngineeringCommunicationSession
+    {
+        get
+        {
+            var summary = _communicationEvents.Summary();
+            if (!summary.HasSession || summary.StartedUtc is null)
+            {
+                return "Not started";
+            }
+
+            var started = summary.StartedUtc.Value.ToLocalTime();
+            if (summary.IsActive)
+            {
+                return $"Active on {summary.Port} since {started:HH:mm:ss}";
+            }
+
+            var ended = summary.EndedUtc?.ToLocalTime();
+            return ended is null
+                ? $"Last session on {summary.Port}"
+                : $"Last session {started:HH:mm:ss}-{ended:HH:mm:ss}";
+        }
+    }
+
+    public string EngineeringCommunicationTransactions => _communicationEvents.Summary().Transactions.ToString("N0");
+
+    public string EngineeringCommunicationRetries => _communicationEvents.Summary().RetryAttempts.ToString("N0");
+
+    public string EngineeringCommunicationCrcErrors => _communicationEvents.Summary().CrcErrors.ToString("N0");
+
+    public string EngineeringCommunicationRecovered => _communicationEvents.Summary().RecoveredTransactions.ToString("N0");
+
+    public string EngineeringCommunicationFailures
+    {
+        get
+        {
+            var summary = _communicationEvents.Summary();
+            return (summary.FailedTransactions + summary.OpenFailures).ToString("N0");
+        }
+    }
+
+    public string EngineeringCommunicationLastIssue
+    {
+        get
+        {
+            var issue = _communicationEvents.Summary().LastIssue;
+            if (issue is null)
+            {
+                return "None";
+            }
+
+            var target = issue.Command ?? "port open";
+            return $"{issue.LastTimestampUtc.ToLocalTime():HH:mm:ss} {target}: {issue.Message}";
+        }
+    }
+
     public bool IgnoreSmallFiles
     {
         get => _ignoreSmallFiles;
@@ -507,6 +591,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private async Task StartAsync()
     {
+        StartCommunicationSession();
         _autoDownloadsPaused = false;
         _settings = _settings with { LastPort = SelectedPort, OutputDirectory = OutputDirectory };
         SaveSettings();
@@ -518,6 +603,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private Task OpenSettingsAsync()
     {
+        EndCommunicationSession();
         CancelBackgroundDownloads();
         _manualDownloadCancellation?.Cancel();
         _autoDownloadsPaused = true;
@@ -648,6 +734,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 header?.PressureStartupMilliseconds,
                 header?.PllClock),
             files,
+            _communicationEvents.Summary(),
             _communicationEvents.Snapshot(),
             EngineeringDeviceDetails);
 
@@ -967,6 +1054,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             WakeTransactionTimeoutMs).ConfigureAwait(true);
         if (slowIdentity is not null)
         {
+            StartCommunicationSession();
             Status = $"Gauge woke at {WakeBaud}; reading files";
             await Task.Delay(FastVerifyDelay).ConfigureAwait(true);
             _ = ReadFilesAsync();
@@ -981,6 +1069,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     private void SetDisconnected()
     {
+        EndCommunicationSession();
         CancelBackgroundDownloads();
         IsGaugeConnected = false;
         _nextConnectedPollUtc = DateTime.MinValue;
@@ -1138,7 +1227,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             baudRate,
             ReadTimeoutMs: timeoutMs,
             WriteTimeoutMs: timeoutMs,
-            EventSink: _communicationEvents.Record));
+            EventSink: RecordCommunicationEvent));
     }
 
     private void StartBackgroundDownloads()
@@ -1677,6 +1766,54 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EngineeringFileTable));
         OnPropertyChanged(nameof(EngineeringCalibration));
         OnPropertyChanged(nameof(EngineeringDeviceDetails));
+        RaiseEngineeringCommunicationChanged();
+    }
+
+    private void StartCommunicationSession()
+    {
+        _communicationEvents.StartSession(SelectedPort);
+        RaiseEngineeringCommunicationChanged();
+    }
+
+    private void EndCommunicationSession()
+    {
+        _communicationEvents.EndSession();
+        RaiseEngineeringCommunicationChanged();
+    }
+
+    private void RecordCommunicationEvent(SerialGaugeTransportEvent value)
+    {
+        _communicationEvents.Record(value);
+        if (Interlocked.Exchange(ref _communicationRefreshPending, 1) == 0)
+        {
+            _ = RefreshEngineeringCommunicationAsync();
+        }
+    }
+
+    private async Task RefreshEngineeringCommunicationAsync()
+    {
+        await Task.Delay(250).ConfigureAwait(false);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            Interlocked.Exchange(ref _communicationRefreshPending, 0);
+            if (IsEngineeringModeVisible)
+            {
+                RaiseEngineeringCommunicationChanged();
+            }
+        });
+    }
+
+    private void RaiseEngineeringCommunicationChanged()
+    {
+        OnPropertyChanged(nameof(EngineeringCommunicationHealth));
+        OnPropertyChanged(nameof(EngineeringCommunicationBrush));
+        OnPropertyChanged(nameof(EngineeringCommunicationSession));
+        OnPropertyChanged(nameof(EngineeringCommunicationTransactions));
+        OnPropertyChanged(nameof(EngineeringCommunicationRetries));
+        OnPropertyChanged(nameof(EngineeringCommunicationCrcErrors));
+        OnPropertyChanged(nameof(EngineeringCommunicationRecovered));
+        OnPropertyChanged(nameof(EngineeringCommunicationFailures));
+        OnPropertyChanged(nameof(EngineeringCommunicationLastIssue));
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

@@ -25,7 +25,7 @@ var tests = new (string Name, Action Run)[]
     ("Quartz calibration evaluates live gauge measurement", QuartzCalibrationEvaluatesLiveGaugeMeasurement),
     ("Calibrated CSV exporter formats rows", CalibratedCsvExporterFormatsRows),
     ("Legacy record exporter writes ASCII format", LegacyRecordExporterWritesAsciiFormat),
-    ("Communication event log coalesces and remains bounded", CommunicationEventLogCoalescesAndRemainsBounded)
+    ("Communication session summary counts integrity events", CommunicationSessionSummaryCountsIntegrityEvents)
 };
 
 var failures = 0;
@@ -472,10 +472,11 @@ static void LegacyRecordExporterWritesAsciiFormat()
         lines[11]);
 }
 
-static void CommunicationEventLogCoalescesAndRemainsBounded()
+static void CommunicationSessionSummaryCountsIntegrityEvents()
 {
     var log = new BoundedCommunicationEventLog();
     var timestamp = new DateTimeOffset(2026, 7, 16, 12, 0, 0, TimeSpan.Zero);
+    log.StartSession("COM5", timestamp);
     var repeated = new SerialGaugeTransportEvent(
         timestamp,
         SerialGaugeTransportEventKind.Retry,
@@ -484,6 +485,7 @@ static void CommunicationEventLogCoalescesAndRemainsBounded()
         GaugeCommand.Identify,
         1,
         3,
+        SerialGaugeTransportFailureKind.Timeout,
         nameof(TimeoutException),
         "Timed out");
 
@@ -493,6 +495,48 @@ static void CommunicationEventLogCoalescesAndRemainsBounded()
     AssertEqual(1, coalesced.Count);
     AssertEqual(2, coalesced[0].Occurrences);
     AssertEqual(timestamp.AddSeconds(1), coalesced[0].LastTimestampUtc);
+
+    log.Record(repeated with
+    {
+        TimestampUtc = timestamp.AddSeconds(2),
+        Kind = SerialGaugeTransportEventKind.Recovered,
+        Attempt = 3
+    });
+    log.Record(repeated with
+    {
+        TimestampUtc = timestamp.AddSeconds(2),
+        Kind = SerialGaugeTransportEventKind.Succeeded,
+        Attempt = 3,
+        FailureKind = null,
+        ErrorType = null,
+        Message = null
+    });
+    log.Record(repeated with
+    {
+        TimestampUtc = timestamp.AddSeconds(3),
+        Kind = SerialGaugeTransportEventKind.Failed,
+        Attempt = 3,
+        FailureKind = SerialGaugeTransportFailureKind.Crc,
+        ErrorType = nameof(GaugeProtocolException),
+        Message = "Frame CRC16 check failed."
+    });
+
+    var summary = log.Summary();
+    AssertEqual(true, summary.IsActive);
+    AssertEqual(1, summary.Transactions);
+    AssertEqual(2, summary.RetryAttempts);
+    AssertEqual(2, summary.TimeoutErrors);
+    AssertEqual(1, summary.CrcErrors);
+    AssertEqual(1, summary.RecoveredTransactions);
+    AssertEqual(1, summary.FailedTransactions);
+    AssertEqual("Crc", summary.LastIssue?.FailureKind);
+
+    log.EndSession(timestamp.AddSeconds(4));
+    AssertEqual(false, log.Summary().IsActive);
+    log.Record(repeated with { TimestampUtc = timestamp.AddSeconds(5) });
+    AssertEqual(2, log.Summary().RetryAttempts);
+
+    log.StartSession("COM5", timestamp.AddMinutes(1));
 
     for (var index = 0; index < 110; index++)
     {

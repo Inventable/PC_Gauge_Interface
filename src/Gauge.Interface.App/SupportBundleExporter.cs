@@ -59,6 +59,7 @@ internal sealed record GaugeSupportBundle(
     SupportMemorySnapshot Memory,
     SupportCalibrationSnapshot Calibration,
     IReadOnlyList<SupportFileSnapshot> Files,
+    CommunicationSessionSummary CommunicationSummary,
     IReadOnlyList<CommunicationEventLogEntry> CommunicationEvents,
     string RawIdentity);
 
