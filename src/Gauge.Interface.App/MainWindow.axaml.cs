@@ -229,6 +229,53 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async void SaveSupportBundle_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        try
+        {
+            var startDirectory = string.IsNullOrWhiteSpace(viewModel.LastSupportBundleDirectory)
+                ? viewModel.OutputDirectory
+                : viewModel.LastSupportBundleDirectory;
+            var startFolder = string.IsNullOrWhiteSpace(startDirectory)
+                ? null
+                : await StorageProvider.TryGetFolderFromPathAsync(startDirectory);
+            var destination = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Save gauge support bundle",
+                SuggestedFileName = viewModel.BuildSupportBundleFileName(),
+                SuggestedStartLocation = startFolder,
+                DefaultExtension = "zip",
+                ShowOverwritePrompt = true,
+                FileTypeChoices =
+                [
+                    new FilePickerFileType("Gauge support bundle")
+                    {
+                        Patterns = ["*.zip"]
+                    }
+                ]
+            });
+
+            if (destination is null)
+            {
+                return;
+            }
+
+            await using var stream = await destination.OpenWriteAsync();
+            stream.SetLength(0);
+            viewModel.WriteSupportBundle(stream);
+            viewModel.SupportBundleExportSucceeded(destination.Path.LocalPath);
+        }
+        catch (Exception ex)
+        {
+            viewModel.SupportBundleExportFailed(ex.Message);
+        }
+    }
+
     private void GraphZoomWindow_Click(object? sender, RoutedEventArgs e)
     {
         if (sender is ToggleButton toggle)

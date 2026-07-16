@@ -55,3 +55,7 @@ Only types 1-4 are calibrated and plotted as P&T. Packet and bit-count records s
 ## Transport Note
 
 The app's normal 1024-byte memory reads completed both multi-day files. A diagnostic CLI attempt using 2048-byte reads encountered repeated frame CRC failures, so 1024 bytes remains the verified default for this gauge/adapter combination.
+
+## Engineering Support Bundle
+
+The Engineering save workflow was exercised against the same live gauge. The resulting ZIP reported COM5 connected, device type 100200, serial 1, firmware 20.1, all 16 logical files, EOF `0x008E06F0`, and captured calibration. Its entries were `diagnostics.json` plus the four sensor calibration payloads, and the app persisted the selected support-bundle folder for the next export.

@@ -10,14 +10,26 @@ Read-only, idempotent commands may use the standard three-attempt communication 
 
 | Setting | Firmware command | Payload | Required verification | Proposed access |
 | --- | --- | --- | --- | --- |
-| Measurement interval | `SET_MEASURE_RATE` (46) | Unsigned 16-bit, little endian | Re-identify and compare `measure_int` | Gauge Settings, after valid ranges and units are confirmed |
+| Measurement interval | `SET_MEASURE_RATE` (46) | Seconds as unsigned 16-bit, little endian | Re-identify and compare `measure_int` | Read-only until the firmware gaps below are closed |
 | Memory mode | `SET_MEM_MODE` (50) | One byte (`0` full, `1` mirror) | Re-identify and compare `memory_mode` | Engineering Mode only |
 | Acoustic pulse interval | `SET_PULSE_INT` (20) | Unsigned 16-bit, little endian | Firmware needs a supported readback or status field | Acoustic engineering workflow |
 | Acoustic address | `SET_ACOUSTIC_ADDR` (21) | One byte | Firmware needs a supported readback or status field | Acoustic engineering workflow |
 | Acoustic transmit setup | `SET_TX_INTERVAL` (54) | Interval low/high, address, command, acoustic type | Firmware needs a supported readback | Acoustic engineering workflow |
 | Acoustic recording | `SET_RECORD_SETTINGS` (59) | Enable flag, record length low/high | `GET_RECORD_SETTINGS` (58) | Acoustic engineering workflow |
 
-The normal Gauge Settings page should remain read-only until measurement-interval units, limits, and the effect on the current logging file are confirmed. Changes must be disabled while any memory transaction is active and must show the connected device serial before confirmation.
+The normal Gauge Settings page must remain read-only. Changes must be disabled while any memory transaction is active and must show the connected device serial before confirmation.
+
+## Measurement Interval Contract
+
+The firmware inspection confirms that the stored interval is in seconds and that command 46 writes its two payload bytes directly to EEPROM as an unsigned little-endian value. Identify returns the same value, and each new file-table start record copies it into that file's metadata.
+
+The current firmware does not validate the value, start a new file, or consistently restart measurement after the write. It also has two different sensor links:
+
+- The legacy sensor command sends the interval as one ASCII digit, so only `0` through `9` can be represented correctly by that path.
+- The modern sensor command sends `aut<decimal>`, which can represent the wider stored value.
+- Acoustic firmware exposes a separate sensor-measurement restart command; memory-gauge firmware does not expose an equivalent host command.
+
+Editing this value in the desktop app could therefore create a file whose table interval does not describe every sample, or set a value that one supported sensor cannot apply. Before enabling it, firmware should enforce a device/sensor-specific range, create a clean file boundary, apply the new schedule immediately and consistently, and provide verified readback with a defined recovery path.
 
 ## Service Commands
 
@@ -39,7 +51,9 @@ Erase, reset, and bootloader commands must never use an automatic blind retry. R
 
 ## Firmware Gaps Before Editable Settings
 
-- Confirm measurement-interval units, accepted range, and whether a change starts a new file.
+- Define and enforce measurement-interval ranges for each supported sensor protocol.
+- Make an interval change create a clean file boundary and restart measurement consistently on both gauge families.
+- Define recovery when stored interval readback succeeds but sensor application fails.
 - Add or identify readback for acoustic pulse interval, acoustic address, and transmit settings.
 - Define the erase completion/status sequence and expected timing.
 - Define behaviour when a write succeeds but its acknowledgement is lost.

@@ -22,4 +22,11 @@ Expected healthy result:
 
 If transport is unavailable, return to Serial Settings and verify the adapter/port before testing the gauge. If the file table is unavailable but identity is valid, investigate memory-table communications. If calibration is not captured, investigate sensor power and sensor communications before trusting converted P&T data.
 
-This procedure is read-only. The next useful extension is an exportable support bundle containing the same snapshot plus bounded communication errors. Memory tests, sensor pass-through, reset, erase, and bootloader actions require separate documented procedures before UI controls are added.
+Use **Save Support Bundle** to preserve this evidence as a timestamped ZIP. The app remembers the last support-bundle folder. The archive contains:
+
+- `diagnostics.json` with application/runtime details, selected transport, parsed gauge identity, complete logical file table, download and data-quality state, and parsed calibration metadata.
+- The four captured sensor calibration payloads under `calibration/`, when calibration is available.
+
+The archive is intentionally bounded and does not duplicate downloaded gauge memory or exported jobs. It may be saved while disconnected so the last captured state remains available for troubleshooting.
+
+This procedure is read-only. A bounded recent communication-event log can be added after the transport has a structured logging model. Memory tests, sensor pass-through, reset, erase, and bootloader actions require separate documented procedures before UI controls are added.

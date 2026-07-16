@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -189,6 +190,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     }
 
     public string LastRecordExportDirectory => _settings.LastRecordExportDirectory;
+
+    public string LastSupportBundleDirectory => _settings.LastSupportBundleDirectory;
 
     public string JobName
     {
@@ -578,6 +581,77 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         return $"gauge-{serial}-{DateTime.Now:yyyyMMdd}-file-{file.Index:000}.rec";
     }
 
+    public string BuildSupportBundleFileName()
+    {
+        var serial = _connectedDevice?.DeviceSerial.ToString() ?? "unknown";
+        return $"gauge-{serial}-support-{DateTime.Now:yyyyMMdd-HHmmss}.zip";
+    }
+
+    internal void WriteSupportBundle(Stream output)
+    {
+        var files = _fileTable?.Records
+            .Select((record, fileNumber) =>
+            {
+                var row = Files.FirstOrDefault(file => file.Index == fileNumber);
+                return new SupportFileSnapshot(
+                    fileNumber,
+                    record.Index,
+                    record.DataAddress.ToString(),
+                    EstimateBytes(_fileTable, fileNumber),
+                    record.MeasurementInterval,
+                    record.ResetCause,
+                    record.IsCrcValid,
+                    row?.State ?? "Not downloaded",
+                    row?.SampleCount ?? 0,
+                    row?.CrcErrorCount ?? 0,
+                    row?.BatteryWarningCount ?? 0,
+                    row?.AcousticRecordCount ?? 0,
+                    row?.AcousticDiagnosticRecordCount ?? 0,
+                    row?.RawAcousticRecordCount ?? 0,
+                    row?.TimestampRecordCount ?? 0,
+                    row?.UnknownRecordCount ?? 0,
+                    row?.DataQualityDetail ?? "Not inspected");
+            })
+            .ToArray() ?? [];
+
+        SensorCalibrationHeader? header = null;
+        if (_calibration is not null)
+        {
+            header = SensorCalibrationHeader.Parse(_calibration.SensorHeader);
+        }
+
+        var diagnostics = new GaugeSupportBundle(
+            DateTimeOffset.UtcNow,
+            typeof(MainWindowViewModel).Assembly.GetName().Version?.ToString() ?? "unknown",
+            RuntimeInformation.OSDescription,
+            RuntimeInformation.FrameworkDescription,
+            new SupportConnectionSnapshot(
+                SelectedPort,
+                SelectedPortOption?.DisplayName ?? SelectedPort,
+                WakeBaud,
+                FastBaud,
+                IsGaugeConnected,
+                ConnectionStatus,
+                IgnoreSmallFiles),
+            _connectedDevice,
+            new SupportMemorySnapshot(
+                _fileTable is not null,
+                _fileTable?.Records.Count ?? 0,
+                _fileTable?.EndOfFile.ToString()),
+            new SupportCalibrationSnapshot(
+                _calibration is not null,
+                _calibration is null ? null : SensorAsciiData.DecodePayload(_calibration.SensorSerial),
+                header?.ReferenceClock,
+                header?.SensorId,
+                header?.CountBias,
+                header?.PressureStartupMilliseconds,
+                header?.PllClock),
+            files,
+            EngineeringDeviceDetails);
+
+        SupportBundleExporter.Write(output, diagnostics, _calibration);
+    }
+
     public LegacyRecordMetadata BuildLegacyRecordMetadata(GaugeFileRowViewModel file)
     {
         if (_connectedDevice is null || _calibration is null || file.Samples is not { Count: > 0 } samples)
@@ -618,6 +692,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public void RecordExportFailed(GaugeFileRowViewModel file, string message)
     {
         SetProtectedStatus($"Could not save file {file.Index}: {message}", TimeSpan.FromSeconds(20));
+    }
+
+    public void SupportBundleExportSucceeded(string savedPath)
+    {
+        var directory = Path.GetDirectoryName(savedPath);
+        if (!string.IsNullOrWhiteSpace(directory) &&
+            !string.Equals(directory, _settings.LastSupportBundleDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            _settings = _settings with { LastSupportBundleDirectory = directory };
+            SaveSettings();
+        }
+
+        SetProtectedStatus($"Saved support bundle as {Path.GetFileName(savedPath)}", TimeSpan.FromSeconds(20));
+    }
+
+    public void SupportBundleExportFailed(string message)
+    {
+        SetProtectedStatus($"Could not save support bundle: {message}", TimeSpan.FromSeconds(20));
     }
 
     public void UpdateGraphCursor(ChartCursorEventArgs cursor)
@@ -1646,7 +1738,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 public sealed record AppSettings(
     string LastPort = "",
     string OutputDirectory = "",
-    string LastRecordExportDirectory = "");
+    string LastRecordExportDirectory = "",
+    string LastSupportBundleDirectory = "");
 
 public enum FileListSortColumn
 {

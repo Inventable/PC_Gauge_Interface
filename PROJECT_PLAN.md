@@ -384,9 +384,10 @@ Current status:
 - Review now provides a sample-snapped cursor with elapsed time, pressure, and temperature readout. Data quality reports file/data CRC errors and samples carrying battery warnings, using the same green/amber/red state language as the file table.
 - The Review side panel uses consistent label/value tables for file, quality, cursor, duration, and explicit pressure/temperature minima and maxima. Live download progress and ETA remain in the Review header so metadata rows stay evenly spaced. Data values use a bundled, licensed Cascadia Mono face for stable live readouts. Cursor inspection is an explicit graph mode that can be restored after rectangle zoom, and downloaded files can be exported directly from Review.
 - The header gear opens a compact menu for Serial Settings, read-only Gauge Settings, and Engineering Mode. Raw identity, transport, file-table, and calibration details remain outside the normal operator workflow.
+- Engineering Mode can export a bounded support ZIP containing readable connection, runtime, identity, logical file-table, download-quality and calibration metadata plus the captured calibration payloads. It remembers its own last save folder and excludes downloaded job memory.
 - Additional converted export formats are deferred until the required downstream/website format is known; legacy ASCII `.rec` remains the supported operator export.
 - Automatic/manual priority, cancellation, retry, partial review, ETA accuracy, graceful close, and powered-gauge reconnect have been validated on live memory-gauge hardware. See `docs/LIVE_GAUGE_VALIDATION.md`.
-- Firmware write commands have been classified by operator risk and readback requirements. Gauge Settings remains read-only until the measurement-interval contract is confirmed; destructive and service commands remain isolated from the operator workflow. See `docs/GAUGE_SETTINGS_SAFETY.md`.
+- Firmware write commands have been classified by operator risk and readback requirements. Gauge Settings remains read-only until firmware can safely validate and apply interval changes at a clean file boundary; destructive and service commands remain isolated from the operator workflow. See `docs/GAUGE_SETTINGS_SAFETY.md`.
 - Engineering Mode's existing read-only connection snapshot is now the first defined diagnostic procedure; future controls require similarly concrete procedures and expected results. See `docs/ENGINEERING_DIAGNOSTICS.md`.
 - A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
 
@@ -421,17 +422,17 @@ Current status:
 ## Immediate Next Steps
 
 1. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
-2. Confirm measurement-interval units, limits, file-boundary behaviour, and verified readback before making it editable.
-3. Add an exportable support bundle around the connection snapshot once the required communication-error fields are defined.
+2. Define the firmware changes needed for safe editable measurement intervals: sensor-specific limits, clean file boundary, immediate application, and failure recovery.
+3. Add a bounded recent communication-event log to the support bundle after transport logging has a structured event model.
 4. Verify the self-contained package on a clean Windows field laptop and decide code-signing and installer requirements.
 5. Keep additional export formats deferred until the website/downstream contract is known.
 
 ## TODO Reminder
 
 - Test physical disconnect/reconnect with both gauge types.
-- Confirm the measurement-interval setting contract before enabling writes.
+- Define and implement the firmware side of safe measurement-interval changes before enabling writes.
 - Test the self-contained archive on a clean field laptop.
-- Define the bounded communication-error fields needed by an Engineering support bundle.
+- Define the bounded communication-event fields to append to Engineering support bundles.
 
 ## Open Questions
 

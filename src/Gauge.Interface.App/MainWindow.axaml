@@ -432,8 +432,15 @@
             <Border Height="1" Background="{StaticResource BrandBorderBrush}" />
             <StackPanel Spacing="5">
               <TextBlock Classes="label" Text="Device Identity" />
-              <TextBlock Text="{Binding EngineeringDeviceDetails}" FontFamily="Consolas" FontSize="13" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding EngineeringDeviceDetails}" FontFamily="avares://Gauge.Interface.App/Assets/Fonts#Cascadia Mono" FontSize="13" Foreground="{StaticResource BrandTextBrush}" TextWrapping="Wrap" />
             </StackPanel>
+            <Button Classes="secondary" Click="SaveSupportBundle_Click" HorizontalAlignment="Left" ToolTip.Tip="Save connection, gauge, file-table and calibration diagnostics">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PathIcon Width="18" Height="18" Foreground="{StaticResource BrandTextBrush}"
+                          Data="M19,9H15V3H9V9H5L12,16L19,9M5,18V20H19V18H5Z" />
+                <TextBlock Text="Save Support Bundle" VerticalAlignment="Center" />
+              </StackPanel>
+            </Button>
           </StackPanel>
         </Grid>
       </Border>
