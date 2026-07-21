@@ -64,7 +64,7 @@ public sealed partial class NorthstarActivityMark : UserControl
 
     private void Animate(object? sender, EventArgs e)
     {
-        var cycleSeconds = Speed == NorthstarActivitySpeed.Fast ? 1.8 : 6.0;
+        var cycleSeconds = Speed == NorthstarActivitySpeed.Fast ? 1.8 : 4.0;
         ApplyFrame((_clock.Elapsed.TotalSeconds % cycleSeconds) / cycleSeconds);
     }
 
