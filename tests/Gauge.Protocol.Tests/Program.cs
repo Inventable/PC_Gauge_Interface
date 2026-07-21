@@ -13,6 +13,9 @@ var tests = new (string Name, Action Run)[]
     ("Read request encodes declared length without request payload", ReadRequestEncodesDeclaredLengthWithoutRequestPayload),
     ("Encoded frame decodes back to original values", EncodedFrameDecodesBack),
     ("Bad CRC is rejected", BadCrcIsRejected),
+    ("Echo-only IDENTIFY is rejected", EchoOnlyIdentifyIsRejected),
+    ("Echo-only FIND_EOF is rejected", EchoOnlyFindEofIsRejected),
+    ("Chunked memory read resumes after retained prefix", ChunkedMemoryReadResumesAfterPrefix),
     ("Bootloader read-version request matches firmware frame", BootloaderReadVersionRequestMatchesFirmwareFrame),
     ("Bootloader write request carries keys and 24-bit address", BootloaderWriteRequestCarriesKeysAndAddress),
     ("Bootloader version response decodes", BootloaderVersionResponseDecodes),
@@ -121,6 +124,63 @@ static void BadCrcIsRejected()
     }
 
     throw new InvalidOperationException("Expected bad CRC frame to be rejected.");
+}
+
+static void EchoOnlyIdentifyIsRejected()
+{
+    var transport = new DelegateGaugeTransport(request => request);
+    var session = new GaugeSession(transport);
+    try
+    {
+        _ = session.IdentifyAsync().GetAwaiter().GetResult();
+    }
+    catch (GaugeProtocolException ex) when (ex.Message.Contains("IDENTIFY", StringComparison.Ordinal))
+    {
+        return;
+    }
+
+    throw new InvalidOperationException("An echoed zero-payload IDENTIFY request was accepted as a device identity.");
+}
+
+static void EchoOnlyFindEofIsRejected()
+{
+    var transport = new DelegateGaugeTransport(request => request);
+    var session = new GaugeSession(transport);
+    try
+    {
+        _ = session.FindEndOfFileAsync().GetAwaiter().GetResult();
+    }
+    catch (GaugeProtocolException ex) when (ex.Message.Contains("FIND_EOF", StringComparison.Ordinal))
+    {
+        return;
+    }
+
+    throw new InvalidOperationException("An echoed zero-payload FIND_EOF request was accepted as an address.");
+}
+
+static void ChunkedMemoryReadResumesAfterPrefix()
+{
+    var addresses = new List<uint>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        addresses.Add(request.Address);
+        var payload = Enumerable.Range(0, request.DataLength)
+            .Select(index => (byte)(request.Address + (uint)index))
+            .ToArray();
+        return GaugeFrame.Create(request.Command, request.Address, payload);
+    });
+    var session = new GaugeSession(transport);
+    var bytes = session.ReadExternalMemoryChunkedAsync(
+        0x1000,
+        8,
+        chunkSize: 2,
+        command: GaugeCommand.ReadRecordSector,
+        existingPrefix: new byte[] { 1, 2, 3, 4 }).GetAwaiter().GetResult();
+
+    AssertSequenceEqual(new byte[] { 1, 2, 3, 4, 4, 5, 6, 7 }, bytes);
+    AssertEqual(2, addresses.Count);
+    AssertEqual((uint)0x1004, addresses[0]);
+    AssertEqual((uint)0x1006, addresses[1]);
 }
 
 static void BootloaderReadVersionRequestMatchesFirmwareFrame()
@@ -806,5 +866,40 @@ sealed class FakeBootloaderClient : IBootloaderClient
         }
 
         return Task.CompletedTask;
+    }
+}
+
+sealed class DelegateGaugeTransport : IGaugeTransport
+{
+    private readonly Func<GaugeFrame, GaugeFrame> _responder;
+
+    public DelegateGaugeTransport(Func<GaugeFrame, GaugeFrame> responder)
+    {
+        _responder = responder;
+    }
+
+    public string Name => "Test transport";
+
+    public Task OpenAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task CloseAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task<GaugeFrame> TransactAsync(GaugeFrame request, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_responder(request));
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        return ValueTask.CompletedTask;
     }
 }

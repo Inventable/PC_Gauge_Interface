@@ -46,7 +46,9 @@ public sealed class GaugeJobService
             }
         }
 
-        throw new InvalidOperationException($"Sensor initialise failed after {initialiseAttempts} attempt(s).");
+        throw new SensorCommunicationException(
+            SensorCommunicationFailure.InitialiseFailed,
+            $"Sensor initialise failed after {initialiseAttempts} attempt(s).");
     }
 
     public async Task<GaugeFileTable> ReadFileTableAsync(
@@ -81,7 +83,8 @@ public sealed class GaugeJobService
         int fileIndex,
         ushort chunkBytes = 1024,
         CancellationToken cancellationToken = default,
-        IProgress<MemoryReadProgress>? progress = null)
+        IProgress<MemoryReadProgress>? progress = null,
+        ReadOnlyMemory<byte> existingBytes = default)
     {
         if (fileIndex < 0 || fileIndex >= table.Records.Count)
         {
@@ -97,7 +100,14 @@ public sealed class GaugeJobService
 
         var bytesToRead = checked((int)(nextAddress - record.DataAddress.Value));
         var bytes = await _session
-            .ReadExternalMemoryChunkedAsync(record.DataAddress.Value, bytesToRead, chunkBytes, GaugeCommand.ReadRecordSector, cancellationToken, progress)
+            .ReadExternalMemoryChunkedAsync(
+                record.DataAddress.Value,
+                bytesToRead,
+                chunkBytes,
+                GaugeCommand.ReadRecordSector,
+                cancellationToken,
+                progress,
+                existingBytes)
             .ConfigureAwait(false);
 
         return new GaugeMemoryDownload(fileIndex, record, table.EndOfFile, nextAddress, bytes);
@@ -126,12 +136,16 @@ public sealed class GaugeJobService
         var payload = await _session.ReadSensorDataAsync(command, cancellationToken).ConfigureAwait(false);
         if (payload.Length == 0)
         {
-            throw new InvalidOperationException($"{command} returned no payload.");
+            throw new SensorCommunicationException(
+                SensorCommunicationFailure.InvalidResponse,
+                $"{command} returned no payload.");
         }
 
         if (payload is [SensorCommsError])
         {
-            throw new InvalidOperationException($"{command} returned ERROR_SENSOR_COMMS (0x{SensorCommsError:X2}).");
+            throw new SensorCommunicationException(
+                SensorCommunicationFailure.ErrorSensorComms,
+                $"{command} returned ERROR_SENSOR_COMMS (0x{SensorCommsError:X2}).");
         }
 
         return payload;
@@ -149,6 +163,28 @@ public sealed class GaugeJobService
 
         return eof.Value == 0 ? records[index].DataAddress.Value : eof.Value + MemoryGaugeFileRecord.Length;
     }
+}
+
+public enum SensorCommunicationFailure
+{
+    ErrorSensorComms,
+    Timeout,
+    InvalidResponse,
+    InitialiseFailed
+}
+
+public sealed class SensorCommunicationException : Exception
+{
+    public SensorCommunicationException(
+        SensorCommunicationFailure failure,
+        string message,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Failure = failure;
+    }
+
+    public SensorCommunicationFailure Failure { get; }
 }
 
 public sealed class GaugeSampleConverter

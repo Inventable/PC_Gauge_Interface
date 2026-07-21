@@ -7,6 +7,7 @@ public sealed record SerialGaugeTransportOptions(
     int WriteTimeoutMs = 2000,
     int MaxAttempts = 3,
     int RetryDelayMs = 20,
+    int TransactionTimeoutMs = 0,
     Action<SerialGaugeTransportEvent>? EventSink = null);
 
 public enum SerialGaugeTransportEventKind

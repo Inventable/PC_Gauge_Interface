@@ -8,6 +8,7 @@ public sealed class SerialGaugeTransport : IGaugeTransport
 {
     private readonly SerialGaugeTransportOptions _options;
     private readonly SemaphoreSlim _transactionLock = new(1, 1);
+    private readonly object _portSync = new();
     private SerialPort? _port;
 
     public SerialGaugeTransport(SerialGaugeTransportOptions options)
@@ -21,27 +22,33 @@ public sealed class SerialGaugeTransport : IGaugeTransport
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (_port?.IsOpen == true)
+        lock (_portSync)
         {
-            return Task.CompletedTask;
-        }
+            if (_port?.IsOpen == true)
+            {
+                return Task.CompletedTask;
+            }
 
-        _port = new SerialPort(_options.PortName, _options.BaudRate, Parity.None, 8, StopBits.One)
-        {
-            ReadTimeout = _options.ReadTimeoutMs,
-            WriteTimeout = _options.WriteTimeoutMs
-        };
+            _port?.Dispose();
+            _port = new SerialPort(_options.PortName, _options.BaudRate, Parity.None, 8, StopBits.One)
+            {
+                ReadTimeout = _options.ReadTimeoutMs,
+                WriteTimeout = _options.WriteTimeoutMs
+            };
 
-        try
-        {
-            _port.Open();
-            _port.DiscardInBuffer();
-            _port.DiscardOutBuffer();
-        }
-        catch (Exception ex)
-        {
-            Report(SerialGaugeTransportEventKind.OpenFailed, null, 1, 1, ex);
-            throw;
+            try
+            {
+                _port.Open();
+                _port.DiscardInBuffer();
+                _port.DiscardOutBuffer();
+            }
+            catch (Exception ex)
+            {
+                Report(SerialGaugeTransportEventKind.OpenFailed, null, 1, 1, ex);
+                _port.Dispose();
+                _port = null;
+                throw;
+            }
         }
 
         return Task.CompletedTask;
@@ -50,30 +57,57 @@ public sealed class SerialGaugeTransport : IGaugeTransport
     public Task CloseAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _port?.Close();
+        AbortActivePort();
         return Task.CompletedTask;
     }
 
     public async Task<GaugeFrame> TransactAsync(GaugeFrame request, CancellationToken cancellationToken = default)
     {
-        var port = _port;
-        if (port is null || !port.IsOpen)
-        {
-            throw new InvalidOperationException("Serial transport is not open.");
-        }
-
         await _transactionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        CancellationTokenSource? deadlineSource = null;
         try
         {
-            return await Task.Run(
-                () =>
+            cancellationToken.ThrowIfCancellationRequested();
+            var port = _port;
+            if (port is null || !port.IsOpen)
+            {
+                throw new InvalidOperationException("Serial transport is not open.");
+            }
+
+            var transactionToken = cancellationToken;
+            if (_options.TransactionTimeoutMs > 0)
+            {
+                deadlineSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                deadlineSource.CancelAfter(_options.TransactionTimeoutMs);
+                transactionToken = deadlineSource.Token;
+            }
+
+            using var cancellationRegistration = transactionToken.Register(
+                static state => ((SerialGaugeTransport)state!).AbortActivePort(),
+                this);
+            try
+            {
+                return await Task.Run(
+                    () => TransactWithRetries(port, request, transactionToken),
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (transactionToken.IsCancellationRequested)
+            {
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    return TransactWithRetries(port, request, cancellationToken);
-                },
-                cancellationToken).ConfigureAwait(false);
+                    throw new OperationCanceledException("Gauge transaction was cancelled.", ex, cancellationToken);
+                }
+
+                var timeout = new TimeoutException(
+                    $"Gauge {request.Command} exceeded its {_options.TransactionTimeoutMs} ms transaction deadline.",
+                    ex);
+                Report(SerialGaugeTransportEventKind.Failed, request.Command, 1, Math.Max(1, _options.MaxAttempts), timeout);
+                throw timeout;
+            }
         }
         finally
         {
+            deadlineSource?.Dispose();
             _transactionLock.Release();
         }
     }
@@ -124,7 +158,26 @@ public sealed class SerialGaugeTransport : IGaugeTransport
         port.Write(requestBytes, 0, requestBytes.Length);
 
         var replyBytes = ReadWireFrame(port, cancellationToken);
-        return GaugeFrameCodec.Decode(replyBytes);
+        var reply = GaugeFrameCodec.Decode(replyBytes);
+        if (reply.Command != request.Command)
+        {
+            throw new GaugeProtocolException(
+                $"Gauge response command mismatch. Sent {request.Command}, received {reply.Command}.");
+        }
+
+        if (request.Command == GaugeCommand.Identify && reply.Payload.Length is not (22 or 32))
+        {
+            throw new GaugeProtocolException(
+                $"IDENTIFY returned {reply.Payload.Length} byte(s); expected 22 or 32. Echoed requests are not responses.");
+        }
+
+        if (request.Command == GaugeCommand.FindEndOfFile && reply.Payload.Length != 4)
+        {
+            throw new GaugeProtocolException(
+                $"FIND_EOF returned {reply.Payload.Length} byte(s); expected 4. Echoed requests are not responses.");
+        }
+
+        return reply;
     }
 
     private static bool IsRetryableCommsFailure(Exception ex)
@@ -203,9 +256,37 @@ public sealed class SerialGaugeTransport : IGaugeTransport
 
     public ValueTask DisposeAsync()
     {
+        AbortActivePort();
         _transactionLock.Dispose();
-        _port?.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    private void AbortActivePort()
+    {
+        lock (_portSync)
+        {
+            var port = _port;
+            _port = null;
+            if (port is null)
+            {
+                return;
+            }
+
+            try
+            {
+                port.Close();
+            }
+            catch (IOException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            finally
+            {
+                port.Dispose();
+            }
+        }
     }
 
     private static byte[] ReadWireFrame(SerialPort port, CancellationToken cancellationToken)

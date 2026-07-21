@@ -15,7 +15,23 @@ public sealed class GaugeSession
     public async Task<GaugeFrame> IdentifyAsync(CancellationToken cancellationToken = default)
     {
         var request = GaugeFrame.Create(GaugeCommand.Identify);
-        return await _transport.TransactAsync(request, cancellationToken).ConfigureAwait(false);
+        var reply = await _transport.TransactAsync(request, cancellationToken).ConfigureAwait(false);
+        if (reply.Payload.Length == 22)
+        {
+            var device = DeviceData.DecodeMemoryGauge(reply.Payload);
+            EnsureSupportedDevice(device);
+            return reply;
+        }
+
+        if (reply.Payload.Length == 32)
+        {
+            var device = DeviceData.DecodeAcousticGauge(reply.Payload);
+            EnsureSupportedDevice(device);
+            return reply;
+        }
+
+        throw new GaugeProtocolException(
+            $"IDENTIFY returned {reply.Payload.Length} byte(s); expected a complete 22-byte memory or 32-byte acoustic identity.");
     }
 
     public async Task<GaugeFrame> SendCommandAsync(GaugeCommand command, CancellationToken cancellationToken = default)
@@ -31,7 +47,7 @@ public sealed class GaugeSession
             .TransactAsync(GaugeFrame.Create(GaugeCommand.FindEndOfFile), cancellationToken)
             .ConfigureAwait(false);
 
-        if (reply.Payload.Length < 4)
+        if (reply.Payload.Length != 4)
         {
             throw new GaugeProtocolException($"FIND_EOF returned {reply.Payload.Length} byte(s); expected 4.");
         }
@@ -66,6 +82,14 @@ public sealed class GaugeSession
         return reply.Payload;
     }
 
+    private static void EnsureSupportedDevice(DeviceData device)
+    {
+        if (device.DeviceType is not (100200 or 100230))
+        {
+            throw new GaugeProtocolException($"IDENTIFY returned unsupported device type {device.DeviceType}.");
+        }
+    }
+
     public async Task<byte[]> ReadSensorDataAsync(GaugeCommand command, CancellationToken cancellationToken = default)
     {
         if (command is not (GaugeCommand.ReadSensorSerial
@@ -89,7 +113,8 @@ public sealed class GaugeSession
         ushort chunkSize = 1024,
         GaugeCommand command = GaugeCommand.ReadExternalEeprom,
         CancellationToken cancellationToken = default,
-        IProgress<MemoryReadProgress>? progress = null)
+        IProgress<MemoryReadProgress>? progress = null,
+        ReadOnlyMemory<byte> existingPrefix = default)
     {
         if (length < 0)
         {
@@ -101,9 +126,15 @@ public sealed class GaugeSession
             throw new ArgumentOutOfRangeException(nameof(chunkSize), "Chunk size must be greater than zero.");
         }
 
+        if (existingPrefix.Length > length)
+        {
+            throw new ArgumentException("Existing memory prefix is longer than the requested read.", nameof(existingPrefix));
+        }
+
         var result = new byte[length];
-        var offset = 0;
-        progress?.Report(new MemoryReadProgress(0, length, result));
+        existingPrefix.CopyTo(result);
+        var offset = existingPrefix.Length;
+        progress?.Report(new MemoryReadProgress(offset, length, result));
 
         while (offset < length)
         {

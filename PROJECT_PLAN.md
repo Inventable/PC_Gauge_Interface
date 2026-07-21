@@ -389,6 +389,11 @@ Current status:
 - Engineering Mode shows live communication integrity for the current connection session: completed transactions, retries, wire CRC errors, recovered transactions, failures, and the latest issue. A failed/disconnected session is frozen for inspection and support export until a new connection starts. The support ZIP carries the same summary with separate timeout, I/O, protocol, and port-access counts.
 - Additional converted export formats are deferred until the required downstream/website format is known; legacy ASCII `.rec` remains the supported operator export.
 - Automatic/manual priority, cancellation, retry, partial review, ETA accuracy, graceful close, and powered-gauge reconnect have been validated on live memory-gauge hardware. See `docs/LIVE_GAUGE_VALIDATION.md`.
+- H0 recovery now has an explicit host lifecycle: every UI serial transaction has a seven-second operation deadline, sensor calibration has a ten-second deadline, and settings/cancel remain available while normal work is active. A failed download probes `IDENTIFY` after the transport's three attempts; loss of identity enters `Disconnected`, while a responding gauge leaves the file retryable.
+- Disconnect recovery retains the current gauge's table, completed files, and partial raw download for ten seconds. Reconnecting the same device on the same port resumes from the retained byte offset; a different device or an expired window clears that state.
+- Missing sensor calibration no longer blocks evidence capture. The app reports the sensor failure separately, downloads raw memory, and offers a `.raw` evidence export; calibrated plots and legacy ASCII `.rec` export remain unavailable until valid calibration is captured.
+- `IDENTIFY` and `FIND_EOF` reject echoed or incomplete request frames. Identity requires a complete supported 22-byte memory-gauge or 32-byte acoustic-gauge payload, and `FIND_EOF` requires exactly four bytes.
+- Main-window shutdown cancels and awaits polling, foreground work, and background downloads before disposing serial resources. The self-contained app was closed during COM8 activity on 21 July 2026; its process exited and COM8 was immediately openable by a second process.
 - Firmware write commands have been classified by operator risk and readback requirements. Gauge Settings remains read-only until firmware can safely validate and apply interval changes at a clean file boundary; destructive and service commands remain isolated from the operator workflow. See `docs/GAUGE_SETTINGS_SAFETY.md`.
 - Engineering Mode's existing read-only connection snapshot is now the first defined diagnostic procedure; future controls require similarly concrete procedures and expected results. See `docs/ENGINEERING_DIAGNOSTICS.md`.
 - A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
@@ -425,16 +430,16 @@ Current status:
 
 ## Immediate Next Steps
 
-1. Run staged bootloader interruption/recovery tests through the new Engineering Mode control with hardware-programmer fallback, then package approved firmware with signed manifests. The first complete live update and application recovery passed at `115200`. See `docs/BOOTLOADER.md`.
-2. Define the firmware changes needed for safe editable measurement intervals: sensor-specific limits, clean file boundary, immediate application, and failure recovery.
-3. Physically unplug/reconnect both gauge types while the app is running; multi-day acoustic file validation is complete.
+1. Complete the H0 physical acceptance matrix: sensor absent, and gauge unplugged during table read, calibration, and early/mid/late download. Confirm `Disconnected`, COM release, same-gauge ten-second resume, and a usable settings/cancel route in every case.
+2. Run staged bootloader interruption/recovery tests through the Engineering Mode control with hardware-programmer fallback, then package approved firmware with signed manifests. The first complete live update and application recovery passed at `115200`. See `docs/BOOTLOADER.md`.
+3. Define the firmware changes needed for safe editable measurement intervals: sensor-specific limits, clean file boundary, immediate application, and failure recovery.
 4. Verify the self-contained package on a clean Windows field laptop, confirm corporate/FTDI prerequisites, and start Northstar code-signing procurement before routine field distribution.
 5. Keep additional export formats deferred until the website/downstream contract is known.
 
 ## TODO Reminder
 
+- Finish the H0 unplug/sensor-absent lifecycle matrix on live hardware.
 - Interruption-test the loader-only recovery path, then package approved images with signed manifests.
-- Test physical disconnect/reconnect with both gauge types.
 - Define and implement the firmware side of safe measurement-interval changes before enabling writes.
 - Test the self-contained archive on a clean field laptop.
 

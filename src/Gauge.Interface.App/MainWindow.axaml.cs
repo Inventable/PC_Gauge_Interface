@@ -9,16 +9,42 @@ namespace Gauge.Interface.App;
 
 public sealed partial class MainWindow : Window
 {
+    private bool _shutdownComplete;
+    private bool _shutdownStarted;
+
     public MainWindow()
     {
         InitializeComponent();
     }
 
-    private void Window_Closing(object? sender, WindowClosingEventArgs e)
+    private async void Window_Closing(object? sender, WindowClosingEventArgs e)
     {
+        if (_shutdownComplete)
+        {
+            return;
+        }
+
         if (DataContext is MainWindowViewModel { IsFirmwareUpdating: true })
         {
             e.Cancel = true;
+            return;
+        }
+
+        e.Cancel = true;
+        if (_shutdownStarted || DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        _shutdownStarted = true;
+        try
+        {
+            await viewModel.ShutdownAsync().ConfigureAwait(true);
+        }
+        finally
+        {
+            _shutdownComplete = true;
+            Close();
         }
     }
 
@@ -176,6 +202,54 @@ public sealed partial class MainWindow : Window
         }
 
         await SaveRecordAsync(viewModel, file);
+    }
+
+    private async void SaveRaw_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel viewModel
+            || sender is not Control { DataContext: GaugeFileRowViewModel { Download: not null } file })
+        {
+            return;
+        }
+
+        try
+        {
+            var startDirectory = string.IsNullOrWhiteSpace(viewModel.LastRecordExportDirectory)
+                ? viewModel.OutputDirectory
+                : viewModel.LastRecordExportDirectory;
+            var startFolder = string.IsNullOrWhiteSpace(startDirectory)
+                ? null
+                : await StorageProvider.TryGetFolderFromPathAsync(startDirectory);
+            var destination = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Save uncalibrated gauge memory",
+                SuggestedFileName = viewModel.BuildRawFileName(file),
+                SuggestedStartLocation = startFolder,
+                DefaultExtension = "raw",
+                ShowOverwritePrompt = true,
+                FileTypeChoices =
+                [
+                    new FilePickerFileType("Raw gauge memory")
+                    {
+                        Patterns = ["*.raw"]
+                    }
+                ]
+            });
+
+            if (destination is null)
+            {
+                return;
+            }
+
+            await using var stream = await destination.OpenWriteAsync();
+            stream.SetLength(0);
+            await stream.WriteAsync(file.Download.RawBytes);
+            viewModel.RecordExportSucceeded(file, destination.Path.LocalPath);
+        }
+        catch (Exception ex)
+        {
+            viewModel.RecordExportFailed(file, ex.Message);
+        }
     }
 
     private async void SaveSelectedRecord_Click(object? sender, RoutedEventArgs e)

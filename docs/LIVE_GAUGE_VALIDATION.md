@@ -30,6 +30,20 @@ Date: 15 July 2026
 
 ## Remaining Hardware Checks
 
-- Physically unplug and reconnect a gauge while the app is open to verify the disconnected state and aggressive 57600-baud wake polling end to end.
+- With the sensor detached, confirm file-table discovery reaches raw download within the ten-second calibration deadline and that settings/cancel remain usable.
+- Physically unplug and reconnect a gauge during table read, calibration, and early/mid/late download. Verify the disconnected state, aggressive 57600-baud wake polling, and same-device resume within ten seconds.
 - Repeat the workflow with a near-full gauge and a representative multi-day job.
 - Verify the packaged build on a clean Windows PC with no .NET runtime installed.
+
+## H0 Host Lifecycle Check
+
+Date: 21 July 2026
+
+- The self-contained app opened Serial Settings from the disconnected operator view with COM8 retained.
+- While COM8 discovery was active, the Settings menu remained usable; selecting Serial Settings cancelled the work and returned to setup without restarting the application.
+- `Continue` remained enabled when COM8 was unchanged, allowing the app to close, flush, and reopen the selected port as a recovery action.
+- The app was restarted on COM8 and its window was closed while connection work was active.
+- The visible window and `Gauge.Interface.App` process both exited within two seconds.
+- A separate process opened COM8 at 57600 baud immediately after shutdown, proving that the application had released the port.
+
+This verifies the host shutdown and same-port recovery mechanics. The physical unplug and sensor-absent matrix above remains required before H0 automated download commissioning resumes.
