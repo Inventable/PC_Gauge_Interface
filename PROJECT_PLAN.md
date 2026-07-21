@@ -206,29 +206,29 @@ Important qualities:
 - Minimal dependence on internet access.
 - Clear separation between everyday operator actions and advanced engineering controls.
 - High contrast, large click targets, and status language suitable for field use.
-- Strong confirmation and summary screens after downloads, with errors presented as actionable warnings rather than raw counters only.
+- Clear completion and quality status in the file row and Review view, with errors presented as actionable warnings rather than raw counters only.
 
-Initial main views:
+Current main views:
 
-- Connect.
-- Device summary.
-- Download.
+- Serial setup.
+- Disconnected discovery.
+- Connected file table with automatic background download.
 - Review data.
-- Export.
-- Diagnostics.
+- App, serial, and read-only gauge settings.
+- Engineering diagnostics and firmware update.
 
 ### Phase 5 UI Design Work
 
-The first shell proves that the workflow is possible. The next Phase 5 work should turn it into a clean operator application:
+The Phase 5 design baseline for the operator application is:
 
 1. Establish Northstar design tokens in the app resources.
 2. Create a branded application header and clear connected/not-connected states.
-3. Keep serial-port choice and default download folder in an entry/settings view, not permanently on the operator screen.
+3. Keep serial-port choice in the entry/settings flow and the default download folder in App Settings, not permanently on the operator screen.
 4. Poll the selected gauge port when idle so disconnect/reconnect state is obvious without repeated manual actions.
-5. Refine the file table as the primary operator decision point, including only file index, relative size, download state, and graph/review state.
+5. Use the file table as the primary operator decision point, limited to file index, size, duration, interval, download state, and file actions.
 6. Add progress stages and cancellation for long reads/downloads.
-7. Add a focused review screen with pressure/temperature chart, latest values, sample count, job duration, and export state.
-8. Add a completion summary after download.
+7. Use a focused review screen with the pressure/temperature chart, sample count, interval, duration, ranges, cursor values, quality, and export action.
+8. Keep completion, warning, cancellation, and retry state in the relevant file row and Review header rather than adding another workflow screen.
 9. Move raw protocol details, EEPROM tools, and acoustic diagnostics into a separate engineering mode.
 10. Validate the workflow with field-style scenarios: cold gauge, already-awake gauge, small battery-insertion files, bad CRC, disconnected cable, no files, and long download.
 
@@ -240,11 +240,10 @@ The main path should be:
 2. Identify gauge.
 3. Show device readiness and memory summary.
 4. Show the file table with clear size and interval information, newest file first.
-5. Choose the file/run to download.
-6. Download with clear progress, retry, and cancel handling.
-7. Show completion summary.
-8. Review pressure and temperature chart.
-9. Export job files.
+5. Let automatic newest-first download proceed, or give an operator-requested file priority.
+6. Show clear per-file progress, retry, and cancel handling.
+7. Review the pressure and temperature chart as soon as partial plot data is available.
+8. Export the required job file.
 
 The operator should not have to understand packet framing, command history, raw buffers, PLL state, sensor pass-through, or EEPROM functions during normal use.
 
@@ -369,7 +368,7 @@ Deliverable: deployable Windows engineering build.
 Current status:
 
 - `Gauge.Interface.App` Avalonia desktop project is in the solution.
-- The first operator shell can list serial ports, wake/verify the serial link, connect/read the file table, show relative file sizes, suggest the most likely job file, download the selected file into a named job folder, and show latest pressure/temperature plus recent sample rows.
+- The operator shell remembers and ranks serial ports, wakes/verifies the gauge link, displays a newest-first sortable file table, downloads files automatically in the background, gives manual requests priority, reviews partial or complete P&T graphs, and exports legacy-compatible ASCII `.rec` files.
 - The UI is wired to the shared `GaugeJobService`, so the proven CLI workflow is not duplicated in the desktop app.
 - Northstar brand colours are now app resources with red as the primary colour and green reserved for accent/healthy states.
 - The review panel uses ScottPlot 5 with a single elapsed-time axis, pressure on the left axis, temperature on the right axis, and one subdued grid tied to the pressure axis. Direct axis labels and solid/dashed traces avoid relying on a separate legend or colour alone.
@@ -383,7 +382,7 @@ Current status:
 - Automatic and manual downloads can be cancelled explicitly. Cancellation pauses the automatic queue, preserves any partial graph for inspection, and exposes a clear retry action that restarts the selected file before automatic work resumes.
 - Review now provides a sample-snapped cursor with elapsed time, pressure, and temperature readout. Data quality reports file/data CRC errors and samples carrying battery warnings, using the same green/amber/red state language as the file table.
 - The Review side panel uses consistent label/value tables for file, quality, cursor, duration, and explicit pressure/temperature minima and maxima. Live download progress and ETA remain in the Review header so metadata rows stay evenly spaced. Data values use a bundled, licensed Cascadia Mono face for stable live readouts. Cursor inspection is an explicit graph mode that can be restored after rectangle zoom, and downloaded files can be exported directly from Review.
-- The header gear opens a compact menu for Serial Settings, read-only Gauge Settings, and Engineering Mode. Raw identity, transport, file-table, and calibration details remain outside the normal operator workflow.
+- The header gear opens a compact menu for App Settings, Serial Settings, read-only Gauge Settings, and Engineering Mode. Raw identity, transport, file-table, and calibration details remain outside the normal operator workflow.
 - Initial serial setup is now a flat, wordmark-only screen containing just the port selector and Continue action. The default output folder has moved to App Settings. When no gauge responds, the normal shell collapses to a minimal `Disconnected` state with an enlarged sequential pulse around the official Northstar mark and a small settings menu for recovery. Both animation modes move a transparent band around the otherwise solid mark: Slow rotates for three seconds and pauses for one, while Fast rotates for 1.5 seconds and pauses for 2.5.
 - Engineering Mode can export a bounded support ZIP containing readable connection, runtime, identity, logical file-table, download-quality and calibration metadata plus the captured calibration payloads. It remembers its own last save folder and excludes downloaded job memory.
 - The support bundle includes the latest 100 port-open, retry, retry-recovery and final transaction-failure events. Repeated equivalent events are coalesced over five seconds with first/last timestamps and occurrence counts, avoiding an unbounded raw serial log.
@@ -399,7 +398,7 @@ Current status:
 - Main-window shutdown cancels and awaits polling, foreground work, and background downloads before disposing serial resources. The self-contained app was closed during COM8 activity on 21 July 2026; its process exited and COM8 was immediately openable by a second process.
 - Firmware write commands have been classified by operator risk and readback requirements. Gauge Settings remains read-only until firmware can safely validate and apply interval changes at a clean file boundary; destructive and service commands remain isolated from the operator workflow. See `docs/GAUGE_SETTINGS_SAFETY.md`.
 - Engineering Mode's existing read-only connection snapshot is now the first defined diagnostic procedure; future controls require similarly concrete procedures and expected results. See `docs/ENGINEERING_DIAGNOSTICS.md`.
-- A cleaner state-driven UI is in progress: port setup first, disconnected state when no gauge responds, file-table view when connected, and focused graph review after download.
+- The operator UI is state-driven: serial setup first, a minimal disconnected discovery state when no gauge responds, the file table when connected, and focused graph review for partial or complete downloads.
 
 ### Phase 6: Acoustic Gauge Support
 

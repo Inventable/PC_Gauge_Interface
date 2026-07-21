@@ -6,15 +6,86 @@ The new application should be built around the operator's job, not around the in
 
 The old LabVIEW screenshots are reference material for workflow and required data only. They should not drive the visual style. The new interface should feel calm, clear, rugged, and task-focused for workshop and field use.
 
-Primary operator journey:
+Current operator journey:
 
 ```text
-Connect -> Confirm Gauge -> Download -> Review -> Export
+Select Serial Port -> Automatic Gauge Discovery -> File Table -> Review -> Export
 ```
 
 Advanced diagnostics and engineering controls should be available, but they should not dominate the normal operator path.
 
-## Screen 1: Connect
+## Current Operator Screens
+
+### Serial Setup
+
+- Show only the Northstar wordmark, serial-port selector, refresh icon, and `Continue`.
+- Prefer the remembered port, then a likely FTDI adapter.
+- Show a short message only when no serial ports are available.
+- Keep the default output folder in App Settings, not on this screen.
+- Keep baud rate and protocol detail out of the operator workflow.
+
+### Disconnected
+
+- Hide the normal connected header and file table.
+- Show only the enlarged official Northstar mark, `Disconnected`, and a small settings gear.
+- Poll the selected port aggressively at 57600 baud so a newly powered gauge enters serial mode before logging starts.
+- After a valid slow `IDENTIFY`, wait briefly and verify the fast link before showing files.
+- Keep App Settings and Serial Settings available from the gear.
+
+The activity mark remains mostly solid red while a translucent band moves around it. App Settings remembers the selected mode:
+
+- `Slow`: 3-second rotation, then 1 second fully solid.
+- `Fast`: 1.5-second rotation, then 2.5 seconds fully solid.
+
+### Connected File Table
+
+- Show the Northstar header, connection state, device serial number, firmware version, and settings gear.
+- Keep the table focused on file index, relative/numeric size, duration, interval, download state, and actions.
+- Default to newest file first and allow sorting by file number or size from either the heading or sort icon.
+- Allow files below 10 samples to be hidden.
+- Download automatically from highest file index to lowest; an operator-requested file takes priority.
+- Show per-file progress and ETA rather than a detached global progress panel.
+- Use record-type icons for acoustic packet data and raw acoustic logging.
+- Change the row action from download to graph when plot data becomes available; offer ASCII `.rec` export beside it.
+- Keep partial and completed data attached to the correct file so reviewing one row never displays another file.
+
+### Review
+
+- Place the data summary on the left and the large graph on the right.
+- Show file, duration, sample count, interval, status, one-line quality result, P/T minima and maxima, and cursor values.
+- Keep live download progress and ETA in the Review header.
+- Plot pressure on the labelled left axis and temperature on the labelled right axis with one subdued shared grid.
+- Provide Fit, rectangle zoom, zoom in/out, pan/wheel, and cursor modes; cursor mode must remain recoverable after zooming.
+- Make a partial graph available once enough calibrated records exist and refresh it at a restrained rate during transfer.
+- Offer the same legacy `.rec` export action used in the file table.
+
+### Settings And Engineering
+
+- App Settings contains the default output folder and disconnected-animation mode.
+- Serial Settings selects or reopens the current port.
+- Gauge Settings remains read-only until firmware supports safe validated writes.
+- Engineering Mode contains communication integrity, support bundle export, diagnostics, and recovery-first firmware update.
+- Raw protocol information and destructive commands remain outside the normal operator path.
+
+### Recovery Behaviour
+
+- Foreground requests take priority, followed by automatic downloads, followed by idle liveness checks.
+- Three failed transport attempts constitute a communication failure.
+- A failed active operation shows `Disconnected` immediately, then performs a short identity recovery check.
+- Complete packets and partial progress are retained; reconnecting the same gauge within 10 seconds resumes from the retained offset.
+- Closing the main window cancels and awaits active work, releases the serial port, and exits the process.
+
+Current implemented path:
+
+```text
+Setup -> Disconnected / Connected File Table -> Automatic or Manual Download -> Review -> .rec Export
+```
+
+## Historical Screen Concept (Superseded)
+
+The screen-by-screen concept below is retained for design traceability. It predates the cleaner state-driven shell above and is not the current application layout.
+
+### Screen 1: Connect
 
 Purpose: get the operator connected with minimum decisions.
 
@@ -41,7 +112,7 @@ Engineering detail available:
 - Raw identify command/reply.
 - Timeout and retry count.
 
-## Screen 2: Device Summary
+### Screen 2: Device Summary
 
 Purpose: tell the operator what is connected and whether it is ready.
 
@@ -75,7 +146,7 @@ Operator-friendly behaviour:
 - Use status labels such as `Ready`, `Attention needed`, `Unsafe to erase`, or `Download recommended`.
 - Keep file-record addresses visible only in a details panel.
 
-## Screen 3: Choose Download
+### Screen 3: Choose Download
 
 Purpose: let the operator download the right file/run without reading raw memory addresses.
 
@@ -100,7 +171,7 @@ Engineering detail available:
 - File record validity.
 - Missing address details.
 
-## Screen 4: Download Progress
+### Screen 4: Download Progress
 
 Purpose: make the transfer feel trustworthy and recoverable.
 
@@ -132,7 +203,7 @@ Completion states:
 - `Download failed`.
 - `Download cancelled`.
 
-## Screen 5: Download Result
+### Screen 5: Download Result
 
 Purpose: summarize what happened and guide the next step.
 
@@ -161,7 +232,7 @@ Operator-friendly behaviour:
   - `Some records were corrected`.
   - `Some records could not be recovered`.
 
-## Screen 6: Review Data
+### Screen 6: Review Data
 
 Purpose: inspect pressure and temperature data clearly.
 
@@ -191,7 +262,7 @@ Operator-friendly behaviour:
 - Keep raw counts and CRC columns in the data table, not on the main chart.
 - Allow quick confirmation that the downloaded job looks sensible before export.
 
-## Screen 7: Export
+### Screen 7: Export
 
 Purpose: produce files for onward use.
 
@@ -218,7 +289,7 @@ Operator-friendly behaviour:
 - Confirm exactly what was exported.
 - Make website upload a later layer on top of the same local job model.
 
-## Engineering Mode
+### Historical Engineering Mode
 
 Engineering Mode should be explicit and separate from the main operator flow.
 
@@ -248,7 +319,7 @@ Destructive actions requiring confirmation:
 - Change memory mode.
 - Sensor pass-through mode.
 
-## First Implementation Target
+### Historical First Implementation Target
 
 The first usable application should implement only enough UI to support the core path:
 
@@ -256,13 +327,13 @@ The first usable application should implement only enough UI to support the core
 Connect -> Device Summary -> Download -> Review Data -> Export
 ```
 
-Current status: the command-line probe has proven the memory-gauge protocol path, and the Avalonia desktop shell now has a state-driven operator flow in progress:
+At that stage, the command-line probe had proven the memory-gauge protocol path and the first Avalonia shell was moving toward a state-driven operator flow:
 
 ```text
 Setup -> Disconnected / Connected File Table -> Download -> Review Graph
 ```
 
-The next UX work is to validate this flow with live hardware and tighten progress, cancellation, graph status, warnings, and settings/engineering-mode separation.
+The next UX work identified at that stage was live-hardware validation and tighter progress, cancellation, graph status, warnings, and settings/engineering-mode separation. Those items have since been incorporated into the current design above.
 
 The command-line probe exists to prove and preserve:
 
