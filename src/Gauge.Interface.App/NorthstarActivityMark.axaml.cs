@@ -64,8 +64,8 @@ public sealed partial class NorthstarActivityMark : UserControl
 
     private void Animate(object? sender, EventArgs e)
     {
-        var rotationSeconds = Speed == NorthstarActivitySpeed.Fast ? 1.0 : 3.0;
-        var pauseSeconds = Speed == NorthstarActivitySpeed.Fast ? 2.0 : 1.0;
+        var rotationSeconds = Speed == NorthstarActivitySpeed.Fast ? 1.5 : 3.0;
+        var pauseSeconds = Speed == NorthstarActivitySpeed.Fast ? 2.5 : 1.0;
         var elapsed = _clock.Elapsed.TotalSeconds % (rotationSeconds + pauseSeconds);
         if (elapsed >= rotationSeconds)
         {
