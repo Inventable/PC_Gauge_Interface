@@ -34,6 +34,7 @@ Date: 15 July 2026
 - Physically unplug and reconnect a gauge during table read, calibration, and early/mid/late download. Verify the disconnected state, aggressive 57600-baud wake polling, and same-device resume within ten seconds.
 - During the download unplug cases, verify that the file row resumes automatically from its retained percentage without requiring the file-table Refresh action. A second operation failure after identity has recovered may remain a visible operator-retry error.
 - Verify that the disconnected view replaces the file table as soon as the active download exhausts its communication attempts, before any recovery identity probe or reconnect succeeds.
+- Confirm on both gauge types that the 100 ms fast-link timeout produces no false retries during sustained 1024-byte downloads and that physical removal reaches the disconnected view in well under one second.
 - Repeat the workflow with a near-full gauge and a representative multi-day job.
 - Verify the packaged build on a clean Windows PC with no .NET runtime installed.
 

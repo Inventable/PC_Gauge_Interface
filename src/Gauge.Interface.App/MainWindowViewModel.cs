@@ -23,9 +23,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private const int WakePollIntervalMs = 100;
     private const int WakeScanTimeoutMs = 30000;
     private const int BackgroundWakeScanTimeoutMs = 1500;
-    private const int ConnectedPollTransactionTimeoutMs = 250;
-    private const int DataTransactionTimeoutMs = 2000;
-    private const int DataTransactionDeadlineMs = 7000;
+    private const int ConnectedPollTransactionTimeoutMs = 100;
+    private const int DataTransactionTimeoutMs = 100;
+    private const int DataTransactionDeadlineMs = 500;
+    private const int WakeTransactionDeadlineMs = 1000;
+    private const int SensorTransactionTimeoutMs = 2000;
+    private const int SensorTransactionDeadlineMs = 7000;
     private const int BootloaderBaud = 115200;
     private const uint MemoryGaugeDeviceType = 100230;
     private const ushort Pic18F26K80DeviceId = 0x6126;
@@ -1698,22 +1701,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async Task<VerifiedGaugeConnection> OpenVerifiedConnectionAsync(
         bool preferFast,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int transactionTimeoutMs = DataTransactionTimeoutMs,
+        int transactionDeadlineMs = DataTransactionDeadlineMs)
     {
         if (preferFast)
         {
             var fastIdentity = await TryIdentifyAsync(
                 SelectedPort,
                 FastBaud,
-                DataTransactionTimeoutMs,
-                cancellationToken).ConfigureAwait(true);
+                transactionTimeoutMs,
+                cancellationToken,
+                transactionDeadlineMs).ConfigureAwait(true);
             if (fastIdentity is not null)
             {
                 return await OpenIdentifiedTransportAsync(
                     SelectedPort,
                     FastBaud,
-                    DataTransactionTimeoutMs,
-                    cancellationToken).ConfigureAwait(true);
+                    transactionTimeoutMs,
+                    cancellationToken,
+                    transactionDeadlineMs).ConfigureAwait(true);
             }
         }
 
@@ -1733,8 +1740,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return await OpenIdentifiedTransportAsync(
                     SelectedPort,
                     FastBaud,
-                    DataTransactionTimeoutMs,
-                    cancellationToken).ConfigureAwait(true);
+                    transactionTimeoutMs,
+                    cancellationToken,
+                    transactionDeadlineMs).ConfigureAwait(true);
             }
             catch (Exception ex) when (IsExpectedUiFailure(ex) || ex is ArgumentOutOfRangeException)
             {
@@ -1742,8 +1750,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return await OpenIdentifiedTransportAsync(
                     SelectedPort,
                     WakeBaud,
-                    DataTransactionTimeoutMs,
-                    cancellationToken).ConfigureAwait(true);
+                    transactionTimeoutMs,
+                    cancellationToken,
+                    transactionDeadlineMs).ConfigureAwait(true);
             }
         }
 
@@ -1751,8 +1760,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         return await OpenIdentifiedTransportAsync(
             SelectedPort,
             FastBaud,
-            DataTransactionTimeoutMs,
-            cancellationToken).ConfigureAwait(true);
+            transactionTimeoutMs,
+            cancellationToken,
+            transactionDeadlineMs).ConfigureAwait(true);
     }
 
     private SerialPortOption? ChoosePort(string previous)
@@ -1774,11 +1784,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         string portName,
         int baudRate,
         int timeoutMs,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int transactionDeadlineMs = DataTransactionDeadlineMs)
     {
         try
         {
-            await using var transport = CreateTransport(portName, baudRate, timeoutMs);
+            await using var transport = CreateTransport(
+                portName,
+                baudRate,
+                timeoutMs,
+                transactionDeadlineMs);
             await transport.OpenAsync(cancellationToken).ConfigureAwait(false);
             var session = new GaugeSession(transport);
             return await session.IdentifyAsync(cancellationToken).ConfigureAwait(false);
@@ -1801,7 +1816,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         timeoutSource.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
         try
         {
-            await using var transport = CreateTransport(portName, baudRate, transactionTimeoutMs);
+            await using var transport = CreateTransport(
+                portName,
+                baudRate,
+                transactionTimeoutMs,
+                WakeTransactionDeadlineMs);
             await transport.OpenAsync(timeoutSource.Token).ConfigureAwait(false);
 
             while (!timeoutSource.IsCancellationRequested)
@@ -1831,9 +1850,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         string portName,
         int baudRate,
         int timeoutMs,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int transactionDeadlineMs = DataTransactionDeadlineMs)
     {
-        var transport = CreateTransport(portName, baudRate, timeoutMs);
+        var transport = CreateTransport(portName, baudRate, timeoutMs, transactionDeadlineMs);
         try
         {
             await transport.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -1861,14 +1881,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    private SerialGaugeTransport CreateTransport(string portName, int baudRate, int timeoutMs)
+    private SerialGaugeTransport CreateTransport(
+        string portName,
+        int baudRate,
+        int timeoutMs,
+        int transactionDeadlineMs = DataTransactionDeadlineMs)
     {
         return new SerialGaugeTransport(new SerialGaugeTransportOptions(
             portName,
             baudRate,
             ReadTimeoutMs: timeoutMs,
             WriteTimeoutMs: timeoutMs,
-            TransactionTimeoutMs: DataTransactionDeadlineMs,
+            TransactionTimeoutMs: transactionDeadlineMs,
             EventSink: RecordCommunicationEvent));
     }
 
@@ -2044,7 +2068,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             await using var connection = await OpenVerifiedConnectionAsync(
                 preferFast: true,
-                deadlineSource.Token).ConfigureAwait(true);
+                cancellationToken: deadlineSource.Token,
+                transactionTimeoutMs: SensorTransactionTimeoutMs,
+                transactionDeadlineMs: SensorTransactionDeadlineMs).ConfigureAwait(true);
             var service = new GaugeJobService(new GaugeSession(connection.Transport));
             return await service.CaptureSensorCalibrationAsync(
                 cancellationToken: deadlineSource.Token).ConfigureAwait(true);
