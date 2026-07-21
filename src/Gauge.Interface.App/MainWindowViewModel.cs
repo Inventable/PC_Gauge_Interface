@@ -1659,11 +1659,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    private void TransitionToDisconnected(string reason, bool retainGaugeData = true)
+    private void TransitionToDisconnected(
+        string reason,
+        bool retainGaugeData = true,
+        bool cancelActiveOperations = true)
     {
         EndCommunicationSession();
-        CancelBackgroundDownloads();
-        _manualDownloadCancellation?.Cancel();
+        if (cancelActiveOperations)
+        {
+            CancelBackgroundDownloads();
+            _manualDownloadCancellation?.Cancel();
+        }
+
         if (retainGaugeData && _connectedDevice is not null)
         {
             _retainedDeviceSerial = _connectedDevice.DeviceSerial;
@@ -2513,14 +2520,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         var expectedSerial = _connectedDevice?.DeviceSerial;
-        var stillConnected = false;
+        file.MarkInterrupted();
+        TransitionToDisconnected(
+            $"Gauge communication failed while downloading file {file.Index}",
+            cancelActiveOperations: false);
+
+        GaugeFrame? recoveredIdentity = null;
+        DeviceData? recoveredDevice = null;
         if (expectedSerial.HasValue)
         {
             try
             {
-                stillConnected = await ProbeConnectedGaugeAsync(
-                    expectedSerial.Value,
+                recoveredIdentity = await TryIdentifyAsync(
+                    SelectedPort,
+                    FastBaud,
+                    ConnectedPollTransactionTimeoutMs,
                     cancellationToken).ConfigureAwait(true);
+                recoveredDevice = recoveredIdentity is null
+                    ? null
+                    : DecodeDevice(recoveredIdentity.Payload);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -2528,16 +2546,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             }
             catch (Exception)
             {
-                stillConnected = false;
+                recoveredIdentity = null;
+                recoveredDevice = null;
             }
         }
 
-        if (stillConnected)
+        if (recoveredIdentity is not null
+            && recoveredDevice is not null
+            && recoveredDevice.DeviceSerial == expectedSerial)
         {
+            StartCommunicationSession();
+            RestoreRetainedSession(recoveredDevice, recoveredIdentity.Payload);
+            Status = $"Gauge communication recovered; resuming file {file.Index}";
             return true;
         }
 
-        file.MarkInterrupted();
         TransitionToDisconnected($"Gauge disconnected while downloading file {file.Index}");
         return false;
     }

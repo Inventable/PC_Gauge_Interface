@@ -33,6 +33,7 @@ Date: 15 July 2026
 - With the sensor detached, confirm file-table discovery reaches raw download within the ten-second calibration deadline and that settings/cancel remain usable.
 - Physically unplug and reconnect a gauge during table read, calibration, and early/mid/late download. Verify the disconnected state, aggressive 57600-baud wake polling, and same-device resume within ten seconds.
 - During the download unplug cases, verify that the file row resumes automatically from its retained percentage without requiring the file-table Refresh action. A second operation failure after identity has recovered may remain a visible operator-retry error.
+- Verify that the disconnected view replaces the file table as soon as the active download exhausts its communication attempts, before any recovery identity probe or reconnect succeeds.
 - Repeat the workflow with a near-full gauge and a representative multi-day job.
 - Verify the packaged build on a clean Windows PC with no .NET runtime installed.
 
