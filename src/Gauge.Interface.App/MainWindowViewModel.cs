@@ -35,6 +35,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private static readonly TimeSpan ConnectedPollInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan SensorCalibrationDeadline = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ReconnectRetentionWindow = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan DownloadRecoveryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly Geometry SortAscendingGeometry = Geometry.Parse("M7,15L12,10L17,15H7Z");
     private static readonly Geometry SortDescendingGeometry = Geometry.Parse("M7,9L12,14L17,9H7Z");
     private static readonly string SettingsPath = Path.Combine(
@@ -1525,7 +1526,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         catch (Exception ex)
         {
-            SetProtectedStatus($"Download failed unexpectedly: {ex.Message}", TimeSpan.FromSeconds(20));
+            await HandleDownloadFailureAsync(requestedFile, ex, cancellationToken).ConfigureAwait(true);
         }
         finally
         {
@@ -1888,6 +1889,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async Task RunBackgroundDownloadsAsync(CancellationToken cancellationToken)
     {
+        var failedFileCount = 0;
         try
         {
             foreach (var file in Files
@@ -1896,32 +1898,65 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 .ToArray())
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await DownloadFileRowAsync(file, manual: false, cancellationToken).ConfigureAwait(true);
+                var recoveryAttempted = false;
+                while (!file.IsDownloaded)
+                {
+                    try
+                    {
+                        await DownloadFileRowAsync(file, manual: false, cancellationToken).ConfigureAwait(true);
+                        break;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        var stillConnected = await VerifyGaugeAfterDownloadFailureAsync(
+                            file,
+                            cancellationToken).ConfigureAwait(true);
+                        if (!stillConnected)
+                        {
+                            return;
+                        }
+
+                        if (!recoveryAttempted)
+                        {
+                            recoveryAttempted = true;
+                            file.MarkRetrying();
+                            SetProtectedStatus(
+                                $"File {file.Index} communication recovered; resuming from the last confirmed packet",
+                                TimeSpan.FromSeconds(15));
+                            await Task.Delay(DownloadRecoveryDelay, cancellationToken).ConfigureAwait(true);
+                            continue;
+                        }
+
+                        failedFileCount++;
+                        file.MarkError(ex.Message);
+                        break;
+                    }
+                }
             }
 
             if (CanPollSetStatus())
             {
-                Status = "Gauge connected; files ready";
+                Status = failedFileCount == 0
+                    ? "Gauge connected; files ready"
+                    : $"Gauge connected; {failedFileCount} file(s) need retry";
             }
         }
         catch (OperationCanceledException)
         {
         }
-        catch (Exception ex) when (IsExpectedUiFailure(ex))
-        {
-            var file = _activeDownload ?? Files.FirstOrDefault(row => row.State == "Error");
-            if (file is not null)
-            {
-                await HandleDownloadFailureAsync(file, ex, cancellationToken).ConfigureAwait(true);
-            }
-            else
-            {
-                TransitionToDisconnected($"Background communication failed: {ex.Message}");
-            }
-        }
         catch (Exception ex)
         {
-            SetProtectedStatus($"Background download failed: {ex.Message}", TimeSpan.FromSeconds(15));
+            var file = _activeDownload ?? Files.FirstOrDefault(row => !row.IsDownloaded);
+            if (file is not null)
+            {
+                file.MarkInterrupted();
+            }
+
+            TransitionToDisconnected($"Background download stopped unexpectedly: {ex.Message}");
         }
         finally
         {
@@ -2438,7 +2473,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         var identity = await TryIdentifyAsync(
             SelectedPort,
             FastBaud,
-            DataTransactionTimeoutMs,
+            ConnectedPollTransactionTimeoutMs,
             cancellationToken).ConfigureAwait(true);
         var device = identity is null ? null : DecodeDevice(identity.Payload);
         return device?.DeviceSerial == expectedSerial;
@@ -2454,13 +2489,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
-        var expectedSerial = _connectedDevice?.DeviceSerial;
-        var stillConnected = expectedSerial.HasValue
-            && await ProbeConnectedGaugeAsync(expectedSerial.Value, cancellationToken).ConfigureAwait(true);
+        var stillConnected = await VerifyGaugeAfterDownloadFailureAsync(
+            file,
+            cancellationToken).ConfigureAwait(true);
         if (!stillConnected)
         {
-            file.MarkInterrupted();
-            TransitionToDisconnected($"Gauge disconnected while downloading file {file.Index}");
             return;
         }
 
@@ -2468,6 +2501,45 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         SetProtectedStatus(
             $"File {file.Index} failed after retries; gauge remains connected. Select the file to retry",
             TimeSpan.FromSeconds(20));
+    }
+
+    private async Task<bool> VerifyGaugeAfterDownloadFailureAsync(
+        GaugeFileRowViewModel file,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        var expectedSerial = _connectedDevice?.DeviceSerial;
+        var stillConnected = false;
+        if (expectedSerial.HasValue)
+        {
+            try
+            {
+                stillConnected = await ProbeConnectedGaugeAsync(
+                    expectedSerial.Value,
+                    cancellationToken).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+            catch (Exception)
+            {
+                stillConnected = false;
+            }
+        }
+
+        if (stillConnected)
+        {
+            return true;
+        }
+
+        file.MarkInterrupted();
+        TransitionToDisconnected($"Gauge disconnected while downloading file {file.Index}");
+        return false;
     }
 
     private static string FormatCalibrationFailure(SensorCommunicationException exception)
@@ -3236,6 +3308,13 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     {
         State = "Interrupted";
         ProgressText = ProgressPercent > 0 ? $"{ProgressPercent:F0}% retained" : "Waiting for reconnect";
+        RaisePresentationChanged();
+    }
+
+    public void MarkRetrying()
+    {
+        State = "Resuming";
+        ProgressText = ProgressPercent > 0 ? $"{ProgressPercent:F0}% retained" : "Retrying";
         RaisePresentationChanged();
     }
 

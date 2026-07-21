@@ -16,6 +16,7 @@ var tests = new (string Name, Action Run)[]
     ("Echo-only IDENTIFY is rejected", EchoOnlyIdentifyIsRejected),
     ("Echo-only FIND_EOF is rejected", EchoOnlyFindEofIsRejected),
     ("Chunked memory read resumes after retained prefix", ChunkedMemoryReadResumesAfterPrefix),
+    ("Interrupted memory read retains only confirmed packets", InterruptedMemoryReadRetainsConfirmedPackets),
     ("Bootloader read-version request matches firmware frame", BootloaderReadVersionRequestMatchesFirmwareFrame),
     ("Bootloader write request carries keys and 24-bit address", BootloaderWriteRequestCarriesKeysAndAddress),
     ("Bootloader version response decodes", BootloaderVersionResponseDecodes),
@@ -181,6 +182,63 @@ static void ChunkedMemoryReadResumesAfterPrefix()
     AssertEqual(2, addresses.Count);
     AssertEqual((uint)0x1004, addresses[0]);
     AssertEqual((uint)0x1006, addresses[1]);
+}
+
+static void InterruptedMemoryReadRetainsConfirmedPackets()
+{
+    byte[] retained = [];
+    var firstTransport = new DelegateGaugeTransport(request =>
+    {
+        if (request.Address == 0x1004)
+        {
+            throw new TimeoutException("Simulated lost packet reply.");
+        }
+
+        var payload = Enumerable.Range(0, request.DataLength)
+            .Select(index => (byte)(request.Address + (uint)index))
+            .ToArray();
+        return GaugeFrame.Create(request.Command, request.Address, payload);
+    });
+    var progress = new InlineProgress<MemoryReadProgress>(update =>
+    {
+        retained = update.Buffer.Span[..update.BytesRead].ToArray();
+    });
+
+    try
+    {
+        new GaugeSession(firstTransport).ReadExternalMemoryChunkedAsync(
+            0x1000,
+            6,
+            chunkSize: 2,
+            command: GaugeCommand.ReadRecordSector,
+            progress: progress).GetAwaiter().GetResult();
+        throw new InvalidOperationException("Expected the interrupted read to fail.");
+    }
+    catch (TimeoutException)
+    {
+    }
+
+    AssertSequenceEqual(new byte[] { 0, 1, 2, 3 }, retained);
+
+    var resumedAddresses = new List<uint>();
+    var resumedTransport = new DelegateGaugeTransport(request =>
+    {
+        resumedAddresses.Add(request.Address);
+        var payload = Enumerable.Range(0, request.DataLength)
+            .Select(index => (byte)(request.Address + (uint)index))
+            .ToArray();
+        return GaugeFrame.Create(request.Command, request.Address, payload);
+    });
+    var completed = new GaugeSession(resumedTransport).ReadExternalMemoryChunkedAsync(
+        0x1000,
+        6,
+        chunkSize: 2,
+        command: GaugeCommand.ReadRecordSector,
+        existingPrefix: retained).GetAwaiter().GetResult();
+
+    AssertSequenceEqual(new byte[] { 0, 1, 2, 3, 4, 5 }, completed);
+    AssertEqual(1, resumedAddresses.Count);
+    AssertEqual((uint)0x1004, resumedAddresses[0]);
 }
 
 static void BootloaderReadVersionRequestMatchesFirmwareFrame()
@@ -901,5 +959,20 @@ sealed class DelegateGaugeTransport : IGaugeTransport
     public ValueTask DisposeAsync()
     {
         return ValueTask.CompletedTask;
+    }
+}
+
+sealed class InlineProgress<T> : IProgress<T>
+{
+    private readonly Action<T> _report;
+
+    public InlineProgress(Action<T> report)
+    {
+        _report = report;
+    }
+
+    public void Report(T value)
+    {
+        _report(value);
     }
 }
