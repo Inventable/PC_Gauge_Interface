@@ -1,0 +1,33 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Gauge.Interface.App.NorthstarActivityMark"
+             IsHitTestVisible="False">
+  <UserControl.Resources>
+    <StreamGeometry x:Key="NorthstarSegment0">M25.89,3.54H30.94L25.34,4.54L24.15,6.54H35.81L34.62,4.64H28.39L34,3.58L33,1.9A0.69,0.69 0 0 0 32.47,1.55H27Z</StreamGeometry>
+    <StreamGeometry x:Key="NorthstarSegment1">M22.08,3.07L20.55,8.29L21.44,10.11L27.21,0.23H25L22.12,5.28L23.64,0.28H22A0.67,0.67 0 0 0 21.41,0.64L18.73,5.15L19.73,6.93Z</StreamGeometry>
+    <StreamGeometry x:Key="NorthstarSegment2">M20,14.48L17.62,10.48L21.1,14.48H23.35L17.75,4.51L16.65,6.42L19.57,11.68L15.93,7.61L15,9.18A0.67,0.67 0 0 0 15,9.85L17.66,14.43Z</StreamGeometry>
+    <StreamGeometry x:Key="NorthstarSegment3">M25.94,18.08H21.14L26.57,16.89L27.71,14.89H16.61L17.71,16.89H23.71L18.34,18L19.18,19.54A0.67,0.67 0 0 0 19.77,19.88H24.92Z</StreamGeometry>
+    <StreamGeometry x:Key="NorthstarSegment4">M29.92,18.76L31.57,13.29L30.47,11.29L24.7,21.29H26.91L30.05,15.74L28.35,21.29H30.07A0.69,0.69 0 0 0 30.66,20.95L33.35,16.16L32.35,14.38Z</StreamGeometry>
+    <StreamGeometry x:Key="NorthstarSegment5">M37.36,12.1A0.69,0.69 0 0 0 37.27,11.76L34.54,7.06H32.29L34.63,11.13L30.77,7.06H28.69L34.58,17.06L35.69,15.12L32.63,10L36.41,14L37.27,12.48A0.64,0.64 0 0 0 37.36,12.1Z</StreamGeometry>
+  </UserControl.Resources>
+
+  <Viewbox Stretch="Uniform">
+    <Canvas Width="38" Height="36" ClipToBounds="False">
+      <Canvas RenderTransform="translate(-7.5px, 7.5px)" ClipToBounds="False">
+        <Path x:Name="Glow0" Data="{StaticResource NorthstarSegment0}" Fill="#CE0E2D" Stroke="#F36B82" StrokeThickness="1.3" />
+        <Path x:Name="Glow1" Data="{StaticResource NorthstarSegment1}" Fill="#CE0E2D" Stroke="#F36B82" StrokeThickness="1.3" />
+        <Path x:Name="Glow2" Data="{StaticResource NorthstarSegment2}" Fill="#CE0E2D" Stroke="#F36B82" StrokeThickness="1.3" />
+        <Path x:Name="Glow3" Data="{StaticResource NorthstarSegment3}" Fill="#CE0E2D" Stroke="#F36B82" StrokeThickness="1.3" />
+        <Path x:Name="Glow4" Data="{StaticResource NorthstarSegment4}" Fill="#CE0E2D" Stroke="#F36B82" StrokeThickness="1.3" />
+        <Path x:Name="Glow5" Data="{StaticResource NorthstarSegment5}" Fill="#CE0E2D" Stroke="#F36B82" StrokeThickness="1.3" />
+
+        <Path x:Name="Segment0" Data="{StaticResource NorthstarSegment0}" Fill="#CE0E2D" />
+        <Path x:Name="Segment1" Data="{StaticResource NorthstarSegment1}" Fill="#CE0E2D" />
+        <Path x:Name="Segment2" Data="{StaticResource NorthstarSegment2}" Fill="#CE0E2D" />
+        <Path x:Name="Segment3" Data="{StaticResource NorthstarSegment3}" Fill="#CE0E2D" />
+        <Path x:Name="Segment4" Data="{StaticResource NorthstarSegment4}" Fill="#CE0E2D" />
+        <Path x:Name="Segment5" Data="{StaticResource NorthstarSegment5}" Fill="#CE0E2D" />
+      </Canvas>
+    </Canvas>
+  </Viewbox>
+</UserControl>

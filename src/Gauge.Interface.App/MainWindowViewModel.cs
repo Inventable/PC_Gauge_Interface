@@ -91,6 +91,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool _isGaugeConnected;
     private bool _isGraphVisible;
     private bool _showDeviceDetails;
+    private bool _isAppSettingsVisible;
     private bool _isGaugeSettingsVisible;
     private bool _isEngineeringModeVisible;
     private bool _ignoreSmallFiles = true;
@@ -130,6 +131,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         ShowGraphCommand = new RelayCommand(ShowGraphAsync, () => SelectedFile?.HasPlotData == true || ChartData.Count > 0);
         BackToFilesCommand = new RelayCommand(BackToFilesAsync);
         OpenSettingsCommand = new RelayCommand(OpenSettingsAsync, () => !IsFirmwareUpdating);
+        OpenAppSettingsCommand = new RelayCommand(OpenAppSettingsAsync, () => !IsFirmwareUpdating);
         OpenGaugeSettingsCommand = new RelayCommand(OpenGaugeSettingsAsync);
         OpenEngineeringModeCommand = new RelayCommand(OpenEngineeringModeAsync);
         CloseSettingsOverlayCommand = new RelayCommand(CloseSettingsOverlayAsync, () => !IsFirmwareUpdating);
@@ -175,6 +177,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ICommand BackToFilesCommand { get; }
 
     public ICommand OpenSettingsCommand { get; }
+
+    public ICommand OpenAppSettingsCommand { get; }
 
     public ICommand OpenGaugeSettingsCommand { get; }
 
@@ -398,6 +402,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 OnPropertyChanged(nameof(IsSetupVisible));
                 OnPropertyChanged(nameof(IsMainVisible));
+                OnPropertyChanged(nameof(IsDisconnectedVisible));
+                OnPropertyChanged(nameof(IsFileTableVisible));
             }
         }
     }
@@ -442,6 +448,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         set => SetField(ref _showDeviceDetails, value);
     }
 
+    public bool IsAppSettingsVisible
+    {
+        get => _isAppSettingsVisible;
+        private set
+        {
+            if (SetField(ref _isAppSettingsVisible, value))
+            {
+                OnPropertyChanged(nameof(IsSettingsOverlayVisible));
+            }
+        }
+    }
+
     public bool IsGaugeSettingsVisible
     {
         get => _isGaugeSettingsVisible;
@@ -466,7 +484,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    public bool IsSettingsOverlayVisible => IsGaugeSettingsVisible || IsEngineeringModeVisible;
+    public bool IsSettingsOverlayVisible => IsAppSettingsVisible || IsGaugeSettingsVisible || IsEngineeringModeVisible;
+
+    public bool HasSetupMessage => !IsPortConfigured && Ports.Count == 0;
+
+    public string SetupMessage => HasSetupMessage ? "No serial ports found" : string.Empty;
 
     public string GaugeDeviceType => _connectedDevice is null
         ? "--"
@@ -792,6 +814,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private Task OpenGaugeSettingsAsync()
     {
+        IsAppSettingsVisible = false;
         IsEngineeringModeVisible = false;
         IsGaugeSettingsVisible = true;
         RaiseDeviceInformationChanged();
@@ -800,9 +823,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private Task OpenEngineeringModeAsync()
     {
+        IsAppSettingsVisible = false;
         IsGaugeSettingsVisible = false;
         IsEngineeringModeVisible = true;
         RaiseDeviceInformationChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OpenAppSettingsAsync()
+    {
+        IsGaugeSettingsVisible = false;
+        IsEngineeringModeVisible = false;
+        IsAppSettingsVisible = true;
         return Task.CompletedTask;
     }
 
@@ -1135,6 +1167,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         IsFirmwareConfirmationVisible = false;
         FirmwareConfirmationText = string.Empty;
+        IsAppSettingsVisible = false;
         IsGaugeSettingsVisible = false;
         IsEngineeringModeVisible = false;
     }
@@ -1338,6 +1371,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         SelectedPortOption = ChoosePort(previous);
         SelectedPort = SelectedPortOption?.Name ?? string.Empty;
+        OnPropertyChanged(nameof(HasSetupMessage));
+        OnPropertyChanged(nameof(SetupMessage));
 
         if (!IsPortConfigured)
         {
@@ -2852,6 +2887,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         if (OpenSettingsCommand is RelayCommand openSettings)
         {
             openSettings.RaiseCanExecuteChanged();
+        }
+
+        if (OpenAppSettingsCommand is RelayCommand openAppSettings)
+        {
+            openAppSettings.RaiseCanExecuteChanged();
         }
 
         if (CancelOperationCommand is RelayCommand cancelOperation)

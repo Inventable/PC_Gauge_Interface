@@ -97,6 +97,14 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void AppSettings_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel && viewModel.OpenAppSettingsCommand.CanExecute(null))
+        {
+            viewModel.OpenAppSettingsCommand.Execute(null);
+        }
+    }
+
     private void GaugeSettings_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is MainWindowViewModel viewModel && viewModel.OpenGaugeSettingsCommand.CanExecute(null))
