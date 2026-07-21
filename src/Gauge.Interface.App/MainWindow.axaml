@@ -175,7 +175,7 @@
           </Button.Flyout>
         </Button>
         <StackPanel Spacing="18" HorizontalAlignment="Center" VerticalAlignment="Center">
-          <local:NorthstarActivityMark Width="138" Height="130" HorizontalAlignment="Center" />
+          <local:NorthstarActivityMark Width="220" Height="208" Speed="{Binding DisconnectedAnimationSpeed}" HorizontalAlignment="Center" />
           <TextBlock Text="Disconnected" FontSize="28" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" HorizontalAlignment="Center" />
         </StackPanel>
       </Grid>
@@ -385,14 +385,27 @@
                         Data="M18.3,5.71L16.89,4.29L12,9.17L7.11,4.29L5.7,5.71L10.59,10.59L5.7,15.48L7.11,16.89L12,12L16.89,16.89L18.3,15.48L13.41,10.59L18.3,5.71Z" />
             </Button>
           </Grid>
-          <StackPanel Grid.Row="1" Spacing="8">
-            <TextBlock Classes="label" Text="Default Output Folder" />
-            <Grid ColumnDefinitions="*,42" ColumnSpacing="8">
-              <TextBox Text="{Binding OutputDirectory}" MinHeight="42" VerticalContentAlignment="Center" />
-              <Button Grid.Column="1" Classes="icon" Click="BrowseOutputDirectory_Click" ToolTip.Tip="Choose output folder">
-                <PathIcon Width="22" Height="22" Foreground="{StaticResource BrandTextBrush}"
-                          Data="M10,4H4C2.9,4 2,4.9 2,6V18C2,19.1 2.9,20 4,20H20C21.1,20 22,19.1 22,18V8C22,6.9 21.1,6 20,6H12L10,4Z" />
-              </Button>
+          <StackPanel Grid.Row="1" Spacing="18">
+            <StackPanel Spacing="8">
+              <TextBlock Classes="label" Text="Default Output Folder" />
+              <Grid ColumnDefinitions="*,42" ColumnSpacing="8">
+                <TextBox Text="{Binding OutputDirectory}" MinHeight="42" VerticalContentAlignment="Center" />
+                <Button Grid.Column="1" Classes="icon" Click="BrowseOutputDirectory_Click" ToolTip.Tip="Choose output folder">
+                  <PathIcon Width="22" Height="22" Foreground="{StaticResource BrandTextBrush}"
+                            Data="M10,4H4C2.9,4 2,4.9 2,6V18C2,19.1 2.9,20 4,20H20C21.1,20 22,19.1 22,18V8C22,6.9 21.1,6 20,6H12L10,4Z" />
+                </Button>
+              </Grid>
+            </StackPanel>
+            <Grid ColumnDefinitions="*,180" ColumnSpacing="18">
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock Classes="label" Text="Disconnected Animation" />
+                <TextBlock Text="Logo activity speed" Foreground="{StaticResource BrandMutedBrush}" />
+              </StackPanel>
+              <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding DisconnectedAnimationSpeeds}"
+                        SelectedItem="{Binding DisconnectedAnimationSpeed}"
+                        MinHeight="42"
+                        HorizontalAlignment="Stretch" />
             </Grid>
           </StackPanel>
         </Grid>

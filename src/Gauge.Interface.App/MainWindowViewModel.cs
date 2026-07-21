@@ -248,6 +248,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string LastFirmwareDirectory => _settings.LastFirmwareDirectory;
 
+    public IReadOnlyList<NorthstarActivitySpeed> DisconnectedAnimationSpeeds { get; } =
+        Enum.GetValues<NorthstarActivitySpeed>();
+
+    public NorthstarActivitySpeed DisconnectedAnimationSpeed
+    {
+        get => _settings.DisconnectedAnimationSpeed;
+        set
+        {
+            if (_settings.DisconnectedAnimationSpeed == value)
+            {
+                return;
+            }
+
+            _settings = _settings with { DisconnectedAnimationSpeed = value };
+            OnPropertyChanged();
+            SaveSettings();
+        }
+    }
+
     public string JobName
     {
         get => _jobName;
@@ -3071,7 +3090,8 @@ public sealed record AppSettings(
     string OutputDirectory = "",
     string LastRecordExportDirectory = "",
     string LastSupportBundleDirectory = "",
-    string LastFirmwareDirectory = "");
+    string LastFirmwareDirectory = "",
+    NorthstarActivitySpeed DisconnectedAnimationSpeed = NorthstarActivitySpeed.Slow);
 
 internal enum FirmwareAction
 {
