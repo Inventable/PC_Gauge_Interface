@@ -8,4 +8,10 @@
     <ProjectReference Include="..\..\src\Gauge.Protocol\Gauge.Protocol.csproj" />
     <ProjectReference Include="..\..\src\Gauge.Transport\Gauge.Transport.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\fixtures\v3_target\**\*">
+      <Link>fixtures\v3_target\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

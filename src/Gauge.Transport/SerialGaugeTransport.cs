@@ -157,12 +157,29 @@ public sealed class SerialGaugeTransport : IGaugeTransport
         TryDiscardBuffers(port);
         port.Write(requestBytes, 0, requestBytes.Length);
 
-        var replyBytes = ReadWireFrame(port, cancellationToken);
-        var reply = GaugeFrameCodec.Decode(replyBytes);
-        if (reply.Command != request.Command)
+        GaugeFrame reply;
+        var mismatchedFrames = 0;
+        while (true)
         {
-            throw new GaugeProtocolException(
-                $"Gauge response command mismatch. Sent {request.Command}, received {reply.Command}.");
+            var replyBytes = ReadWireFrame(port, cancellationToken);
+            reply = GaugeFrameCodec.Decode(replyBytes);
+            if (RequiresNonEmptyResponse(request.Command) &&
+                GaugeFrameCodec.IsExactRequestEcho(request, reply))
+            {
+                continue;
+            }
+
+            if (reply.Command == request.Command)
+            {
+                break;
+            }
+
+            mismatchedFrames++;
+            if (mismatchedFrames >= 4)
+            {
+                throw new GaugeProtocolException(
+                    $"Gauge response command mismatch. Sent {request.Command}, last received {reply.Command}.");
+            }
         }
 
         if (request.Command == GaugeCommand.Identify && reply.Payload.Length is not (22 or 32))
@@ -179,6 +196,16 @@ public sealed class SerialGaugeTransport : IGaugeTransport
 
         return reply;
     }
+
+    private static bool RequiresNonEmptyResponse(GaugeCommand command) =>
+        command is GaugeCommand.Identify
+            or GaugeCommand.FindEndOfFile
+            or GaugeCommand.SensorLiveStart
+            or GaugeCommand.SensorLiveStatus
+            or GaugeCommand.SensorLiveRead
+            or GaugeCommand.SensorLiveStop
+            or GaugeCommand.V3Capabilities
+            or GaugeCommand.V3CatalogSummary;
 
     private static bool IsRetryableCommsFailure(Exception ex)
     {

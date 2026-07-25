@@ -10,6 +10,7 @@ public enum NorthstarActivitySpeed
 {
     Slow,
     Fast,
+    Erase,
 }
 
 public sealed partial class NorthstarActivityMark : UserControl
@@ -19,10 +20,22 @@ public sealed partial class NorthstarActivityMark : UserControl
             nameof(Speed),
             NorthstarActivitySpeed.Slow);
 
+    public static readonly StyledProperty<bool> IsActiveProperty =
+        AvaloniaProperty.Register<NorthstarActivityMark, bool>(
+            nameof(IsActive),
+            true);
+
     private readonly Stopwatch _clock = new();
     private readonly DispatcherTimer _timer;
     private readonly ShapePath[] _segments;
     private readonly ShapePath[] _glows;
+    private bool _isAttached;
+
+    static NorthstarActivityMark()
+    {
+        IsActiveProperty.Changed.AddClassHandler<NorthstarActivityMark>(
+            static (mark, _) => mark.UpdateAnimationState());
+    }
 
     public NorthstarActivityMark()
     {
@@ -32,8 +45,16 @@ public sealed partial class NorthstarActivityMark : UserControl
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
         _timer.Tick += Animate;
 
-        AttachedToVisualTree += (_, _) => Start();
-        DetachedFromVisualTree += (_, _) => Stop();
+        AttachedToVisualTree += (_, _) =>
+        {
+            _isAttached = true;
+            UpdateAnimationState();
+        };
+        DetachedFromVisualTree += (_, _) =>
+        {
+            _isAttached = false;
+            Stop();
+        };
         ApplyFrame(0, strength: 0);
     }
 
@@ -41,6 +62,12 @@ public sealed partial class NorthstarActivityMark : UserControl
     {
         get => GetValue(SpeedProperty);
         set => SetValue(SpeedProperty, value);
+    }
+
+    public bool IsActive
+    {
+        get => GetValue(IsActiveProperty);
+        set => SetValue(IsActiveProperty, value);
     }
 
     private ShapePath[] FindPaths(string prefix)
@@ -60,12 +87,28 @@ public sealed partial class NorthstarActivityMark : UserControl
     {
         _timer.Stop();
         _clock.Stop();
+        ApplyFrame(0, strength: 0);
+    }
+
+    private void UpdateAnimationState()
+    {
+        if (_isAttached && IsActive)
+        {
+            Start();
+            return;
+        }
+
+        Stop();
     }
 
     private void Animate(object? sender, EventArgs e)
     {
-        var rotationSeconds = Speed == NorthstarActivitySpeed.Fast ? 1.5 : 3.0;
-        var pauseSeconds = Speed == NorthstarActivitySpeed.Fast ? 2.5 : 1.0;
+        var (rotationSeconds, pauseSeconds) = Speed switch
+        {
+            NorthstarActivitySpeed.Fast => (1.5, 2.5),
+            NorthstarActivitySpeed.Erase => (1.5, 0.5),
+            _ => (3.0, 1.0)
+        };
         var elapsed = _clock.Elapsed.TotalSeconds % (rotationSeconds + pauseSeconds);
         if (elapsed >= rotationSeconds)
         {

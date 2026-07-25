@@ -72,7 +72,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootlo
 
 ## Live Validation
 
-On 16 July 2026, memory gauge `3807522001` (application firmware `2.0`) completed non-writing bootloader entry, version discovery, reset, and application reacquisition at both `57600` and `115200` baud. The application protocol carries the displayed major byte first; earlier PC builds incorrectly rendered these bytes in reverse order as `0.2`.
+On 16 July 2026, memory gauge `3807522001` (application firmware `2.0`) completed non-writing bootloader entry, version discovery, reset, and application reacquisition at both `57600` and `115200` baud. The firmware serialises the displayed minor component first and major component second, so the PC renders the two identity bytes in reverse wire order (`0,2` displays as `2.0`; `1,2` displays as `2.1`).
 
 The loader reported:
 

@@ -8,10 +8,27 @@ Create a 64-bit self-contained Windows build from the repository root:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\publish-windows.ps1
 ```
 
+The build, test, development-run, and publish scripts close every running
+`Northstar Gauge Interface` instance first. This releases the serial port and
+published DLL file locks without using screen automation. They try a normal
+window close for three seconds, then force-stop any remaining instance. They do
+not stop unrelated `dotnet` processes. Compiler intermediates are written under
+`%TEMP%\NorthstarGaugeInterface` to avoid stale or permission-restricted
+repository `obj` directories.
+
+To close the application without building:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\stop-gauge-app.ps1
+```
+
+Use `-KeepRunning` with `eng\build.ps1`, `eng\test.ps1`, or
+`eng\publish-windows.ps1` only when retaining a running instance is intentional.
+
 The script creates:
 
-- `artifacts\publish\win-x64\Gauge.Interface.App.exe` and its runtime files.
-- `artifacts\Northstar-Gauge-Interface-win-x64.zip` for distribution.
+- `dist\publish\win-x64\Gauge.Interface.App.exe` and its runtime files.
+- `dist\Northstar-Gauge-Interface-win-x64.zip` for distribution.
 
 The output includes the .NET runtime, so the target PC does not need a separate .NET installation. Keep the published folder together; do not distribute only the executable.
 
@@ -42,4 +59,14 @@ Code-signing procurement and installer/update implementation remain deployment t
 
 On 16 July 2026 the current `win-x64` archive was rebuilt with 240 entries (49,273,925 bytes). Its executable was launched directly from the publish folder, without `dotnet`, and connected to the live acoustic gauge on COM5 as device 1 running firmware 1.20. The file table loaded with interval and duration columns. This confirms the current release payload locally; it does not replace the clean-machine checklist above.
 
-The unpacked `artifacts\publish\win-x64` engineering build can be newer than that validated ZIP when `-SkipArchive` is used. On 22 July 2026 it was rebuilt with the wordmark-only serial setup, minimal animated disconnected state, App Settings, and the selectable Slow/Fast activity timings documented in `UX_STORYBOARD.md`. That UI build compiled successfully; it has not yet replaced the clean-machine or live-gauge release evidence above.
+The unpacked `dist\publish\win-x64` engineering build can be newer than that validated ZIP when `-SkipArchive` is used. On 22 July 2026 it was rebuilt with the wordmark-only serial setup, minimal animated disconnected state, App Settings, and the selectable Slow/Fast activity timings documented in `UX_STORYBOARD.md`. That UI build compiled successfully; it has not yet replaced the clean-machine or live-gauge release evidence above.
+
+On 25 July 2026 the self-contained engineering build was updated with V3
+catalog/header/data decoding, file-local calibration, newest-first automatic
+download, progress erase/recovery, and Sensor Live. The operator confirmed live
+V3.0 connection, Sensor Live, and logging. On 26 July the build was republished
+after correcting V3 logical-end recovery and simplifying the file-table
+controls. All 52 automated protocol checks pass and the build has zero compiler
+warnings. The logical-end correction still requires the live checks listed in
+`docs/V3_APPLICATION_VALIDATION.md`; this is engineering evidence, not a signed
+field release.

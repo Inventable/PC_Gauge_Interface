@@ -113,6 +113,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void SensorLive_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel &&
+            viewModel.OpenSensorLiveCommand.CanExecute(null))
+        {
+            viewModel.OpenSensorLiveCommand.Execute(null);
+        }
+    }
+
     private void EngineeringMode_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is MainWindowViewModel viewModel && viewModel.OpenEngineeringModeCommand.CanExecute(null))
@@ -210,54 +219,6 @@ public sealed partial class MainWindow : Window
         }
 
         await SaveRecordAsync(viewModel, file);
-    }
-
-    private async void SaveRaw_Click(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is not MainWindowViewModel viewModel
-            || sender is not Control { DataContext: GaugeFileRowViewModel { Download: not null } file })
-        {
-            return;
-        }
-
-        try
-        {
-            var startDirectory = string.IsNullOrWhiteSpace(viewModel.LastRecordExportDirectory)
-                ? viewModel.OutputDirectory
-                : viewModel.LastRecordExportDirectory;
-            var startFolder = string.IsNullOrWhiteSpace(startDirectory)
-                ? null
-                : await StorageProvider.TryGetFolderFromPathAsync(startDirectory);
-            var destination = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-            {
-                Title = "Save uncalibrated gauge memory",
-                SuggestedFileName = viewModel.BuildRawFileName(file),
-                SuggestedStartLocation = startFolder,
-                DefaultExtension = "raw",
-                ShowOverwritePrompt = true,
-                FileTypeChoices =
-                [
-                    new FilePickerFileType("Raw gauge memory")
-                    {
-                        Patterns = ["*.raw"]
-                    }
-                ]
-            });
-
-            if (destination is null)
-            {
-                return;
-            }
-
-            await using var stream = await destination.OpenWriteAsync();
-            stream.SetLength(0);
-            await stream.WriteAsync(file.Download.RawBytes);
-            viewModel.RecordExportSucceeded(file, destination.Path.LocalPath);
-        }
-        catch (Exception ex)
-        {
-            viewModel.RecordExportFailed(file, ex.Message);
-        }
     }
 
     private async void SaveSelectedRecord_Click(object? sender, RoutedEventArgs e)

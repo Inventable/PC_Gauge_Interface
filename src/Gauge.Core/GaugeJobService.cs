@@ -33,11 +33,7 @@ public sealed class GaugeJobService
             var reply = await _session.SendCommandAsync(GaugeCommand.InitialiseSensor, cancellationToken).ConfigureAwait(false);
             if (reply.Payload is [0x01])
             {
-                return new SensorCalibrationBundle(
-                    await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorSerial, cancellationToken).ConfigureAwait(false),
-                    await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorCalibration, cancellationToken).ConfigureAwait(false),
-                    await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorPressurePolynomial, cancellationToken).ConfigureAwait(false),
-                    await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorTemperaturePolynomial, cancellationToken).ConfigureAwait(false));
+                return await ReadSensorCalibrationAsync(cancellationToken).ConfigureAwait(false);
             }
 
             if (attempt < initialiseAttempts)
@@ -49,6 +45,16 @@ public sealed class GaugeJobService
         throw new SensorCommunicationException(
             SensorCommunicationFailure.InitialiseFailed,
             $"Sensor initialise failed after {initialiseAttempts} attempt(s).");
+    }
+
+    public async Task<SensorCalibrationBundle> ReadSensorCalibrationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return new SensorCalibrationBundle(
+            await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorSerial, cancellationToken).ConfigureAwait(false),
+            await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorCalibration, cancellationToken).ConfigureAwait(false),
+            await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorPressurePolynomial, cancellationToken).ConfigureAwait(false),
+            await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorTemperaturePolynomial, cancellationToken).ConfigureAwait(false));
     }
 
     public async Task<GaugeFileTable> ReadFileTableAsync(

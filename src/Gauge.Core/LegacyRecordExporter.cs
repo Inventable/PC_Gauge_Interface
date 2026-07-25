@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Gauge.Protocol;
 
 namespace Gauge.Core;
 
@@ -22,7 +23,8 @@ public static class LegacyRecordExporter
         writer.WriteLine($"Device Type: {metadata.DeviceDescription}");
         writer.WriteLine($"Type Number: {metadata.DeviceType}");
         writer.WriteLine($"Serial Number: {metadata.DeviceSerial}");
-        writer.WriteLine($"Firmware Version: {metadata.FirmwareMajor}.{metadata.FirmwareMinor}");
+        writer.WriteLine(
+            $"Firmware Version: {DeviceData.FormatFirmwareVersion(metadata.FirmwareMajor, metadata.FirmwareMinor)}");
         writer.WriteLine($"Sensor Type: {metadata.SensorType}");
         writer.WriteLine($"Sensor Serial: {metadata.SensorSerial}");
         writer.WriteLine($"Calibration Cert: {metadata.CalibrationCertificate}");

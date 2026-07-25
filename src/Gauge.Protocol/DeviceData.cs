@@ -11,6 +11,11 @@ public sealed record DeviceData(
     byte MemoryMode,
     byte? EraseStatus)
 {
+    public string FirmwareVersion => FormatFirmwareVersion(FirmwareMajor, FirmwareMinor);
+
+    public static string FormatFirmwareVersion(byte firstSerialByte, byte secondSerialByte) =>
+        $"{secondSerialByte}.{firstSerialByte}";
+
     public static DeviceData DecodeMemoryGauge(ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 22)

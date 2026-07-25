@@ -41,6 +41,37 @@ public sealed class GaugeSession
             .ConfigureAwait(false);
     }
 
+    public async Task<GaugeFrame> SendCommandAsync(
+        GaugeCommand command,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken = default)
+    {
+        var request = GaugeFrame.Create(command, payload: payload.Span);
+        return await _transport.TransactAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<V3Capabilities?> ProbeV3CapabilitiesAsync(CancellationToken cancellationToken = default)
+    {
+        var reply = await _transport
+            .TransactAsync(GaugeFrame.Create(GaugeCommand.V3Capabilities), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (reply.Payload is [0xFF])
+        {
+            return null;
+        }
+
+        return V3Capabilities.Parse(reply.Payload);
+    }
+
+    public async Task<V3CatalogSummary> ReadV3CatalogSummaryAsync(CancellationToken cancellationToken = default)
+    {
+        var reply = await _transport
+            .TransactAsync(GaugeFrame.Create(GaugeCommand.V3CatalogSummary), cancellationToken)
+            .ConfigureAwait(false);
+        return V3CatalogSummary.Parse(reply.Payload);
+    }
+
     public async Task<GaugeMemoryAddress> FindEndOfFileAsync(CancellationToken cancellationToken = default)
     {
         var reply = await _transport

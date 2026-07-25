@@ -14,8 +14,11 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("Commands:");
     Console.WriteLine("  list-ports        List serial ports visible to .NET.");
     Console.WriteLine("  encode-identify   Print the legacy wire bytes for an IDENTIFY request.");
+    Console.WriteLine("  inspect-v3 <data|header|catalog> <raw-image>");
+    Console.WriteLine("  extract-v3-data <raw-image> <output-csv>");
     Console.WriteLine("  probe-identify-raw <port> [baud] [listen-ms]");
     Console.WriteLine("  identify <port> [baud]");
+    Console.WriteLine("  probe-storage <port> [baud] [timeout-ms] [deadline-ms]");
     Console.WriteLine("  scan-identify [baud|auto] [seconds]");
     Console.WriteLine("  wait-identify <port> [baud] [seconds] [interval-ms]");
     Console.WriteLine("  verify-serial <port> [slow-baud] [fast-baud] [delay-ms]");
@@ -41,6 +44,67 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  read-temperature-poly <port> [baud]");
     Console.WriteLine();
     return 0;
+}
+
+if (args[0] == "inspect-v3")
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("Usage: inspect-v3 <data|header|catalog> <raw-image>");
+        return 1;
+    }
+
+    try
+    {
+        var bytes = await File.ReadAllBytesAsync(args[2], CancellationToken.None).ConfigureAwait(false);
+        IReadOnlyList<string> lines = args[1] switch
+        {
+            "data" => V3CsvInspector.InspectData(bytes),
+            "header" => V3CsvInspector.InspectHeader(bytes),
+            "catalog" => V3CsvInspector.InspectCatalog(bytes),
+            _ => throw new ArgumentException($"Unknown V3 inspection mode '{args[1]}'.")
+        };
+        foreach (var line in lines)
+        {
+            Console.WriteLine(line);
+        }
+
+        return 0;
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or IOException)
+    {
+        Console.Error.WriteLine($"V3 inspection failed: {ex.Message}");
+        return 2;
+    }
+}
+
+if (args[0] == "extract-v3-data")
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("Usage: extract-v3-data <raw-image> <output-csv>");
+        return 1;
+    }
+
+    try
+    {
+        var bytes = await File.ReadAllBytesAsync(args[1], CancellationToken.None).ConfigureAwait(false);
+        var lines = V3CsvInspector.InspectData(bytes);
+        var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(args[2]));
+        if (!string.IsNullOrEmpty(outputDirectory))
+        {
+            Directory.CreateDirectory(outputDirectory);
+        }
+
+        await File.WriteAllLinesAsync(args[2], lines, CancellationToken.None).ConfigureAwait(false);
+        Console.WriteLine($"Wrote {lines.Count - 1} V3 sample/page row(s) to {args[2]}.");
+        return 0;
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or IOException)
+    {
+        Console.Error.WriteLine($"V3 extraction failed: {ex.Message}");
+        return 2;
+    }
 }
 
 if (args[0] == "list-ports")
@@ -95,6 +159,53 @@ if (args[0] == "identify")
     }
     
     PrintIdentifyResult(portName, baudRate, reply);
+    return 0;
+}
+
+if (args[0] == "probe-storage")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: probe-storage <port> [baud] [timeout-ms] [deadline-ms]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    var timeoutMs = args.Length >= 4 ? int.Parse(args[3]) : 1000;
+    var deadlineMs = args.Length >= 5 ? int.Parse(args[4]) : 0;
+    await using var transport = new SerialGaugeTransport(new SerialGaugeTransportOptions(
+        portName,
+        baudRate,
+        ReadTimeoutMs: timeoutMs,
+        WriteTimeoutMs: timeoutMs,
+        TransactionTimeoutMs: deadlineMs));
+    await transport.OpenAsync(CancellationToken.None).ConfigureAwait(false);
+    var session = new GaugeSession(transport);
+    _ = await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false);
+    var capabilities = await session.ProbeV3CapabilitiesAsync(CancellationToken.None).ConfigureAwait(false);
+    if (capabilities is not null)
+    {
+        var catalog = await new V3GaugeJobService(session)
+            .DiscoverAsync(CancellationToken.None)
+            .ConfigureAwait(false);
+        Console.WriteLine($"Storage: V3.{capabilities.StorageMinor}");
+        Console.WriteLine($"Files: {catalog!.Files.Count}");
+        Console.WriteLine($"Uncommitted catalog reservations: {catalog.RejectedRecords.Count}");
+        foreach (var rejected in catalog.RejectedRecords)
+        {
+            Console.WriteLine(
+                $"Ignored catalog seq {rejected.CatalogRecord.CatalogSequence}, file 0x{rejected.CatalogRecord.FileId:X8}: {rejected.Reason}");
+        }
+        return 0;
+    }
+
+    var table = await new GaugeJobService(session)
+        .ReadFileTableAsync(chunkBytes: 792, cancellationToken: CancellationToken.None)
+        .ConfigureAwait(false);
+    Console.WriteLine("Storage: V2");
+    Console.WriteLine($"Files: {table.Records.Count}");
+    Console.WriteLine($"EOF: {table.EndOfFile}");
     return 0;
 }
 
@@ -1342,7 +1453,7 @@ static void PrintIdentifyResult(string portName, int baudRate, GaugeFrame reply)
 
 static void PrintDevice(DeviceData device)
 {
-    Console.WriteLine($"Firmware: {device.FirmwareMajor}.{device.FirmwareMinor}");
+    Console.WriteLine($"Firmware: {device.FirmwareVersion}");
     Console.WriteLine($"Device type: {device.DeviceType}");
     Console.WriteLine($"Device serial: {device.DeviceSerial}");
     Console.WriteLine($"PCB type: {device.PcbType}");
