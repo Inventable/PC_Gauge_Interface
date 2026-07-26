@@ -902,7 +902,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string StorageModeCompatibilityText =>
         _v3Catalog is not null
-            ? "V3.0 logging supports mirrored storage. Full-capacity mode requires a firmware storage-format update."
+            ? "Changing V3 storage mode requires empty memory. Recorded files will be erased before the new mode is applied."
             : "Changing storage mode requires empty memory. Recorded files will be erased before the new mode is applied.";
 
     public string GaugeSettingsStatus
@@ -1289,20 +1289,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool CanChangeStorageMode()
     {
         return IsGaugeConfigurationAvailable() &&
-            (byte)SelectedStorageMode.Mode != _connectedDevice!.MemoryMode &&
-            !(_v3Catalog is not null && SelectedStorageMode.Mode == GaugeStorageMode.Full);
+            (byte)SelectedStorageMode.Mode != _connectedDevice!.MemoryMode;
     }
 
     private async Task ChangeStorageModeAsync()
     {
         if (!CanChangeStorageMode())
         {
-            if (_v3Catalog is not null &&
-                SelectedStorageMode.Mode == GaugeStorageMode.Full)
-            {
-                GaugeSettingsStatus =
-                    "Full-capacity mode is not available in V3.0 firmware because V3 currently writes every page to both flash devices.";
-            }
             return;
         }
 
@@ -1446,10 +1439,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         var estimate = EstimateRemainingRecording(seconds, SelectedStorageMode.Mode);
         if (estimate is null)
         {
-            return _v3Catalog is not null &&
-                SelectedStorageMode.Mode == GaugeStorageMode.Full
-                    ? "Recording estimate unavailable: V3.0 supports mirrored storage only."
-                    : "Recording estimate unavailable until the file catalog has loaded.";
+            return "Recording estimate unavailable until the file catalog has loaded.";
         }
 
         return $"Estimated recording time: {FormatEstimatedRecordingTime(estimate.Value.Seconds)} " +
@@ -1462,24 +1452,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         if (_v3Catalog is not null)
         {
-            if (selectedMode != GaugeStorageMode.Mirror)
-            {
-                return null;
-            }
-
             var capabilities = _v3Catalog.Capabilities;
             var nextFileStart = capabilities.DataStart;
-            var latest = _v3Catalog.Files.LastOrDefault();
-            if (latest is not null)
+            var v3ModeWillChange =
+                _connectedDevice is not null &&
+                (byte)selectedMode != _connectedDevice.MemoryMode;
+            if (!v3ModeWillChange && _v3Catalog.Files.LastOrDefault() is { } latest)
             {
                 var occupiedEnd = Math.Max(latest.DataStart, latest.DataEnd);
                 nextFileStart = AlignUp(occupiedEnd, capabilities.SectorBytes);
             }
 
+            var storageEnd = selectedMode == GaugeStorageMode.Mirror
+                ? 0x02000000U
+                : 0x04000000U;
             var nextDataStart = checked(nextFileStart + capabilities.SectorBytes);
-            var remaining = nextDataStart >= capabilities.StorageEnd
+            var remaining = nextDataStart >= storageEnd
                 ? 0U
-                : capabilities.StorageEnd - nextDataStart;
+                : storageEnd - nextDataStart;
             var sampleCount =
                 (remaining / V3PageCodec.PhysicalBytes) * V3PageCodec.MaximumSamples;
             return ((double)sampleCount * intervalSeconds, remaining);
@@ -2857,7 +2847,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 }
 
                 Status = "Probing storage format";
-                v3Catalog = await new V3GaugeJobService(session)
+                v3Catalog = await new V3GaugeJobService(
+                        session,
+                        useMirror: device.MemoryMode == (byte)GaugeStorageMode.Mirror)
                     .DiscoverAsync(cancellationToken)
                     .ConfigureAwait(true);
                 if (v3Catalog is null)
@@ -3686,7 +3678,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 await using var connection = await OpenVerifiedConnectionAsync(
                     preferFast: true,
                     cancellationToken).ConfigureAwait(true);
-                var download = await new V3GaugeJobService(new GaugeSession(connection.Transport))
+                var download = await new V3GaugeJobService(
+                        new GaugeSession(connection.Transport),
+                        useMirror: _v3Catalog.UsesMirror)
                     .DownloadFileAsync(_v3Catalog, file.Index, cancellationToken, progress)
                     .ConfigureAwait(true);
                 var samples = V3GaugeJobService.BuildCalibratedSamples(download);
@@ -5025,10 +5019,11 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
                 details.Add(V3Download.IsOpen ? "Open file (healthy)" : "Footer committed");
                 details.Add($"CRC64 valid on {V3Download.Pages.Count(page => page.Selected.IsCrcValid):N0}/{V3Download.Pages.Count:N0} inspected page(s)");
                 details.Add($"{V3Download.CorrectedPageCount:N0} corrected page(s); raw primary bytes retained");
-                details.Add(
-                    V3Download.MirrorPageReadCount == 0
+                details.Add(V3Download.UsesMirror
+                    ? V3Download.MirrorPageReadCount == 0
                         ? "Mirror not inspected (primary passed host validation)"
-                        : $"Mirror read for {V3Download.MirrorPageReadCount:N0} failed primary page(s)");
+                        : $"Mirror read for {V3Download.MirrorPageReadCount:N0} failed primary page(s)"
+                    : "Full-capacity mode; no mirror replica");
                 if (V3Download.HasMirrorDivergence)
                 {
                     details.Add("mirror degraded/divergent");

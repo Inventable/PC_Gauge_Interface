@@ -54,6 +54,7 @@ var tests = new (string Name, Action Run)[]
     ("V3 clean catalog discovery uses raw primary reads only", V3CatalogDiscoveryUsesPrimaryRawReadsOnly),
     ("V3 discovery resolves the latest file logical end", V3DiscoveryResolvesLatestLogicalEnd),
     ("V3 data download reads mirror only for a failed primary page", V3DataDownloadUsesLazyMirrorFallback),
+    ("V3 full-capacity data download never reads a mirror", V3FullCapacityDownloadDoesNotReadMirror),
     ("V3 clean and 16-bit corrected target pages decode", V3BchTargetFixturesDecode),
     ("V3 six-file target catalog decodes monotonically", V3CatalogTargetFixtureDecodes),
     ("V3 target header reassembles required calibration TLVs", V3HeaderTargetFixtureDecodes),
@@ -1475,6 +1476,28 @@ static void V3DataDownloadUsesLazyMirrorFallback()
     AssertEqual(false, recovered.Pages[1].MirrorWasInspected);
 }
 
+static void V3FullCapacityDownloadDoesNotReadMirror()
+{
+    var clean = ReadV3Fixture("bch-clean-data.bin");
+    var correctedPrimary = ReadV3Fixture("bch-16-corrected-data.bin");
+    var mirrorReads = new List<GaugeFrame>();
+    var download = CreateV3DataService(
+            correctedPrimary,
+            clean,
+            mirrorReads,
+            useMirror: false)
+        .DownloadFileAsync(CreateV3DataCatalog(clean), 0)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(false, download.UsesMirror);
+    AssertEqual(0, mirrorReads.Count);
+    AssertEqual(0, download.MirrorPageReadCount);
+    AssertEqual(1, download.CorrectedPageCount);
+    AssertEqual(0, download.Pages[0].SelectedReplicaId);
+    AssertEqual(V3PageStatus.Corrected, download.Pages[0].Selected.Status);
+}
+
 static void V3DiscoveryResolvesLatestLogicalEnd()
 {
     const uint latestFileStart = 98304;
@@ -1545,7 +1568,8 @@ static void CopyFixtureRange(
 static V3GaugeJobService CreateV3DataService(
     byte[] primary,
     byte[] mirror,
-    List<GaugeFrame> mirrorReads)
+    List<GaugeFrame> mirrorReads,
+    bool useMirror = true)
 {
     var transport = new DelegateGaugeTransport(request =>
     {
@@ -1565,7 +1589,7 @@ static V3GaugeJobService CreateV3DataService(
             request.Address,
             source.AsSpan(offset, request.DataLength).ToArray());
     });
-    return new V3GaugeJobService(new GaugeSession(transport));
+    return new V3GaugeJobService(new GaugeSession(transport), useMirror);
 }
 
 static V3GaugeCatalog CreateV3DataCatalog(byte[] clean)

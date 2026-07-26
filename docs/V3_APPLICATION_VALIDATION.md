@@ -81,9 +81,10 @@ fails.
 - A supported storage-mode change is allowed directly only when memory is
   already empty. Otherwise it enters the erase workflow and writes/verifies
   command 50 only after the erase interlock has cleared.
-- V2 supports full-capacity and mirrored selections. Current V3 firmware always
-  writes paired pages, so V3 full-capacity selection remains disabled pending
-  `docs/V3_STORAGE_MODE_FIRMWARE.md`.
+- V2 and V3 expose full-capacity and mirrored selections. V3 mode `1` uses lazy
+  mirror fallback; mode `0` never probes mirror addresses. The enabled V3 full
+  option requires the firmware update in
+  `docs/V3_STORAGE_MODE_FIRMWARE.md` before testing.
 
 ## Sensor Live
 
@@ -106,7 +107,7 @@ has cleared. The firmware safety and performance contract is in
 
 ## Automated Evidence
 
-The protocol test executable currently contains 54 passing checks. Coverage
+The protocol test executable currently contains 55 passing checks. Coverage
 includes:
 
 - capability fallback;
@@ -124,6 +125,8 @@ includes:
 - V2/V3-compatible interval and storage-mode write payloads, post-write
   identity verification, and lost-acknowledgement recovery without a blind
   repeated write.
+- V3 full-capacity downloads retain corrected primary pages and never issue a
+  mirror read.
 
 Build, test, and self-contained Windows publish complete with zero compiler
 warnings. The development scripts close running app instances first so COM and
@@ -144,6 +147,9 @@ publish files are released without screen automation.
    stop cleanup, and unchanged deployment logging/catalog state.
 7. Set a preset and custom sample interval and confirm the next recording
    header/catalog reports it.
-8. On V2, change full/mirror mode with files present and confirm the app erases
-   first, applies the new mode, and reports the corresponding capacity. On V3,
-   confirm full-capacity mode remains unavailable.
+8. On V2 and updated V3 firmware, change full/mirror mode with files present
+   and confirm the app erases first, applies the new mode, and reports the
+   corresponding capacity.
+9. With V3 full mode active, cross the 32 MiB device boundary and confirm
+   catalog discovery, latest-file logical-end recovery, download, and decode
+   complete without mirror-address reads.

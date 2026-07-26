@@ -68,7 +68,8 @@ V3.0 connection, Sensor Live, and logging. On 26 July the build was republished
 after correcting V3 logical-end recovery and simplifying the file-table
 controls. The 26 July settings build also adds verified sample-interval writes,
 remaining-record-time estimates, and erase-gated V2 storage-mode changes while
-restricting V3 to its implemented mirrored layout. All 54 automated protocol
+enabling the same full/mirrored selection for updated V3 firmware. V3 full mode
+uses a 64 MiB logical layout without mirror reads. All 55 automated protocol
 checks pass and the build has zero compiler
 warnings. The logical-end correction still requires the live checks listed in
 `docs/V3_APPLICATION_VALIDATION.md`; this is engineering evidence, not a signed

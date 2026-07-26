@@ -54,12 +54,16 @@ confirmation leaves the mode unchanged. A write failure after a verified erase
 is reported as a mode-change failure without falsely marking the erase
 incomplete; the now-empty gauge can be retried.
 
-V2 firmware implements both mode values: `0` provides the 64 MiB logical
-capacity and `1` provides the mirrored 32 MiB logical capacity. The present V3
-recorder always emits both primary and mirror pages even if command 50 stores
-and reports `0`. The application therefore allows V3 mirrored mode but disables
-V3 full-capacity mode rather than claiming non-mirrored protection. Required
-firmware work is recorded in `docs/V3_STORAGE_MODE_FIRMWARE.md`.
+Both V2 and V3 application paths expose mode `0` as 64 MiB full-capacity
+storage and mode `1` as 32 MiB mirrored storage. In V3 mirror mode, host
+recovery reads the second replica only after the primary fails validation. In
+V3 full mode, the host never calculates or reads a mirror address.
+
+The V3 application control is enabled in advance of the corresponding firmware
+update. The V3 gauge must not be deployed or used for full-mode application
+testing until the recorder honours `memory_mode`, reports a 64 MiB
+`storage_end`, and passes the requirements in
+`docs/V3_STORAGE_MODE_FIRMWARE.md`.
 
 ## Service Commands
 
@@ -112,7 +116,7 @@ defined in `docs/V3_SENSOR_LIVE_PROTOCOL.md`.
 
 - Enforce a firmware-side nonzero measurement-interval range as defence in
   depth. The app currently enforces `1..65,535`.
-- Define and implement V3 non-mirrored layout semantics before advertising full
-  capacity.
+- Implement and HIL-validate the V3 non-mirrored layout semantics before using
+  the enabled full-capacity application option.
 - Add or identify readback for acoustic pulse interval, acoustic address, and transmit settings.
 - Record device type capability mapping so memory-only controls never appear for an acoustic gauge and vice versa.

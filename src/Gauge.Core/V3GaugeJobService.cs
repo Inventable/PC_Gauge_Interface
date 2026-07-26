@@ -21,7 +21,8 @@ public sealed record V3GaugeCatalog(
     V3CatalogSummary Summary,
     V3CatalogRecovery Recovery,
     IReadOnlyList<V3GaugeFile> Files,
-    IReadOnlyList<V3RejectedCatalogRecord> RejectedRecords);
+    IReadOnlyList<V3RejectedCatalogRecord> RejectedRecords,
+    bool UsesMirror = true);
 
 public sealed record V3RejectedCatalogRecord(
     V3CatalogRecord CatalogRecord,
@@ -47,7 +48,8 @@ public sealed record V3GaugeDownload(
     IReadOnlyList<V3DataPage> DataPages,
     bool IsOpen,
     IReadOnlyList<uint> PageSequenceGaps,
-    IReadOnlyList<uint> SampleSequenceGaps)
+    IReadOnlyList<uint> SampleSequenceGaps,
+    bool UsesMirror = true)
 {
     public IReadOnlyList<V3DataSample> Samples => DataPages.SelectMany(page => page.Samples).ToArray();
     public int CorrectedPageCount => Pages.Count(page => page.Selected.Status == V3PageStatus.Corrected);
@@ -61,10 +63,12 @@ public sealed class V3GaugeJobService
     public const uint ReplicaAddressStride = 0x02000000;
 
     private readonly GaugeSession _session;
+    private readonly bool _useMirror;
 
-    public V3GaugeJobService(GaugeSession session)
+    public V3GaugeJobService(GaugeSession session, bool useMirror = true)
     {
         _session = session;
+        _useMirror = useMirror;
     }
 
     public static SensorCalibrationBundle GetCalibrationBundle(V3FileHeader header) =>
@@ -159,7 +163,8 @@ public sealed class V3GaugeJobService
 
         V3CatalogRecovery recovery;
         if (primaryScan.Replica.IsValid &&
-            primaryScan.Replica.Records.All(record => record.Page.Status == V3PageStatus.Ok))
+            (!_useMirror ||
+             primaryScan.Replica.Records.All(record => record.Page.Status == V3PageStatus.Ok)))
         {
             recovery = new V3CatalogRecovery(
                 primaryScan.Replica.Records,
@@ -169,6 +174,11 @@ public sealed class V3GaugeJobService
                 ],
                 0,
                 false);
+        }
+        else if (!_useMirror)
+        {
+            throw new InvalidDataException(
+                "The V3 full-capacity catalog is not recoverable from its primary copy.");
         }
         else
         {
@@ -226,7 +236,13 @@ public sealed class V3GaugeJobService
             }
         }
 
-        return new V3GaugeCatalog(capabilities, summary, recovery, files, rejectedRecords);
+        return new V3GaugeCatalog(
+            capabilities,
+            summary,
+            recovery,
+            files,
+            rejectedRecords,
+            _useMirror);
     }
 
     public async Task<V3GaugeDownload> DownloadFileAsync(
@@ -285,9 +301,21 @@ public sealed class V3GaugeJobService
             var primaryIsClean = decoded0.Status == V3PageStatus.Ok &&
                 (primaryIsFooter || primaryIsData);
 
-            if (primaryIsClean)
+            if (primaryIsClean ||
+                (!_useMirror && (primaryIsFooter || primaryIsData)))
             {
                 dataPage = primaryDataPage;
+            }
+            else if (!_useMirror)
+            {
+                evidence.Add(new V3ReplicaPageEvidence(
+                    address,
+                    selectedReplicaId,
+                    selected,
+                    decoded0,
+                    null,
+                    false));
+                break;
             }
             else
             {
@@ -357,7 +385,8 @@ public sealed class V3GaugeJobService
             dataPages,
             evidence.All(page => page.Selected.Envelope?.Type != V3PageType.Footer),
             pageGaps,
-            sampleGaps);
+            sampleGaps,
+            _useMirror);
     }
 
     private async Task<(V3FileHeader Header, int ReplicaId)> ReadHeaderAsync(
@@ -385,6 +414,18 @@ public sealed class V3GaugeJobService
         catch (InvalidDataException ex)
         {
             primaryFailure = ex;
+        }
+
+        if (!_useMirror)
+        {
+            if (correctedPrimary is not null)
+            {
+                return (correctedPrimary, 0);
+            }
+
+            throw new InvalidDataException(
+                $"File {record.FileId} has no valid committed header in full-capacity storage. " +
+                primaryFailure!.Message);
         }
 
         try
@@ -499,6 +540,12 @@ public sealed class V3GaugeJobService
                 continue;
             }
 
+            if (!_useMirror)
+            {
+                high = middle;
+                continue;
+            }
+
             var page1 = await ReadPageAsync(
                 checked(ReplicaAddressStride + address),
                 chunk,
@@ -554,6 +601,11 @@ public sealed class V3GaugeJobService
                     return checked(address + (uint)V3PageCodec.PhysicalBytes);
                 }
                 continue;
+            }
+
+            if (!_useMirror)
+            {
+                return address;
             }
 
             var mirror = await ReadPageAsync(

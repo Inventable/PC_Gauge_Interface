@@ -21,11 +21,20 @@ either mode after external memory has been erased.
 
 The current V3 recorder writes every physical page to a primary and mirror
 address and does not branch on `deviceData.memory_mode`. Command 50 can
-therefore store and report full mode while logging remains mirrored. Until
-firmware supplies real non-mirrored behaviour, the desktop restricts V3 to
-mirrored mode.
+therefore store and report full mode while logging remains mirrored.
 
-## Firmware Work for V3 Full Capacity
+The desktop now exposes both V3 modes at the operator's request so the firmware
+can be updated before the next application tests. It uses the `IDENTIFY`
+memory-mode byte as the active read-layout selector:
+
+- mode `1`: 32 MiB logical storage with lazy `address + 0x02000000` mirror
+  recovery;
+- mode `0`: 64 MiB logical storage with no mirror reads or recovery.
+
+Do not run V3 full-mode application or deployment tests with firmware that
+only persists the mode byte but continues mirrored recording.
+
+## Required Firmware Work for V3 Full Capacity
 
 To enable the V3 **Full capacity (64 MiB)** option safely:
 
@@ -33,9 +42,12 @@ To enable the V3 **Full capacity (64 MiB)** option safely:
    before creating the first catalog/file record.
 2. Define a full-mode address map that uses both 32 MiB devices as one logical
    64 MiB space and does not write a mirror replica.
-3. Return the active layout or mode in V3 capabilities so the host does not
-   infer layout solely from a mutable identity byte.
-4. Define catalog/header placement and `storage_end` for both modes. Existing
+3. Continue returning the active mode through `IDENTIFY`, including immediately
+   after command 50. The desktop verifies this readback before reporting
+   success.
+4. Define catalog/header placement for both modes. Command 73 must report
+   `storage_end = 0x04000000` in full mode and `0x02000000` in mirror mode.
+   Existing
    mirrored catalog recovery must remain unchanged.
 5. Define read behaviour at the device boundary and ensure a single logical
    read cannot wrap from one device onto the other.
@@ -45,6 +57,10 @@ To enable the V3 **Full capacity (64 MiB)** option safely:
 7. Add target tests for the final page on device 0, first page on device 1,
    catalog discovery, open-file logical-end search, download, and a power loss
    at the device boundary.
+
+The command-73 mirror flag may continue to describe firmware capability. The
+active layout is selected by `IDENTIFY.memory_mode`; full mode must not require
+the host to read a second replica.
 
 No “convert in place” path is required. The operator workflow always performs a
 complete external-memory erase before changing mode, then writes command 50 and

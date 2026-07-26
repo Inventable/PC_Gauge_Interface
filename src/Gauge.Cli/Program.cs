@@ -182,11 +182,14 @@ if (args[0] == "probe-storage")
         TransactionTimeoutMs: deadlineMs));
     await transport.OpenAsync(CancellationToken.None).ConfigureAwait(false);
     var session = new GaugeSession(transport);
-    _ = await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false);
+    var identity = await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false);
+    var device = DeviceData.DecodeMemoryGauge(identity.Payload);
     var capabilities = await session.ProbeV3CapabilitiesAsync(CancellationToken.None).ConfigureAwait(false);
     if (capabilities is not null)
     {
-        var catalog = await new V3GaugeJobService(session)
+        var catalog = await new V3GaugeJobService(
+                session,
+                useMirror: device.MemoryMode == (byte)GaugeStorageMode.Mirror)
             .DiscoverAsync(CancellationToken.None)
             .ConfigureAwait(false);
         Console.WriteLine($"Storage: V3.{capabilities.StorageMinor}");
