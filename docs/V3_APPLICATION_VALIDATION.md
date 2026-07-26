@@ -75,6 +75,15 @@ fails.
 - **Ignore small files** is stored under **App Settings** and persists between
   launches.
 - One record-save action is shown after calibrated data is ready.
+- **Gauge Settings** provides the requested interval presets plus a custom
+  integer-seconds value, verifies command 46 by re-reading `IDENTIFY`, and
+  displays an estimated record duration from remaining catalog capacity.
+- A supported storage-mode change is allowed directly only when memory is
+  already empty. Otherwise it enters the erase workflow and writes/verifies
+  command 50 only after the erase interlock has cleared.
+- V2 supports full-capacity and mirrored selections. Current V3 firmware always
+  writes paired pages, so V3 full-capacity selection remains disabled pending
+  `docs/V3_STORAGE_MODE_FIRMWARE.md`.
 
 ## Sensor Live
 
@@ -97,7 +106,7 @@ has cleared. The firmware safety and performance contract is in
 
 ## Automated Evidence
 
-The protocol test executable currently contains 52 passing checks. V3 coverage
+The protocol test executable currently contains 54 passing checks. Coverage
 includes:
 
 - capability fallback;
@@ -112,6 +121,9 @@ includes:
   over-limit BCH damage;
 - Sensor Live payload and calibration-path decoding;
 - V3 progress erase, disconnect, restart-from-zero, and V2 fallback behaviour.
+- V2/V3-compatible interval and storage-mode write payloads, post-write
+  identity verification, and lost-acknowledgement recovery without a blind
+  repeated write.
 
 Build, test, and self-contained Windows publish complete with zero compiler
 warnings. The development scripts close running app instances first so COM and
@@ -130,3 +142,8 @@ publish files are released without screen automation.
    block zero, progress, completion detection, and cleared interlock.
 6. Run Sensor Live for more than 60 seconds and confirm the rolling graph,
    stop cleanup, and unchanged deployment logging/catalog state.
+7. Set a preset and custom sample interval and confirm the next recording
+   header/catalog reports it.
+8. On V2, change full/mirror mode with files present and confirm the app erases
+   first, applies the new mode, and reports the corresponding capacity. On V3,
+   confirm full-capacity mode remains unavailable.

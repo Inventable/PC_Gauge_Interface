@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -45,6 +46,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private static readonly TimeSpan DownloadRecoveryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly Geometry SortAscendingGeometry = Geometry.Parse("M7,15L12,10L17,15H7Z");
     private static readonly Geometry SortDescendingGeometry = Geometry.Parse("M7,9L12,14L17,9H7Z");
+    private static readonly IReadOnlyList<SampleIntervalOption> SampleIntervalChoices =
+    [
+        .. Enumerable.Range(1, 10).Select(seconds =>
+            new SampleIntervalOption($"{seconds} second{(seconds == 1 ? string.Empty : "s")}", (ushort)seconds)),
+        new("20 seconds", 20),
+        new("30 seconds", 30),
+        new("1 minute", 60),
+        new("2 minutes", 120),
+        new("5 minutes", 300),
+        new("10 minutes", 600),
+        new("20 minutes", 1200),
+        new("30 minutes", 1800),
+        new("1 hour", 3600),
+        new("Custom...", null)
+    ];
+    private static readonly IReadOnlyList<StorageModeOption> StorageModeChoices =
+    [
+        new("Full capacity (64 MiB)", GaugeStorageMode.Full),
+        new("Mirrored (32 MiB, redundant)", GaugeStorageMode.Mirror)
+    ];
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Northstar",
@@ -153,6 +174,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private uint? _retainedDeviceSerial;
     private string _retainedPort = string.Empty;
     private string? _calibrationFailure;
+    private SampleIntervalOption _selectedSampleInterval = SampleIntervalChoices[0];
+    private StorageModeOption _selectedStorageMode = StorageModeChoices[0];
+    private string _customSampleIntervalSeconds = string.Empty;
+    private string _gaugeSettingsStatus = string.Empty;
+    private GaugeStorageMode? _pendingStorageMode;
+    private bool _externalMemoryKnownEmpty;
 
     public MainWindowViewModel()
     {
@@ -169,6 +196,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         OpenSettingsCommand = new RelayCommand(OpenSettingsAsync, () => !IsFirmwareUpdating);
         OpenAppSettingsCommand = new RelayCommand(OpenAppSettingsAsync, () => !IsFirmwareUpdating);
         OpenGaugeSettingsCommand = new RelayCommand(OpenGaugeSettingsAsync);
+        ApplySampleIntervalCommand = new RelayCommand(
+            ApplySampleIntervalAsync,
+            CanApplySampleInterval);
+        ChangeStorageModeCommand = new RelayCommand(
+            ChangeStorageModeAsync,
+            CanChangeStorageMode);
         OpenEngineeringModeCommand = new RelayCommand(OpenEngineeringModeAsync);
         OpenSensorLiveCommand = new RelayCommand(OpenSensorLiveAsync, () => CanOpenSensorLive);
         StartSensorLiveCommand = new RelayCommand(StartSensorLiveAsync, () => IsSensorLiveVisible && !IsSensorLiveRunning && IsGaugeConnected);
@@ -229,6 +262,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public ICommand OpenAppSettingsCommand { get; }
 
     public ICommand OpenGaugeSettingsCommand { get; }
+
+    public ICommand ApplySampleIntervalCommand { get; }
+
+    public ICommand ChangeStorageModeCommand { get; }
 
     public ICommand OpenEngineeringModeCommand { get; }
 
@@ -505,6 +542,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 OnPropertyChanged(nameof(IsFileTableVisible));
                 RaiseFirmwareCommandStates();
                 RaiseEraseCommandStates();
+                RaiseGaugeConfigurationChanged();
             }
         }
     }
@@ -583,15 +621,23 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public string EraseWarningTitle =>
         IsEraseRecoveryRequired
             ? "Erase cycle incomplete"
+            : _pendingStorageMode.HasValue
+                ? "Storage mode change requires erase"
             : "This operation is irreversible";
 
     public string EraseWarningText =>
         IsEraseRecoveryRequired
             ? "A previous external-memory erase did not complete. This gauge is not safe to deploy until a full erase completes. Restarting will erase both 32 MiB flash devices again from the beginning."
+            : _pendingStorageMode.HasValue
+                ? $"Changing to {DescribeStorageMode((byte)_pendingStorageMode.Value)} requires empty external memory. All recorded files will be permanently erased, then the new storage mode will be written and verified."
             : "All recorded files on both 32 MiB external flash devices will be permanently erased. The operation must not be started unless this data is no longer required.";
 
     public string EraseConfirmationActionText =>
-        IsEraseRecoveryRequired ? "Restart Erase" : "OK, Erase Memory";
+        IsEraseRecoveryRequired
+            ? "Restart Erase"
+            : _pendingStorageMode.HasValue
+                ? "Erase and Change Mode"
+                : "OK, Erase Memory";
 
     public bool CanDismissEraseConfirmation => !IsEraseRecoveryRequired;
 
@@ -801,11 +847,69 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string GaugeMeasurementInterval => _connectedDevice is null
         ? "--"
-        : $"{_connectedDevice.MeasurementInterval} sec";
+        : FormatSampleInterval(_connectedDevice.MeasurementInterval);
 
-    public string GaugeMemoryMode => _connectedDevice?.MemoryMode.ToString() ?? "--";
+    public string GaugeMemoryMode => _connectedDevice is null
+        ? "--"
+        : DescribeStorageMode(_connectedDevice.MemoryMode);
 
     public string GaugeEraseStatus => _connectedDevice?.EraseStatus?.ToString() ?? "--";
+
+    public IReadOnlyList<SampleIntervalOption> SampleIntervalOptions => SampleIntervalChoices;
+
+    public SampleIntervalOption SelectedSampleInterval
+    {
+        get => _selectedSampleInterval;
+        set
+        {
+            if (SetField(ref _selectedSampleInterval, value))
+            {
+                OnPropertyChanged(nameof(IsCustomSampleInterval));
+                RaiseGaugeConfigurationChanged();
+            }
+        }
+    }
+
+    public bool IsCustomSampleInterval => SelectedSampleInterval.Seconds is null;
+
+    public string CustomSampleIntervalSeconds
+    {
+        get => _customSampleIntervalSeconds;
+        set
+        {
+            if (SetField(ref _customSampleIntervalSeconds, value))
+            {
+                RaiseGaugeConfigurationChanged();
+            }
+        }
+    }
+
+    public IReadOnlyList<StorageModeOption> StorageModeOptions => StorageModeChoices;
+
+    public StorageModeOption SelectedStorageMode
+    {
+        get => _selectedStorageMode;
+        set
+        {
+            if (SetField(ref _selectedStorageMode, value))
+            {
+                RaiseGaugeConfigurationChanged();
+            }
+        }
+    }
+
+    public string RecordingTimeEstimate => BuildRecordingTimeEstimate();
+
+    public string StorageModeCompatibilityText =>
+        _v3Catalog is not null
+            ? "V3.0 logging supports mirrored storage. Full-capacity mode requires a firmware storage-format update."
+            : "Changing storage mode requires empty memory. Recorded files will be erased before the new mode is applied.";
+
+    public string GaugeSettingsStatus
+    {
+        get => _gaugeSettingsStatus;
+        private set => SetField(ref _gaugeSettingsStatus, value);
+    }
 
     public string EngineeringTransport => string.IsNullOrWhiteSpace(SelectedPort)
         ? "No serial port selected"
@@ -1042,6 +1146,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 OnPropertyChanged(nameof(CanCancelOperation));
                 RaiseCommandStates();
+                RaiseGaugeConfigurationChanged();
             }
         }
     }
@@ -1120,9 +1225,364 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         IsAppSettingsVisible = false;
         IsEngineeringModeVisible = false;
         IsSensorLiveVisible = false;
+        RefreshGaugeSettingSelections();
+        GaugeSettingsStatus = string.Empty;
         IsGaugeSettingsVisible = true;
         RaiseDeviceInformationChanged();
         return Task.CompletedTask;
+    }
+
+    private void RefreshGaugeSettingSelections()
+    {
+        if (_connectedDevice is null)
+        {
+            return;
+        }
+
+        var interval = SampleIntervalChoices.FirstOrDefault(
+            option => option.Seconds == _connectedDevice.MeasurementInterval);
+        if (interval is null)
+        {
+            interval = SampleIntervalChoices[^1];
+            CustomSampleIntervalSeconds =
+                _connectedDevice.MeasurementInterval.ToString(CultureInfo.InvariantCulture);
+        }
+
+        SelectedSampleInterval = interval;
+        SelectedStorageMode = StorageModeChoices.FirstOrDefault(
+                option => (byte)option.Mode == _connectedDevice.MemoryMode)
+            ?? StorageModeChoices[0];
+        RaiseGaugeConfigurationChanged();
+    }
+
+    private bool CanApplySampleInterval()
+    {
+        return IsGaugeConfigurationAvailable() &&
+            TryGetSelectedSampleInterval(out var seconds) &&
+            seconds != _connectedDevice!.MeasurementInterval;
+    }
+
+    private async Task ApplySampleIntervalAsync()
+    {
+        if (!CanApplySampleInterval() ||
+            !TryGetSelectedSampleInterval(out var seconds))
+        {
+            return;
+        }
+
+        var device = await ApplyGaugeConfigurationAsync(
+            (service, serial, token) =>
+                service.SetMeasurementIntervalAsync(seconds, serial, token),
+            "changing the sample interval").ConfigureAwait(true);
+        if (device is null)
+        {
+            return;
+        }
+
+        UpdateConfiguredDevice(device);
+        GaugeSettingsStatus =
+            $"Sample interval changed to {FormatSampleInterval(seconds)}. It will be used for the next recording.";
+        Status = $"Gauge sample interval set to {seconds} second(s)";
+        RefreshGaugeSettingSelections();
+    }
+
+    private bool CanChangeStorageMode()
+    {
+        return IsGaugeConfigurationAvailable() &&
+            (byte)SelectedStorageMode.Mode != _connectedDevice!.MemoryMode &&
+            !(_v3Catalog is not null && SelectedStorageMode.Mode == GaugeStorageMode.Full);
+    }
+
+    private async Task ChangeStorageModeAsync()
+    {
+        if (!CanChangeStorageMode())
+        {
+            if (_v3Catalog is not null &&
+                SelectedStorageMode.Mode == GaugeStorageMode.Full)
+            {
+                GaugeSettingsStatus =
+                    "Full-capacity mode is not available in V3.0 firmware because V3 currently writes every page to both flash devices.";
+            }
+            return;
+        }
+
+        var requestedMode = SelectedStorageMode.Mode;
+        if (IsExternalMemoryEmpty())
+        {
+            var device = await ApplyGaugeConfigurationAsync(
+                (service, serial, token) =>
+                    service.SetStorageModeAsync(requestedMode, serial, token),
+                "changing the storage mode").ConfigureAwait(true);
+            if (device is null)
+            {
+                return;
+            }
+
+            UpdateConfiguredDevice(device);
+            GaugeSettingsStatus =
+                $"Storage mode changed to {DescribeStorageMode((byte)requestedMode)}.";
+            Status = GaugeSettingsStatus;
+            RefreshGaugeSettingSelections();
+            return;
+        }
+
+        CancelBackgroundDownloads();
+        await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
+        _autoDownloadsPaused = true;
+        _pendingStorageMode = requestedMode;
+        OnPropertyChanged(nameof(EraseWarningTitle));
+        OnPropertyChanged(nameof(EraseWarningText));
+        OnPropertyChanged(nameof(EraseConfirmationActionText));
+        CloseSettingsOverlay();
+        IsGraphVisible = false;
+        PrepareErasePage(recoveryRequired: false);
+        Status =
+            $"External memory must be erased before changing to {DescribeStorageMode((byte)requestedMode)}";
+    }
+
+    private async Task<DeviceData?> ApplyGaugeConfigurationAsync(
+        Func<GaugeConfigurationService, uint, CancellationToken, Task<DeviceData>> apply,
+        string operation)
+    {
+        var expectedSerial = _connectedDevice?.DeviceSerial;
+        if (!expectedSerial.HasValue)
+        {
+            return null;
+        }
+
+        CancelBackgroundDownloads();
+        await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
+        _autoDownloadsPaused = true;
+        IsBusy = true;
+        await _serialGate.WaitAsync(_pollingCancellation.Token).ConfigureAwait(true);
+        try
+        {
+            await using var connection = await OpenVerifiedConnectionAsync(
+                preferFast: true,
+                cancellationToken: _pollingCancellation.Token).ConfigureAwait(true);
+            return await apply(
+                new GaugeConfigurationService(new GaugeSession(connection.Transport)),
+                expectedSerial.Value,
+                _pollingCancellation.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (_pollingCancellation.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex) when (IsGaugeConfigurationConnectionFailure(ex))
+        {
+            TransitionToDisconnected(
+                $"Gauge stopped responding while {operation}: {ex.Message}");
+            return null;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException)
+        {
+            GaugeSettingsStatus = $"Could not apply setting: {ex.Message}";
+            Status = GaugeSettingsStatus;
+            return null;
+        }
+        finally
+        {
+            _serialGate.Release();
+            IsBusy = false;
+            RaiseGaugeConfigurationChanged();
+        }
+    }
+
+    private bool IsGaugeConfigurationAvailable() =>
+        !IsBusy &&
+        !IsFirmwareUpdating &&
+        !IsErasePageVisible &&
+        IsGaugeConnected &&
+        _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+
+    private static bool IsGaugeConfigurationConnectionFailure(Exception exception) =>
+        exception is TimeoutException
+            or IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or GaugeProtocolException;
+
+    private bool TryGetSelectedSampleInterval(out ushort seconds)
+    {
+        if (SelectedSampleInterval.Seconds is ushort preset)
+        {
+            seconds = preset;
+            return true;
+        }
+
+        return ushort.TryParse(
+                CustomSampleIntervalSeconds,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out seconds) &&
+            seconds > 0;
+    }
+
+    private bool IsExternalMemoryEmpty()
+    {
+        if (_externalMemoryKnownEmpty)
+        {
+            return true;
+        }
+
+        if (_v3Catalog is not null)
+        {
+            return _v3Catalog.Recovery.Records.Count == 0 &&
+                _v3Catalog.RejectedRecords.Count == 0;
+        }
+
+        return _fileTable is { Records.Count: 0 } table &&
+            table.EndOfFile.Value <= 0x00004000U;
+    }
+
+    private string BuildRecordingTimeEstimate()
+    {
+        if (!TryGetSelectedSampleInterval(out var seconds))
+        {
+            return "Enter a whole-number interval from 1 to 65,535 seconds.";
+        }
+
+        var estimate = EstimateRemainingRecording(seconds, SelectedStorageMode.Mode);
+        if (estimate is null)
+        {
+            return _v3Catalog is not null &&
+                SelectedStorageMode.Mode == GaugeStorageMode.Full
+                    ? "Recording estimate unavailable: V3.0 supports mirrored storage only."
+                    : "Recording estimate unavailable until the file catalog has loaded.";
+        }
+
+        return $"Estimated recording time: {FormatEstimatedRecordingTime(estimate.Value.Seconds)} " +
+            $"from {FormatBytes(checked((int)estimate.Value.RemainingBytes))} remaining.";
+    }
+
+    private (double Seconds, uint RemainingBytes)? EstimateRemainingRecording(
+        ushort intervalSeconds,
+        GaugeStorageMode selectedMode)
+    {
+        if (_v3Catalog is not null)
+        {
+            if (selectedMode != GaugeStorageMode.Mirror)
+            {
+                return null;
+            }
+
+            var capabilities = _v3Catalog.Capabilities;
+            var nextFileStart = capabilities.DataStart;
+            var latest = _v3Catalog.Files.LastOrDefault();
+            if (latest is not null)
+            {
+                var occupiedEnd = Math.Max(latest.DataStart, latest.DataEnd);
+                nextFileStart = AlignUp(occupiedEnd, capabilities.SectorBytes);
+            }
+
+            var nextDataStart = checked(nextFileStart + capabilities.SectorBytes);
+            var remaining = nextDataStart >= capabilities.StorageEnd
+                ? 0U
+                : capabilities.StorageEnd - nextDataStart;
+            var sampleCount =
+                (remaining / V3PageCodec.PhysicalBytes) * V3PageCodec.MaximumSamples;
+            return ((double)sampleCount * intervalSeconds, remaining);
+        }
+
+        if (_fileTable is null || _connectedDevice is null)
+        {
+            return null;
+        }
+
+        var capacity = selectedMode == GaugeStorageMode.Mirror
+            ? 0x02000000U
+            : 0x04000000U;
+        var modeWillChange = (byte)selectedMode != _connectedDevice.MemoryMode;
+        var usedEnd = modeWillChange || _fileTable.Records.Count == 0
+            ? 0x00004000U
+            : checked(_fileTable.EndOfFile.Value + (uint)MemoryGaugeFileRecord.Length);
+        var remainingBytes = usedEnd >= capacity ? 0U : capacity - usedEnd;
+        var sampleCountV2 = remainingBytes / 8U;
+        return ((double)sampleCountV2 * intervalSeconds, remainingBytes);
+    }
+
+    private static uint AlignUp(uint value, ushort alignment)
+    {
+        var remainder = value % alignment;
+        return remainder == 0
+            ? value
+            : checked(value + alignment - remainder);
+    }
+
+    private static string FormatEstimatedRecordingTime(double totalSeconds)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        if (duration.TotalDays >= 365.25)
+        {
+            return $"approximately {duration.TotalDays / 365.25:F1} years";
+        }
+
+        if (duration.TotalDays >= 1)
+        {
+            return $"approximately {duration.TotalDays:F1} days";
+        }
+
+        if (duration.TotalHours >= 1)
+        {
+            return $"approximately {duration.TotalHours:F1} hours";
+        }
+
+        if (duration.TotalMinutes >= 1)
+        {
+            return $"approximately {duration.TotalMinutes:F1} minutes";
+        }
+
+        return $"approximately {duration.TotalSeconds:F0} seconds";
+    }
+
+    private static string FormatSampleInterval(ushort seconds)
+    {
+        if (seconds % 3600 == 0)
+        {
+            var hours = seconds / 3600;
+            return $"{hours} hour{(hours == 1 ? string.Empty : "s")}";
+        }
+
+        if (seconds % 60 == 0)
+        {
+            var minutes = seconds / 60;
+            return $"{minutes} minute{(minutes == 1 ? string.Empty : "s")}";
+        }
+
+        return $"{seconds} second{(seconds == 1 ? string.Empty : "s")}";
+    }
+
+    private static string DescribeStorageMode(byte mode) => mode switch
+    {
+        (byte)GaugeStorageMode.Full => "Full capacity",
+        (byte)GaugeStorageMode.Mirror => "Mirrored",
+        _ => $"Unknown ({mode})"
+    };
+
+    private void UpdateConfiguredDevice(DeviceData device)
+    {
+        _connectedDevice = device;
+        DeviceSummary = DescribeGauge(device);
+        DeviceDetails = BuildDeviceDetails(device, []);
+        _connectedPollMisses = 0;
+        _nextConnectedPollUtc = DateTime.UtcNow + ConnectedPollInterval;
+        RaiseDeviceInformationChanged();
+    }
+
+    private void RaiseGaugeConfigurationChanged()
+    {
+        OnPropertyChanged(nameof(RecordingTimeEstimate));
+        OnPropertyChanged(nameof(StorageModeCompatibilityText));
+        if (ApplySampleIntervalCommand is RelayCommand applyInterval)
+        {
+            applyInterval.RaiseCanExecuteChanged();
+        }
+
+        if (ChangeStorageModeCommand is RelayCommand changeMode)
+        {
+            changeMode.RaiseCanExecuteChanged();
+        }
     }
 
     private async Task OpenSensorLiveAsync()
@@ -1421,6 +1881,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         CancelBackgroundDownloads();
         await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
         _autoDownloadsPaused = true;
+        _pendingStorageMode = null;
         CloseSettingsOverlay();
         IsGraphVisible = false;
         PrepareErasePage(recoveryRequired: false);
@@ -1429,6 +1890,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private void PrepareErasePage(bool recoveryRequired)
     {
         IsEraseRecoveryRequired = recoveryRequired;
+        OnPropertyChanged(nameof(EraseWarningTitle));
+        OnPropertyChanged(nameof(EraseWarningText));
+        OnPropertyChanged(nameof(EraseConfirmationActionText));
         EraseProgressPercent = 0;
         EraseProgressText = "0% complete | Calculating time remaining";
         EraseTimingText = string.Empty;
@@ -1461,6 +1925,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
             IsEraseConfirmationVisible = false;
             IsErasePageVisible = false;
+            _pendingStorageMode = null;
             _autoDownloadsPaused = false;
             StartBackgroundDownloads();
             return Task.CompletedTask;
@@ -1503,6 +1968,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         var expectedSerial = _connectedDevice?.DeviceSerial
             ?? throw new InvalidOperationException("No connected gauge identity is available.");
         var restartFromBeginning = IsEraseRecoveryRequired;
+        var eraseCompleted = false;
         IsBusy = true;
         IsErasingMemory = true;
         EraseProgressPercent = 0;
@@ -1555,15 +2021,33 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 result = await new ExternalMemoryEraseService(new GaugeSession(eraseConnection.Transport))
                     .EraseAsync(progress, cancellationToken)
                     .ConfigureAwait(true);
+                eraseCompleted = true;
+
+                if (_pendingStorageMode is GaugeStorageMode requestedMode)
+                {
+                    device = await new GaugeConfigurationService(
+                            new GaugeSession(eraseConnection.Transport))
+                        .SetStorageModeAsync(
+                            requestedMode,
+                            expectedSerial,
+                            cancellationToken)
+                        .ConfigureAwait(true);
+                }
             }
 
             EraseProgressPercent = 100;
             EraseProgressText = "100% complete | 0 sec remaining";
             EraseTimingText = $"Completed in {FormatElapsedTime(result.Elapsed.TotalSeconds)}";
-            EraseResultText = "External memory erased successfully.";
+            EraseResultText = _pendingStorageMode is GaugeStorageMode changedMode
+                ? $"External memory erased and storage mode changed to {DescribeStorageMode((byte)changedMode)}."
+                : "External memory erased successfully.";
             _eraseCompletedSuccessfully = true;
             IsEraseRecoveryRequired = false;
-            Status = "External memory erase complete";
+            Status = _pendingStorageMode is GaugeStorageMode
+                ? "External memory erase and storage-mode change complete"
+                : "External memory erase complete";
+            _pendingStorageMode = null;
+            _externalMemoryKnownEmpty = true;
             _connectedDevice = device with { EraseStatus = 0 };
             DeviceSummary = DescribeGauge(_connectedDevice);
             DeviceDetails = BuildDeviceDetails(_connectedDevice, []);
@@ -1592,6 +2076,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             LeaveEraseForDisconnectedState(
                 $"Gauge stopped responding during the external-memory erase: {ex.Message}");
         }
+        catch (Exception ex) when (eraseCompleted)
+        {
+            _pendingStorageMode = null;
+            _externalMemoryKnownEmpty = true;
+            _eraseCompletedSuccessfully = true;
+            IsEraseRecoveryRequired = false;
+            EraseProgressPercent = 100;
+            EraseProgressText = "100% complete | 0 sec remaining";
+            EraseResultText =
+                $"External memory was erased, but the storage mode could not be changed: {ex.Message}";
+            Status = "External memory erased; storage-mode change failed";
+
+            Files.Clear();
+            Samples.Clear();
+            ChartData = ChartDataSet.Empty;
+            SelectedFile = null;
+            _fileTable = null;
+            _v3Catalog = null;
+            FileSummary = "No committed files found";
+            ResetReview();
+            RaiseGaugeConfigurationChanged();
+        }
         catch (Exception ex)
         {
             IsEraseRecoveryRequired = true;
@@ -1612,6 +2118,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void LeaveEraseForDisconnectedState(string reason)
     {
+        _pendingStorageMode = null;
+        _externalMemoryKnownEmpty = false;
         _eraseCompletedSuccessfully = false;
         IsEraseRecoveryRequired = false;
         IsEraseConfirmationVisible = false;
@@ -1700,6 +2208,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void EnterIncompleteEraseRecovery(DeviceData device, byte[] identityPayload)
     {
+        _pendingStorageMode = null;
+        _externalMemoryKnownEmpty = false;
         CancelBackgroundDownloads();
         _autoDownloadsPaused = true;
         Files.Clear();
@@ -2359,6 +2869,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
             _fileTable = table;
             _v3Catalog = v3Catalog;
+            _externalMemoryKnownEmpty = v3Catalog is not null
+                ? v3Catalog.Recovery.Records.Count == 0 &&
+                  v3Catalog.RejectedRecords.Count == 0
+                : table is { Records.Count: 0 } &&
+                  table.EndOfFile.Value <= 0x00004000U;
             if (v3Catalog is not null)
             {
                 PopulateV3Files(v3Catalog);
@@ -3781,6 +4296,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _connectedDevice = null;
         _fileTable = null;
         _v3Catalog = null;
+        _externalMemoryKnownEmpty = false;
+        _pendingStorageMode = null;
         _calibration = null;
         _calibrationFailure = null;
         ResetReview();
@@ -4095,6 +4612,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         OnPropertyChanged(nameof(EngineeringFileTable));
         OnPropertyChanged(nameof(EngineeringCalibration));
         OnPropertyChanged(nameof(EngineeringDeviceDetails));
+        RaiseGaugeConfigurationChanged();
         RaiseFirmwareCommandStates();
         RaiseEngineeringCommunicationChanged();
     }
@@ -4924,6 +5442,16 @@ public sealed record SampleRowViewModel(
     string Temperature,
     string Timestamp,
     string Crc);
+
+public sealed record SampleIntervalOption(string Label, ushort? Seconds)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record StorageModeOption(string Label, GaugeStorageMode Mode)
+{
+    public override string ToString() => Label;
+}
 
 internal sealed record SensorLivePlotPoint(
     TimeSpan Elapsed,

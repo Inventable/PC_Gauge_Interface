@@ -446,8 +446,8 @@
         </Grid>
       </Border>
 
-      <Border IsVisible="{Binding IsGaugeSettingsVisible}" Background="#FFFFFF" BorderBrush="{StaticResource BrandBorderBrush}" BorderThickness="1" CornerRadius="6" Width="520" Padding="24" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <Grid RowDefinitions="Auto,*,Auto" RowSpacing="18">
+      <Border IsVisible="{Binding IsGaugeSettingsVisible}" Background="#FFFFFF" BorderBrush="{StaticResource BrandBorderBrush}" BorderThickness="1" CornerRadius="6" Width="700" MaxHeight="680" Padding="24" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <Grid RowDefinitions="Auto,*" RowSpacing="18">
           <Grid ColumnDefinitions="*,Auto">
             <StackPanel Spacing="2">
               <TextBlock Text="Gauge Settings" FontSize="24" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
@@ -458,23 +458,84 @@
                         Data="M18.3,5.71L16.89,4.29L12,9.17L7.11,4.29L5.7,5.71L10.59,10.59L5.7,15.48L7.11,16.89L12,12L16.89,16.89L18.3,15.48L13.41,10.59L18.3,5.71Z" />
             </Button>
           </Grid>
-          <Grid Grid.Row="1" ColumnDefinitions="170,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="18" RowSpacing="12">
-            <TextBlock Classes="label" Text="Gauge Type" />
-            <TextBlock Grid.Column="1" Text="{Binding GaugeDeviceType}" Foreground="{StaticResource BrandTextBrush}" />
-            <TextBlock Grid.Row="1" Classes="label" Text="Device Serial" />
-            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding GaugeDeviceSerial}" Foreground="{StaticResource BrandTextBrush}" />
-            <TextBlock Grid.Row="2" Classes="label" Text="Firmware" />
-            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding GaugeFirmware}" Foreground="{StaticResource BrandTextBrush}" />
-            <TextBlock Grid.Row="3" Classes="label" Text="PCB Type / Serial" />
-            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding GaugePcb}" Foreground="{StaticResource BrandTextBrush}" />
-            <TextBlock Grid.Row="4" Classes="label" Text="Measurement Interval" />
-            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding GaugeMeasurementInterval}" Foreground="{StaticResource BrandTextBrush}" />
-            <TextBlock Grid.Row="5" Classes="label" Text="Memory Mode" />
-            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding GaugeMemoryMode}" Foreground="{StaticResource BrandTextBrush}" />
-            <TextBlock Grid.Row="6" Classes="label" Text="Erase Status" />
-            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding GaugeEraseStatus}" Foreground="{StaticResource BrandTextBrush}" />
-          </Grid>
-          <Button Grid.Row="2" Classes="primary" Content="Erase Memory" Command="{Binding BeginMemoryEraseCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="18" Margin="0,0,10,0">
+              <Border Classes="panel" Padding="16">
+                <Grid ColumnDefinitions="145,*,130,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="9">
+                  <TextBlock Classes="label" Text="Gauge Type" />
+                  <TextBlock Grid.Column="1" Text="{Binding GaugeDeviceType}" Foreground="{StaticResource BrandTextBrush}" />
+                  <TextBlock Grid.Column="2" Classes="label" Text="Device Serial" />
+                  <TextBlock Grid.Column="3" Text="{Binding GaugeDeviceSerial}" Foreground="{StaticResource BrandTextBrush}" />
+
+                  <TextBlock Grid.Row="1" Classes="label" Text="Firmware" />
+                  <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding GaugeFirmware}" Foreground="{StaticResource BrandTextBrush}" />
+                  <TextBlock Grid.Row="1" Grid.Column="2" Classes="label" Text="PCB Type / Serial" />
+                  <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding GaugePcb}" Foreground="{StaticResource BrandTextBrush}" />
+
+                  <TextBlock Grid.Row="2" Classes="label" Text="Current Interval" />
+                  <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding GaugeMeasurementInterval}" Foreground="{StaticResource BrandTextBrush}" />
+                  <TextBlock Grid.Row="2" Grid.Column="2" Classes="label" Text="Current Storage" />
+                  <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding GaugeMemoryMode}" Foreground="{StaticResource BrandTextBrush}" />
+                </Grid>
+              </Border>
+
+              <StackPanel Spacing="9">
+                <TextBlock Text="Sample Interval" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                <Grid ColumnDefinitions="*,150,110" ColumnSpacing="10">
+                  <ComboBox ItemsSource="{Binding SampleIntervalOptions}"
+                            SelectedItem="{Binding SelectedSampleInterval}"
+                            MinHeight="42"
+                            HorizontalAlignment="Stretch" />
+                  <TextBox Grid.Column="1"
+                           Text="{Binding CustomSampleIntervalSeconds}"
+                           Watermark="Seconds"
+                           IsVisible="{Binding IsCustomSampleInterval}"
+                           MinHeight="42"
+                           VerticalContentAlignment="Center" />
+                  <Button Grid.Column="2"
+                          Classes="primary"
+                          Content="Apply"
+                          Command="{Binding ApplySampleIntervalCommand}"
+                          HorizontalContentAlignment="Center" />
+                </Grid>
+                <TextBlock Text="{Binding RecordingTimeEstimate}"
+                           Foreground="{StaticResource BrandMutedBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <Separator />
+
+              <StackPanel Spacing="9">
+                <TextBlock Text="Storage Mode" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource BrandTextBrush}" />
+                <Grid ColumnDefinitions="*,190" ColumnSpacing="10">
+                  <ComboBox ItemsSource="{Binding StorageModeOptions}"
+                            SelectedItem="{Binding SelectedStorageMode}"
+                            MinHeight="42"
+                            HorizontalAlignment="Stretch" />
+                  <Button Grid.Column="1"
+                          Classes="primary"
+                          Content="Change Storage Mode"
+                          Command="{Binding ChangeStorageModeCommand}"
+                          HorizontalContentAlignment="Center" />
+                </Grid>
+                <TextBlock Text="{Binding StorageModeCompatibilityText}"
+                           Foreground="{StaticResource BrandMutedBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+
+              <TextBlock Text="{Binding GaugeSettingsStatus}"
+                         Foreground="{StaticResource BrandPrimaryBrush}"
+                         TextWrapping="Wrap"
+                         TextAlignment="Center"
+                         HorizontalAlignment="Center" />
+
+              <Button Classes="secondary"
+                      Content="Erase Memory"
+                      Command="{Binding BeginMemoryEraseCommand}"
+                      HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center" />
+            </StackPanel>
+          </ScrollViewer>
         </Grid>
       </Border>
 

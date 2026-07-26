@@ -10,29 +10,56 @@ Read-only, idempotent commands may use the standard three-attempt communication 
 
 | Setting | Firmware command | Payload | Required verification | Proposed access |
 | --- | --- | --- | --- | --- |
-| Measurement interval | `SET_MEASURE_RATE` (46) | Seconds as unsigned 16-bit, little endian | Re-identify and compare `measure_int` | Read-only until the firmware gaps below are closed |
-| Memory mode | `SET_MEM_MODE` (50) | One byte (`0` full, `1` mirror) | Re-identify and compare `memory_mode` | Engineering Mode only |
+| Measurement interval | `SET_MEASURE_RATE` (46) | Seconds as unsigned 16-bit, little endian | Re-identify and compare `measure_int` | Gauge Settings |
+| Memory mode | `SET_MEM_MODE` (50) | One byte (`0` full, `1` mirror) | Full erase, then re-identify and compare `memory_mode` | Gauge Settings, erase-gated |
 | Acoustic pulse interval | `SET_PULSE_INT` (20) | Unsigned 16-bit, little endian | Firmware needs a supported readback or status field | Acoustic engineering workflow |
 | Acoustic address | `SET_ACOUSTIC_ADDR` (21) | One byte | Firmware needs a supported readback or status field | Acoustic engineering workflow |
 | Acoustic transmit setup | `SET_TX_INTERVAL` (54) | Interval low/high, address, command, acoustic type | Firmware needs a supported readback | Acoustic engineering workflow |
 | Acoustic recording | `SET_RECORD_SETTINGS` (59) | Enable flag, record length low/high | `GET_RECORD_SETTINGS` (58) | Acoustic engineering workflow |
 
-The normal Gauge Settings page remains read-only except for the dedicated
-external-memory erase procedure described below. Changes are disabled while
-any memory transaction is active and the connected identity is verified again
-immediately before the destructive command.
+The normal Gauge Settings page permits measurement-interval and supported
+storage-mode changes. Changes are disabled while any memory transaction is
+active. The connected device type and serial are verified immediately before
+each write, and `IDENTIFY` must report the requested value afterwards.
 
 ## Measurement Interval Contract
 
 The firmware inspection confirms that the stored interval is in seconds and that command 46 writes its two payload bytes directly to EEPROM as an unsigned little-endian value. Identify returns the same value, and each new file-table start record copies it into that file's metadata.
 
-The current firmware does not validate the value, start a new file, or consistently restart measurement after the write. It also has two different sensor links:
+The application permits 1 through 65,535 whole seconds. It offers the common
+operator presets from 1-10 seconds, 20 seconds, 30 seconds, 1, 2, 5, 10, 20 and
+30 minutes, and 1 hour, plus a custom entry. The write changes the stored
+deployment interval and is described as applying to the next recording; it
+does not reinterpret existing file metadata or attempt to change a recording
+already in progress.
 
-- The legacy sensor command sends the interval as one ASCII digit, so only `0` through `9` can be represented correctly by that path.
-- The modern sensor command sends `aut<decimal>`, which can represent the wider stored value.
-- Acoustic firmware exposes a separate sensor-measurement restart command; memory-gauge firmware does not expose an equivalent host command.
+Commands 46 and 50 are non-idempotent EEPROM writes from the host's point of
+view. The serial transport sends each only once. If the reply is lost, the app
+uses `IDENTIFY` readback to decide whether the requested value was applied; it
+does not blindly repeat the write.
 
-Editing this value in the desktop app could therefore create a file whose table interval does not describe every sample, or set a value that one supported sensor cannot apply. Before enabling it, firmware should enforce a device/sensor-specific range, create a clean file boundary, apply the new schedule immediately and consistently, and provide verified readback with a defined recovery path.
+The settings page estimates remaining record time using the selected interval
+and loaded catalog. V2 uses eight logical bytes per sample. V3 uses up to 18
+samples per 256-byte physical page and reserves a 4 KiB atomic header for the
+next file. It is an estimate: page fill, recovery reservations, or future
+format changes can reduce actual duration.
+
+## Storage Mode Contract
+
+The host never changes storage mode while committed files exist. Selecting a
+different supported mode opens the existing erase page. Only after the full
+erase finishes, command 53/65 has cleared the erase interlock, and the gauge
+remains the expected serial does the app send command 50. Cancelling the erase
+confirmation leaves the mode unchanged. A write failure after a verified erase
+is reported as a mode-change failure without falsely marking the erase
+incomplete; the now-empty gauge can be retried.
+
+V2 firmware implements both mode values: `0` provides the 64 MiB logical
+capacity and `1` provides the mirrored 32 MiB logical capacity. The present V3
+recorder always emits both primary and mirror pages even if command 50 stores
+and reports `0`. The application therefore allows V3 mirrored mode but disables
+V3 full-capacity mode rather than claiming non-mirrored protection. Required
+firmware work is recorded in `docs/V3_STORAGE_MODE_FIRMWARE.md`.
 
 ## Service Commands
 
@@ -81,11 +108,11 @@ a rolling 60-second graph. The test must never change the stored deployment
 interval or write external memory. The firmware command and HIL contract is
 defined in `docs/V3_SENSOR_LIVE_PROTOCOL.md`.
 
-## Firmware Gaps Before Editable Settings
+## Remaining Firmware Gaps
 
-- Define and enforce measurement-interval ranges for each supported sensor protocol.
-- Make an interval change create a clean file boundary and restart measurement consistently on both gauge families.
-- Define recovery when stored interval readback succeeds but sensor application fails.
+- Enforce a firmware-side nonzero measurement-interval range as defence in
+  depth. The app currently enforces `1..65,535`.
+- Define and implement V3 non-mirrored layout semantics before advertising full
+  capacity.
 - Add or identify readback for acoustic pulse interval, acoustic address, and transmit settings.
-- Define behaviour when a write succeeds but its acknowledgement is lost.
 - Record device type capability mapping so memory-only controls never appear for an acoustic gauge and vice versa.

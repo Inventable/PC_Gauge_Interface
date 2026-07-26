@@ -27,6 +27,8 @@ var tests = new (string Name, Action Run)[]
     ("Firmware updater erases start first and writes it last", FirmwareUpdaterErasesStartFirstAndWritesItLast),
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
     ("Firmware display reverses identity byte order", FirmwareDisplayReversesIdentityByteOrder),
+    ("Gauge interval setting uses V2/V3 wire format and verifies IDENTIFY", GaugeIntervalSettingUsesCompatibleWireFormat),
+    ("Gauge storage setting resolves a lost acknowledgement by IDENTIFY", GaugeStorageSettingResolvesLostAcknowledgement),
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
     ("Memory gauge file table ignores continuation records", MemoryGaugeFileTableIgnoresContinuationRecords),
     ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
@@ -444,6 +446,80 @@ static void FirmwareDisplayReversesIdentityByteOrder()
         EraseStatus: 0);
 
     AssertEqual("2.1", device.FirmwareVersion);
+}
+
+static void GaugeIntervalSettingUsesCompatibleWireFormat()
+{
+    ushort measurementInterval = 5;
+    var settingWrites = 0;
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        if (request.Command == GaugeCommand.Identify)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(
+                    eraseStatus: 0,
+                    measurementInterval: measurementInterval,
+                    memoryMode: 1));
+        }
+
+        if (request.Command == GaugeCommand.SetMeasureRate)
+        {
+            settingWrites++;
+            AssertSequenceEqual([0x2C, 0x01], request.Payload);
+            measurementInterval = BinaryPrimitives.ReadUInt16LittleEndian(request.Payload);
+            return GaugeFrame.Create(request.Command, payload: [0x01]);
+        }
+
+        throw new InvalidOperationException($"Unexpected command {request.Command}.");
+    });
+    var service = new GaugeConfigurationService(new GaugeSession(transport));
+
+    var device = service
+        .SetMeasurementIntervalAsync(300, 1234)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(1, settingWrites);
+    AssertEqual((ushort)300, device.MeasurementInterval);
+}
+
+static void GaugeStorageSettingResolvesLostAcknowledgement()
+{
+    byte memoryMode = 0;
+    var settingWrites = 0;
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        if (request.Command == GaugeCommand.Identify)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(
+                    eraseStatus: 0,
+                    measurementInterval: 5,
+                    memoryMode: memoryMode));
+        }
+
+        if (request.Command == GaugeCommand.SetMemoryMode)
+        {
+            settingWrites++;
+            AssertSequenceEqual([0x01], request.Payload);
+            memoryMode = request.Payload[0];
+            throw new TimeoutException("Simulated lost setting acknowledgement.");
+        }
+
+        throw new InvalidOperationException($"Unexpected command {request.Command}.");
+    });
+    var service = new GaugeConfigurationService(new GaugeSession(transport));
+
+    var device = service
+        .SetStorageModeAsync(GaugeStorageMode.Mirror, 1234)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(1, settingWrites);
+    AssertEqual((byte)GaugeStorageMode.Mirror, device.MemoryMode);
 }
 
 static void MemoryGaugeFileRecordParsesAndValidatesCrc()
@@ -1282,14 +1358,18 @@ static void IncompleteEraseRestartBeginsFresh()
     }
 }
 
-static byte[] BuildMemoryIdentityPayload(byte eraseStatus)
+static byte[] BuildMemoryIdentityPayload(
+    byte eraseStatus,
+    ushort measurementInterval = 5,
+    byte memoryMode = 1)
 {
     var payload = new byte[22];
     payload[0] = 3;
     payload[1] = 0;
     BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(2, 4), 100230);
     BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6, 4), 1234);
-    payload[20] = 1;
+    BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18, 2), measurementInterval);
+    payload[20] = memoryMode;
     payload[21] = eraseStatus;
     return payload;
 }

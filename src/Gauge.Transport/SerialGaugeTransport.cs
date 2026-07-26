@@ -115,7 +115,9 @@ public sealed class SerialGaugeTransport : IGaugeTransport
     private GaugeFrame TransactWithRetries(SerialPort port, GaugeFrame request, CancellationToken cancellationToken)
     {
         Exception? lastFailure = null;
-        var attempts = Math.Max(1, _options.MaxAttempts);
+        var attempts = RequiresSingleAttempt(request.Command)
+            ? 1
+            : Math.Max(1, _options.MaxAttempts);
 
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
@@ -206,6 +208,10 @@ public sealed class SerialGaugeTransport : IGaugeTransport
             or GaugeCommand.SensorLiveStop
             or GaugeCommand.V3Capabilities
             or GaugeCommand.V3CatalogSummary;
+
+    private static bool RequiresSingleAttempt(GaugeCommand command) =>
+        command is GaugeCommand.SetMeasureRate
+            or GaugeCommand.SetMemoryMode;
 
     private static bool IsRetryableCommsFailure(Exception ex)
     {
