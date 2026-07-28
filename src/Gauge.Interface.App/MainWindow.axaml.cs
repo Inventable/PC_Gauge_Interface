@@ -130,6 +130,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void Diagnostics_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel &&
+            viewModel.OpenDiagnosticsCommand.CanExecute(null))
+        {
+            viewModel.OpenDiagnosticsCommand.Execute(null);
+        }
+    }
+
     private async void FileAction_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel viewModel || sender is not Control control)

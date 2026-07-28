@@ -46,30 +46,30 @@ format changes can reduce actual duration.
 
 ## Storage Mode Contract
 
-The host never changes storage mode while committed files exist. Selecting a
-different supported mode opens the existing erase page. Only after the full
-erase finishes, command 53/65 has cleared the erase interlock, and the gauge
-remains the expected serial does the app send command 50. Cancelling the erase
-confirmation leaves the mode unchanged. A write failure after a verified erase
-is reported as a mode-change failure without falsely marking the erase
-incomplete; the now-empty gauge can be retried.
+The host never changes storage mode in place. Selecting a different supported
+mode always opens the existing erase page, even when the loaded catalog appears
+empty. Only after the full erase finishes, the erase interlock has cleared, and
+the gauge remains the expected serial does the app send command 50. Cancelling
+the erase confirmation leaves the mode unchanged. A write failure after a
+verified erase is reported as a mode-change failure without falsely marking
+the erase incomplete; the now-empty gauge can be retried.
 
-Both V2 and V3 application paths expose mode `0` as 64 MiB full-capacity
-storage and mode `1` as 32 MiB mirrored storage. In V3 mirror mode, host
-recovery reads the second replica only after the primary fails validation. In
-V3 full mode, the host never calculates or reads a mirror address.
+Both V2 and V3 application paths expose mode `0` as full-capacity storage and
+mode `1` as mirrored storage. V3 reports exclusive storage ends
+`0x03ff0000` and `0x01ff0000` respectively because its final 64 KiB is reserved
+for diagnostics. In V3 mirror mode, host recovery reads only a corresponding
+alternate page when the preferred page requires recovery. In V3 full mode, the
+host never calculates or reads a mirror address, and command-24 requests are
+split at the physical `0x02000000` device boundary.
 
-The V3 application control is enabled in advance of the corresponding firmware
-update. The V3 gauge must not be deployed or used for full-mode application
-testing until the recorder honours `memory_mode`, reports a 64 MiB
-`storage_end`, and passes the requirements in
-`docs/V3_STORAGE_MODE_FIRMWARE.md`.
+After a V3 mode write, command 73 must agree with both the `IDENTIFY` mode and
+the expected write-target mask/storage end before the app marks the gauge ready.
 
 ## Service Commands
 
 Calibration mode (47) writes a calibration-required flag and a 16-bit period. Serial pass-through mode (49) changes the communications path to the sensor. Both belong in a purpose-built service procedure, not a general settings form.
 
-Sensor power, initialisation, calibration reads, memory tests, core/error logs, and acoustic packet diagnostics can be added to Engineering Mode only when there is a concrete diagnostic procedure and an expected result to present.
+Sensor power, initialisation, calibration reads, memory tests, core/error logs, and acoustic packet diagnostics can be added to Device Management only when there is a concrete diagnostic procedure and an expected result to present.
 
 ## Destructive Commands
 
@@ -89,19 +89,30 @@ Erase, reset, and bootloader commands must never use an automatic blind retry. R
 The Gauge Settings **Erase Memory** action names both 32 MiB devices and warns
 that all recordings will be lost. Modern firmware reports paired-block
 progress. The host polls every 20 ms so the next block starts promptly on
-current firmware. V2 firmware uses whole-chip erase and busy polling; its
+current firmware. Each command-65 transaction allows a 2-second response and a
+7-second overall retry envelope because current firmware services the flash
+operation before sending its status reply. Command 64 is issued once; if its
+acknowledgement is lost, command 65 is used to prove whether that request
+started rather than repeating the destructive start command. V2 firmware uses
+whole-chip erase and busy polling; its
 displayed percentage and completion time are explicitly labelled as estimates,
 while success still depends on the gauge reporting both chips idle and
-accepting command 53. Both modes then re-read `IDENTIFY` and require
+accepting command 53. V3 completion is reported by command 65 and does not use
+the retired command 53. Both paths then re-read `IDENTIFY` and require
 `erase_status == 0`. Cancellation or a lost reply returns the UI directly to
-Disconnected and never sends command 53 or reports success.
+Disconnected and never reports success.
 
 Every nonzero memory-gauge `erase_status` is treated as a deployment lockout.
 The application skips file discovery and opens erase recovery immediately.
-Recovery waits for any in-flight flash command, resets the PIC without clearing
-the interlock, reconnects, and starts command 64 from block-pair zero. Command
-30 is used only when the firmware reports that command 64 is unsupported. This
-preserves V3 progress updates and never resumes the remaining paired blocks.
+Recovery services any active progress operation through command 65, resets the
+PIC, reconnects to the same serial number, and starts command 64 from block-pair
+zero. Command 65 may legitimately observe completion and clear the old
+interlock during preparation; this does not block the explicitly requested
+fresh erase because command 64 sets the interlock again before touching flash.
+If command 65 itself is unsupported, the legacy V2 path uses command 52 while
+waiting and command 30 to restart whole-chip erase. This preserves V3 progress
+updates and never treats the remaining old session as the requested recovery
+erase.
 Firmware safety and autonomous-sequencing requirements are defined in
 `docs/V3_ERASE_SAFETY_AND_PERFORMANCE.md`.
 
@@ -112,11 +123,11 @@ a rolling 60-second graph. The test must never change the stored deployment
 interval or write external memory. The firmware command and HIL contract is
 defined in `docs/V3_SENSOR_LIVE_PROTOCOL.md`.
 
-## Remaining Firmware Gaps
+## Remaining Product Work
 
 - Enforce a firmware-side nonzero measurement-interval range as defence in
   depth. The app currently enforces `1..65,535`.
-- Implement and HIL-validate the V3 non-mirrored layout semantics before using
-  the enabled full-capacity application option.
+- Complete live HIL validation of the V3 full-capacity boundary and failover
+  cases listed in `docs/V3_APPLICATION_VALIDATION.md`.
 - Add or identify readback for acoustic pulse interval, acoustic address, and transmit settings.
 - Record device type capability mapping so memory-only controls never appear for an acoustic gauge and vice versa.

@@ -206,12 +206,20 @@ public sealed class SerialGaugeTransport : IGaugeTransport
             or GaugeCommand.SensorLiveStatus
             or GaugeCommand.SensorLiveRead
             or GaugeCommand.SensorLiveStop
+            or GaugeCommand.ResetDevice
+            or GaugeCommand.EraseExternalMemory
+            or GaugeCommand.MemoryStatus
+            or GaugeCommand.EndMemoryErase
+            or GaugeCommand.StartProgressErase
+            or GaugeCommand.GetEraseProgress
+            or GaugeCommand.V3DiagnosticStatus
             or GaugeCommand.V3Capabilities
             or GaugeCommand.V3CatalogSummary;
 
     private static bool RequiresSingleAttempt(GaugeCommand command) =>
         command is GaugeCommand.SetMeasureRate
-            or GaugeCommand.SetMemoryMode;
+            or GaugeCommand.SetMemoryMode
+            or GaugeCommand.StartProgressErase;
 
     private static bool IsRetryableCommsFailure(Exception ex)
     {

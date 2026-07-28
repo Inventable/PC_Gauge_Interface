@@ -24,6 +24,9 @@ These captures came from `artifacts/v3-hil/20260724T231028Z` and
 - `bch-16-corrected-data.bin` is the matching target capture after 16 known
   data-bit clears in replica 0. Its first page must decode as corrected with
   exactly 16 corrected bits; the second page remains clean.
+- `v3.1-compact-golden.hex` is the fixed 256-byte `MG3D` encoding-1 contract
+  fixture. It contains a valid zero-count slot, an explicit null, non-zero
+  24-bit counts, slot 32, CRC32C, and BCH16 parity.
 
 These captures came from `artifacts/v3-hil/20260724T200644Z`.
 

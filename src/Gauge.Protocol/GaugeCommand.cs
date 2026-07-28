@@ -62,6 +62,7 @@ public enum GaugeCommand : byte
     SensorLiveStatus = 67,
     SensorLiveRead = 68,
     SensorLiveStop = 69,
+    V3DiagnosticStatus = 70,
     V3Capabilities = 73,
     V3CatalogSummary = 74
 }

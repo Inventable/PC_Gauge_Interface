@@ -61,9 +61,9 @@ The firmware repository should implement all of the following:
    accounted for.
 5. Never clear the byte on timeout, reset, cancellation, communication loss,
    flash error, or an invalid progress state.
-6. `END_MEM_ERASE` should also reset the RAM progress state to `IDLE`. The
-   application sends this command after both V2 and V3 completion before
-   verifying that `IDENTIFY.erase_status` is zero.
+6. Progress completion must reset the RAM progress state to `IDLE`. Production
+   V3 retires `END_MEM_ERASE` (53); command 65 reports completion and the
+   application then verifies that `IDENTIFY.erase_status` is zero.
 
 The lockout must be a firmware state-machine guard, not only an operator-facing
 status byte. This prevents a gauge with stranded data from returning to a
@@ -95,15 +95,27 @@ When `IDENTIFY.erase_status != 0`, the desktop application:
 1. skips catalog/file-table reads and automatic downloads;
 2. opens the erase recovery page immediately;
 3. prevents dismissal into the normal file UI;
-4. waits for any currently executing flash command to become idle;
-5. sends command 11 while the EEPROM interlock remains set, resetting the
-   volatile progress state;
-6. reconnects and verifies the same gauge still reports a nonzero interlock;
-7. sends command 64, which now starts a new 512-pair V3 erase at address zero;
-8. uses command 30 only if command 64 explicitly reports unsupported, which is
-   the V2 fallback;
-9. after reported completion, sends command 53 and reads `IDENTIFY`; success is
-   shown only when `erase_status` is confirmed as zero.
+4. services the existing progress operation until it is no longer busy;
+5. sends command 11, resetting the volatile progress state;
+6. reconnects and verifies the same gauge identity. Command 65 may have
+   legitimately cleared the old interlock if it observed completion during
+   preparation, so the second identity check does not require it to remain
+   nonzero;
+7. sends command 64, which sets the interlock again and starts a new 512-pair
+   V3 erase at address zero;
+8. uses command 30 only if command 65/64 reports unsupported, which is the V2
+   fallback;
+9. after V3 completion, reads `IDENTIFY` directly; success is shown only when
+   `erase_status` is confirmed as zero. The legacy V2 fallback retains command
+   53.
+
+The host sends command 64 only once. If the start acknowledgement is lost,
+command 65 is the authoritative readback: `Busy` or `Complete` proves that the
+original request was accepted, while any other state fails safely without a
+second destructive start. Command 65 has a 2-second response timeout and a
+7-second transaction deadline because the current implementation services the
+flash erase before replying. The former one-second deadline could abandon a
+healthy erase after it had already started, leaving the EEPROM interlock set.
 
 This works with the current firmware, preserves V3 percentage reporting, and
 does not resume a partially completed RAM session. A future command such as
@@ -128,5 +140,5 @@ offered after the gauge is discovered again.
   only after both devices report successful completion.
 - Start a recovery while a pair is still busy and prove the subsequent erase
   begins from address zero.
-- After command 53, prove a new command 64 starts a new session at zero rather
-  than resuming stale RAM progress.
+- After command 65 reports completion, prove a new command 64 starts a new
+  session at zero rather than resuming stale RAM progress.

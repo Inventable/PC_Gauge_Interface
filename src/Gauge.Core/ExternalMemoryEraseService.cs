@@ -53,10 +53,31 @@ public sealed class ExternalMemoryEraseService
         TimeSpan? overallTimeout = null)
     {
         ExternalEraseResult result;
-        var startReply = await _session
-            .SendCommandAsync(GaugeCommand.StartProgressErase, cancellationToken)
-            .ConfigureAwait(false);
-        if (startReply.Payload is [ErrorInvalidCommand])
+        GaugeFrame? startReply = null;
+        ExternalEraseStatus? recoveredStartStatus = null;
+        try
+        {
+            startReply = await _session
+                .SendCommandAsync(GaugeCommand.StartProgressErase, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsAmbiguousStartFailure(ex))
+        {
+            // Command 64 is destructive and must not be sent again merely
+            // because its reply was lost. Command 65 is the authoritative
+            // readback for deciding whether the first request started.
+            recoveredStartStatus = await ReadProgressAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (recoveredStartStatus.State is not (
+                    ExternalEraseState.Busy or ExternalEraseState.Complete))
+            {
+                throw new IOException(
+                    "The progress-erase acknowledgement was lost and command 65 does not report an active erase.",
+                    ex);
+            }
+        }
+
+        if (startReply?.Payload is [ErrorInvalidCommand])
         {
             result = await EraseLegacyAsync(
                 progress,
@@ -67,7 +88,11 @@ public sealed class ExternalMemoryEraseService
         else
         {
             ExternalEraseStatus status;
-            if (startReply.Payload is [ErrorMemoryBusy])
+            if (recoveredStartStatus is not null)
+            {
+                status = recoveredStartStatus;
+            }
+            else if (startReply!.Payload is [ErrorMemoryBusy])
             {
                 status = await ReadProgressAsync(cancellationToken).ConfigureAwait(false);
                 if (status.State != ExternalEraseState.Busy)
@@ -94,9 +119,9 @@ public sealed class ExternalMemoryEraseService
                 overallTimeout ?? DefaultOverallTimeout).ConfigureAwait(false);
         }
 
-        await FinalizeAndVerifyEraseAsync(cancellationToken).ConfigureAwait(false);
         if (result.Mode == ExternalEraseMode.LegacyEstimated)
         {
+            await FinalizeLegacyEraseAsync(cancellationToken).ConfigureAwait(false);
             progress?.Report(new ExternalEraseProgress(
                 ExternalEraseMode.LegacyEstimated,
                 100,
@@ -107,6 +132,10 @@ public sealed class ExternalMemoryEraseService
                 0,
                 0,
                 result.Elapsed));
+        }
+        else
+        {
+            await VerifyEraseInterlockClearedAsync(cancellationToken).ConfigureAwait(false);
         }
         return result;
     }
@@ -119,10 +148,37 @@ public sealed class ExternalMemoryEraseService
         var interval = pollInterval ?? DefaultPollInterval;
         var deadline = overallTimeout ?? DefaultOverallTimeout;
 
-        await WaitForMemoryIdleAsync(
-            cancellationToken,
-            interval,
-            deadline).ConfigureAwait(false);
+        var progressReply = await _session
+            .SendCommandAsync(GaugeCommand.GetEraseProgress, cancellationToken)
+            .ConfigureAwait(false);
+        if (progressReply.Payload is [ErrorInvalidCommand])
+        {
+            await WaitForMemoryIdleAsync(
+                cancellationToken,
+                interval,
+                deadline).ConfigureAwait(false);
+        }
+        else
+        {
+            var clock = Stopwatch.StartNew();
+            var status = ExternalEraseStatus.Parse(progressReply.Payload);
+            while (status.State == ExternalEraseState.Busy)
+            {
+                if (clock.Elapsed > deadline)
+                {
+                    throw new TimeoutException(
+                        "Timed out waiting for the active progressive erase before restart.");
+                }
+
+                await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
+                status = await ReadProgressAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (status.State == ExternalEraseState.Error || status.ErrorMask != 0)
+            {
+                throw BuildChipError(status.ErrorMask);
+            }
+        }
 
         var reset = await _session
             .SendCommandAsync(GaugeCommand.ResetDevice, cancellationToken)
@@ -283,7 +339,7 @@ public sealed class ExternalMemoryEraseService
         }
     }
 
-    private async Task FinalizeAndVerifyEraseAsync(CancellationToken cancellationToken)
+    private async Task FinalizeLegacyEraseAsync(CancellationToken cancellationToken)
     {
         var end = await _session
             .SendCommandAsync(GaugeCommand.EndMemoryErase, cancellationToken)
@@ -294,7 +350,15 @@ public sealed class ExternalMemoryEraseService
                 "Gauge memory became idle but the erase interlock could not be cleared.");
         }
 
-        var identity = await _session.IdentifyAsync(cancellationToken).ConfigureAwait(false);
+        await VerifyEraseInterlockClearedAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task VerifyEraseInterlockClearedAsync(
+        CancellationToken cancellationToken)
+    {
+        var identity = await _session
+            .IdentifyAsync(cancellationToken)
+            .ConfigureAwait(false);
         var device = DeviceData.DecodeMemoryGauge(identity.Payload);
         if (device.EraseStatus.GetValueOrDefault() != 0)
         {
@@ -364,4 +428,9 @@ public sealed class ExternalMemoryEraseService
         return new InvalidDataException(
             $"External-memory erase failed on {chips} (error mask 0x{mask:X2}).");
     }
+
+    private static bool IsAmbiguousStartFailure(Exception exception) =>
+        exception is TimeoutException
+            or IOException
+            or GaugeProtocolException;
 }

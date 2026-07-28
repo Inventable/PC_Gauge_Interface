@@ -1,6 +1,6 @@
 # Gauge Firmware Bootloader
 
-This document records the protocol implemented by `PIC_BOOTLOADER` for the PIC18F26K80. The desktop application must treat firmware update as an Engineering Mode operation, separate from normal gauge communication.
+This document records the protocol implemented by `PIC_BOOTLOADER` for the PIC18F26K80. The desktop application must treat firmware update as a Device Management operation, separate from normal gauge communication.
 
 ## Memory And Recovery Model
 
@@ -100,9 +100,9 @@ After loader reset, the application returned as firmware `2.0` with the same dev
 
 This proves normal update and application recovery. Deliberate interruption/recovery testing remains required before the desktop control is approved for routine field use.
 
-## Desktop Engineering Mode
+## Desktop Device Management
 
-The proven updater is available in **Settings > Engineering Mode > Firmware Update**. The desktop workflow:
+The proven updater is available in **Settings > Device Management > Firmware Update**. The desktop workflow:
 
 1. Uses the native file picker and accepts only an `Offset/production` HEX artifact. StandAlone, Combined, unified, below-`0x0800`, and unsupported-address images are rejected before a command is sent.
 2. Displays the normalized program range, populated-row count, and SHA-256 before enabling programming.
@@ -112,7 +112,7 @@ The proven updater is available in **Settings > Engineering Mode > Firmware Upda
 6. Blocks app exit while flash work is active. If any failure occurs after loader entry, normal identify polling remains suspended and the same validated image is retained for the explicit `RECOVER` path.
 7. Resets once, reacquires the application at `57600`, verifies device identity, then refreshes the file table and calibration before automatic downloads resume.
 
-The current firmware state, loader identity, image hash, progress, and recovery requirement are included in the Engineering Mode support bundle.
+The current firmware state, loader identity, image hash, progress, and recovery requirement are included in the Device Management support bundle.
 
 ## Programming Work Still Required
 

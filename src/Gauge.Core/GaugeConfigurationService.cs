@@ -64,13 +64,24 @@ public sealed class GaugeConfigurationService
             requireEmptyEraseInterlock: true,
             cancellationToken).ConfigureAwait(false);
 
-        return await WriteAndVerifyAsync(
+        var device = await WriteAndVerifyAsync(
             GaugeCommand.SetMemoryMode,
             new byte[] { (byte)mode },
             expectedSerial,
             device => device.MemoryMode == (byte)mode,
             $"storage mode {mode}",
             cancellationToken).ConfigureAwait(false);
+        var capabilities = await _session
+            .ProbeV3CapabilitiesAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (capabilities is not null &&
+            capabilities.MemoryMode != (V3MemoryMode)mode)
+        {
+            throw new InvalidDataException(
+                "IDENTIFY accepted the storage mode, but command 73 reports a different V3 layout.");
+        }
+
+        return device;
     }
 
     private async Task<DeviceData> WriteAndVerifyAsync(

@@ -21,7 +21,8 @@ public sealed record V3FileHeader(
     byte[] PressurePolynomial,
     byte[] TemperaturePolynomial,
     byte[] RawHeaderStream,
-    IReadOnlyList<V3HeaderPage> Pages);
+    IReadOnlyList<V3HeaderPage> Pages,
+    byte Schema = 1);
 
 public static class V3HeaderDecoder
 {
@@ -141,6 +142,13 @@ public static class V3HeaderDecoder
         ReadOnlySpan<byte> stream,
         IReadOnlyList<V3HeaderPage>? pages = null)
     {
+        if (stream.Length >= 5 &&
+            stream[..4].SequenceEqual("MG3H"u8) &&
+            stream[4] == 2)
+        {
+            return DecodeSchema2(stream, pages);
+        }
+
         if (stream.Length is < 24 or > MaximumHeaderBytes ||
             !stream[..4].SequenceEqual("MG3H"u8) ||
             BinaryPrimitives.ReadUInt16LittleEndian(stream[4..6]) != 1 ||
@@ -220,5 +228,60 @@ public static class V3HeaderDecoder
             required[3],
             stream.ToArray(),
             pages ?? []);
+    }
+
+    private static V3FileHeader DecodeSchema2(
+        ReadOnlySpan<byte> stream,
+        IReadOnlyList<V3HeaderPage>? pages)
+    {
+        const int prefixBytes = 21;
+        if (stream.Length < prefixBytes ||
+            stream.Length > MaximumHeaderBytes ||
+            BinaryPrimitives.ReadUInt16LittleEndian(stream[5..7]) != stream.Length)
+        {
+            throw new InvalidDataException(
+                "V3 schema-2 header stream prefix or total length is invalid.");
+        }
+
+        var fileId = BinaryPrimitives.ReadUInt32LittleEndian(stream[7..11]);
+        var interval = BinaryPrimitives.ReadUInt16LittleEndian(stream[11..13]);
+        if (fileId == 0 || interval == 0)
+        {
+            throw new InvalidDataException(
+                "V3 schema-2 header identity or interval is invalid.");
+        }
+
+        var serialLength = BinaryPrimitives.ReadUInt16LittleEndian(stream[13..15]);
+        var headerLength = BinaryPrimitives.ReadUInt16LittleEndian(stream[15..17]);
+        var pressureLength = BinaryPrimitives.ReadUInt16LittleEndian(stream[17..19]);
+        var temperatureLength = BinaryPrimitives.ReadUInt16LittleEndian(stream[19..21]);
+        var fieldsLength = checked(
+            (int)serialLength + headerLength + pressureLength + temperatureLength);
+        if (fieldsLength != stream.Length - prefixBytes)
+        {
+            throw new InvalidDataException(
+                "V3 schema-2 calibration field lengths do not match the committed stream.");
+        }
+
+        var offset = prefixBytes;
+        var serial = stream.Slice(offset, serialLength).ToArray();
+        offset += serialLength;
+        var header = stream.Slice(offset, headerLength).ToArray();
+        offset += headerLength;
+        var pressure = stream.Slice(offset, pressureLength).ToArray();
+        offset += pressureLength;
+        var temperature = stream.Slice(offset, temperatureLength).ToArray();
+
+        return new V3FileHeader(
+            fileId,
+            interval,
+            0,
+            serial,
+            header,
+            pressure,
+            temperature,
+            stream.ToArray(),
+            pages ?? [],
+            2);
     }
 }

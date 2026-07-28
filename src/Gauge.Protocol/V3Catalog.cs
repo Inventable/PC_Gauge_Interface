@@ -129,45 +129,57 @@ public static class V3CatalogDecoder
     public static V3CatalogRecovery Recover(
         ReadOnlySpan<byte> replica0,
         ReadOnlySpan<byte> replica1,
-        int maximumRecords = 256)
+        int maximumRecords = 256,
+        int preferredReplicaId = 0)
     {
+        if (preferredReplicaId is < 0 or > 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(preferredReplicaId));
+        }
+
         var replicas = new[]
         {
             DecodeReplica(0, replica0, maximumRecords),
             DecodeReplica(1, replica1, maximumRecords)
         };
         var prefix = Math.Max(replicas[0].Records.Count, replicas[1].Records.Count);
-        var selected = replicas[1].Records.Count > replicas[0].Records.Count ||
-            (replicas[1].Records.Count == replicas[0].Records.Count &&
-             !replicas[0].IsValid && replicas[1].IsValid)
-                ? 1
-                : 0;
-        var divergence = false;
+        var recovered = new List<V3CatalogRecord>(prefix);
 
         var shared = Math.Min(replicas[0].Records.Count, replicas[1].Records.Count);
-        for (var index = 0; index < shared; index++)
+        for (var index = 0; index < prefix; index++)
         {
-            if (!SameRecord(replicas[0].Records[index], replicas[1].Records[index]))
+            if (index >= shared)
             {
-                divergence = true;
-                prefix = index;
-                break;
+                recovered.Add(
+                    index < replicas[0].Records.Count
+                        ? replicas[0].Records[index]
+                        : replicas[1].Records[index]);
+                continue;
             }
 
-            if (replicas[selected].Records[index].Page.Status == V3PageStatus.Corrected &&
-                replicas[1 - selected].Records[index].Page.Status == V3PageStatus.Ok)
+            var record0 = replicas[0].Records[index];
+            var record1 = replicas[1].Records[index];
+            if (!SameRecord(record0, record1))
             {
-                selected = 1 - selected;
+                throw new InvalidDataException($"V3 catalog replicas diverge at record {index}.");
             }
+
+            recovered.Add(
+                record0.Page.Status == V3PageStatus.Ok &&
+                record1.Page.Status != V3PageStatus.Ok
+                    ? record0
+                    : record1.Page.Status == V3PageStatus.Ok &&
+                      record0.Page.Status != V3PageStatus.Ok
+                        ? record1
+                        : preferredReplicaId == 0 ? record0 : record1);
         }
 
-        if (divergence)
-        {
-            throw new InvalidDataException($"V3 catalog replicas diverge at record {prefix}.");
-        }
-
+        var selected = replicas[1 - preferredReplicaId].Records.Count >
+            replicas[preferredReplicaId].Records.Count
+                ? 1 - preferredReplicaId
+                : preferredReplicaId;
         return new V3CatalogRecovery(
-            replicas[selected].Records.Take(prefix).ToArray(),
+            recovered,
             replicas,
             selected,
             false);
