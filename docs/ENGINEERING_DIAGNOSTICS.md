@@ -1,16 +1,38 @@
-# Engineering Diagnostics
+# Device Management and Diagnostics
 
-Engineering Mode is for named troubleshooting procedures with an expected result. It is not a raw serial-command console.
+Device Management is for named troubleshooting and maintenance procedures
+with an expected result. It is not a raw serial-command console.
+
+Routine operator diagnostics are available separately under
+**Settings > Diagnostics**:
+
+- **File Information** is the authoritative review page for **Review
+  warnings**. It names every active warning or error and also records the
+  healthy V3 validation evidence.
+- **Gauge Events** presents the current command-70 health status, the last
+  recorded deployment event, and whether a protected logging-fault capsule is
+  available.
+
+A V3 recording ending after power removal is ordinary operation. Event 13 is
+shown as **Power removed or logging stopped**, not as a crash. A missing footer
+on an otherwise valid open file is healthy and does not create a warning.
+Command 70 reports a protected capsule's presence and generation. When bit 4 is
+set, the application uses the read-only command 71 to validate and display the
+capsule generation, boot, event/fault, file, committed-sample and raw RCON
+context in a labelled operator summary. A one-byte `0xFC` reply is treated as a
+benign availability race, and `0xFF` leaves the older diagnostic workflow
+available without capsule details.
 
 ## Connection Snapshot
 
 Use the connection snapshot when the gauge appears connected but file discovery, calibration, or device identification is suspect.
 
-Open **Settings > Engineering Mode** after the normal connection attempt. The snapshot reports:
+Open **Settings > Device Management** after the normal connection attempt. The snapshot reports:
 
 - Selected serial port and fast-link baud rate.
-- Parsed file-table entry count and end-of-file address.
-- Whether sensor calibration was captured.
+- The loaded V2 file table or V3 catalog, including its actual storage format.
+- Connected-sensor calibration for V2, or the number of validated file-local
+  calibration headers for V3.
 - Firmware, device and PCB identity, measurement interval, memory mode, erase state, and raw identify bytes.
 - Communication integrity for the current connection session: completed transactions, retry attempts, wire-frame CRC errors, recovered transactions, final failures, and the last issue.
 
@@ -18,7 +40,10 @@ Expected healthy result:
 
 - Transport shows the selected COM port at 460800 baud.
 - File table is available and its entry count is plausible for the gauge.
-- Sensor calibration says `Captured`.
+- V2 sensor calibration says it was captured from the connected sensor. V3
+  calibration reports the number of validated file-local calibration records;
+  an empty V3 catalog explains that calibration will be read from each future
+  file rather than reporting a false capture failure.
 - Device identity fields contain values rather than placeholders.
 - Communication Integrity says `Good`; retries, CRC errors, recovered transactions, and failures are zero.
 
@@ -28,11 +53,20 @@ If transport is unavailable, return to Serial Settings and verify the adapter/po
 
 Use **Save Support Bundle** to preserve this evidence as a timestamped ZIP. The app remembers the last support-bundle folder. The archive contains:
 
-- `diagnostics.json` with application/runtime details, selected transport, parsed gauge identity, complete logical file table, download and data-quality state, parsed calibration metadata, a connection-session integrity summary, and recent communication events.
-- The four captured sensor calibration payloads under `calibration/`, when calibration is available.
+- `diagnostics.json` with application/runtime details, selected transport,
+  parsed gauge identity, V2 file-table or V3 catalog state, every file's
+  download and data-quality result, command-70 gauge-event status, parsed
+  calibration metadata, a connection-session integrity summary, and recent
+  communication events.
+- `diagnostics/crash-capsule.json` with device identity and the validated
+  capsule fields when a protected crash capsule was downloaded.
+- Connected-sensor calibration payloads under `calibration/` for V2.
+- Each atomic V3 file's calibration payloads under
+  `calibration/file-NNN/`.
 
 The session summary separates wire CRC, timeout, I/O, protocol, port-access, and other error counts, and includes the last issue even after disconnection. The detailed history records port-open failures, transaction retries, recovery after a retry, and final three-attempt failures. Each item includes port, baud, command, attempt count, failure category, exception type, first/last UTC timestamps, and occurrence count. Equivalent events within five seconds are coalesced, and only the latest 100 entries are retained. Successful transactions contribute to the summary but are not written as individual events.
 
 The archive is intentionally bounded and does not duplicate downloaded gauge memory or exported jobs. It may be saved while disconnected so the last captured state and failure history remain available for troubleshooting. A healthy session may legitimately contain no communication events.
 
-This procedure is read-only. Memory tests, sensor pass-through, reset, erase, and bootloader actions require separate documented procedures before UI controls are added.
+The diagnostic snapshot and support-bundle export are read-only. Firmware
+programming remains a separately confirmed Device Management operation.

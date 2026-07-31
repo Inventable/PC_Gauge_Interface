@@ -33,11 +33,7 @@ public sealed class GaugeJobService
             var reply = await _session.SendCommandAsync(GaugeCommand.InitialiseSensor, cancellationToken).ConfigureAwait(false);
             if (reply.Payload is [0x01])
             {
-                return new SensorCalibrationBundle(
-                    await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorSerial, cancellationToken).ConfigureAwait(false),
-                    await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorCalibration, cancellationToken).ConfigureAwait(false),
-                    await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorPressurePolynomial, cancellationToken).ConfigureAwait(false),
-                    await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorTemperaturePolynomial, cancellationToken).ConfigureAwait(false));
+                return await ReadSensorCalibrationAsync(cancellationToken).ConfigureAwait(false);
             }
 
             if (attempt < initialiseAttempts)
@@ -51,16 +47,44 @@ public sealed class GaugeJobService
             $"Sensor initialise failed after {initialiseAttempts} attempt(s).");
     }
 
+    public async Task<SensorCalibrationBundle> ReadSensorCalibrationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return new SensorCalibrationBundle(
+            await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorSerial, cancellationToken).ConfigureAwait(false),
+            await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorCalibration, cancellationToken).ConfigureAwait(false),
+            await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorPressurePolynomial, cancellationToken).ConfigureAwait(false),
+            await ReadRequiredSensorPayloadAsync(GaugeCommand.ReadSensorTemperaturePolynomial, cancellationToken).ConfigureAwait(false));
+    }
+
     public async Task<GaugeFileTable> ReadFileTableAsync(
         int tableBytes = 0x4000,
         ushort chunkBytes = 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<FileInfoReadProgress>? progress = null)
     {
+        progress?.Report(new FileInfoReadProgress(0, "Locating files"));
         var eof = await _session.FindEndOfFileAsync(cancellationToken).ConfigureAwait(false);
+        progress?.Report(new FileInfoReadProgress(5, "Reading file table"));
+        var readProgress = progress is null
+            ? null
+            : new CallbackProgress<MemoryReadProgress>(value =>
+                progress.Report(new FileInfoReadProgress(
+                    value.TotalBytes <= 0
+                        ? 100
+                        : 5 + (95 * value.BytesRead / (double)value.TotalBytes),
+                    "Reading file table")));
         var table = await _session
-            .ReadExternalMemoryChunkedAsync(0, tableBytes, chunkBytes, GaugeCommand.ReadFileSector, cancellationToken)
+            .ReadExternalMemoryChunkedAsync(
+                0,
+                tableBytes,
+                chunkBytes,
+                GaugeCommand.ReadFileSector,
+                cancellationToken,
+                readProgress)
             .ConfigureAwait(false);
 
+        progress?.Report(new FileInfoReadProgress(100, "File information ready"));
         return new GaugeFileTable(eof, MemoryGaugeFileRecord.ParseTable(table));
     }
 
@@ -306,4 +330,6 @@ public sealed record CalibratedGaugeSample(
     double PressureFrequency,
     bool CrcError,
     bool Corrected,
-    byte BatteryStatus);
+    byte BatteryStatus,
+    bool IsMissing = false,
+    double ExactTimestampSeconds = double.NaN);

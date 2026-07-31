@@ -15,6 +15,25 @@ public static class CalibratedCsvExporter
 
     private static string BuildLine(CalibratedGaugeSample sample)
     {
+        if (sample.IsMissing)
+        {
+            return string.Join(
+                ',',
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                sample.Sequence.ToString(CultureInfo.InvariantCulture),
+                sample.Counter.ToString(CultureInfo.InvariantCulture),
+                sample.Address.ToString(CultureInfo.InvariantCulture),
+                FormatTimestamp(sample),
+                string.Empty,
+                string.Empty,
+                (sample.CrcError ? 1 : 0).ToString(CultureInfo.InvariantCulture),
+                (sample.Corrected ? 1 : 0).ToString(CultureInfo.InvariantCulture),
+                sample.BatteryStatus.ToString(CultureInfo.InvariantCulture));
+        }
+
         return string.Join(
             ',',
             sample.PressureCounts.ToString(CultureInfo.InvariantCulture),
@@ -24,7 +43,7 @@ public static class CalibratedCsvExporter
             sample.Sequence.ToString(CultureInfo.InvariantCulture),
             sample.Counter.ToString(CultureInfo.InvariantCulture),
             sample.Address.ToString(CultureInfo.InvariantCulture),
-            sample.Timestamp.ToString(CultureInfo.InvariantCulture),
+            FormatTimestamp(sample),
             FormatDouble(sample.TemperatureFrequency),
             FormatDouble(sample.PressureFrequency),
             (sample.CrcError ? 1 : 0).ToString(CultureInfo.InvariantCulture),
@@ -36,4 +55,9 @@ public static class CalibratedCsvExporter
     {
         return value.ToString("G17", CultureInfo.InvariantCulture);
     }
+
+    private static string FormatTimestamp(CalibratedGaugeSample sample) =>
+        double.IsNaN(sample.ExactTimestampSeconds)
+            ? sample.Timestamp.ToString(CultureInfo.InvariantCulture)
+            : sample.ExactTimestampSeconds.ToString("G17", CultureInfo.InvariantCulture);
 }

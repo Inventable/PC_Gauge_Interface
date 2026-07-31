@@ -1,8 +1,10 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Windows.Input;
@@ -16,6 +18,9 @@ namespace Gauge.Interface.App;
 
 public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposable
 {
+    public const string DefaultFirmwareCatalogUrl =
+        "https://raw.githubusercontent.com/Inventable/IT_Releases/main/channels/stable.json";
+
     private const int SmallFileSampleThreshold = 10;
     private const int WakeBaud = 57600;
     private const int FastBaud = 460800;
@@ -23,12 +28,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private const int WakePollIntervalMs = 100;
     private const int WakeScanTimeoutMs = 30000;
     private const int BackgroundWakeScanTimeoutMs = 1500;
-    private const int ConnectedPollTransactionTimeoutMs = 100;
-    private const int DataTransactionTimeoutMs = 100;
-    private const int DataTransactionDeadlineMs = 500;
+    private const int ConnectedPollTransactionTimeoutMs = 250;
+    private const int ConnectedPollMissLimit = 3;
+    private const int PortRemovalPollLimit = 3;
+    private const int DataTransactionTimeoutMs = 250;
+    private const int DataTransactionDeadlineMs = 1500;
     private const int WakeTransactionDeadlineMs = 1000;
     private const int SensorTransactionTimeoutMs = 2000;
     private const int SensorTransactionDeadlineMs = 7000;
+    // Command 65 services the current flash operation before replying. Allow
+    // enough time for a worst-case erase-status cycle and all transport
+    // attempts; the normal 1-second deadline can strand an active erase.
+    private const int EraseTransactionTimeoutMs = 2000;
+    private const int EraseTransactionDeadlineMs = 7000;
+    private const int EraseRestartWakeScanTimeoutMs = 3000;
     private const int BootloaderBaud = 115200;
     private const uint MemoryGaugeDeviceType = 100230;
     private const ushort Pic18F26K80DeviceId = 0x6126;
@@ -41,26 +54,82 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private static readonly TimeSpan DownloadRecoveryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly Geometry SortAscendingGeometry = Geometry.Parse("M7,15L12,10L17,15H7Z");
     private static readonly Geometry SortDescendingGeometry = Geometry.Parse("M7,9L12,14L17,9H7Z");
+    private static readonly IBrush DiagnosticNormalBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
+    private static readonly IBrush DiagnosticAdvisoryBrush = new SolidColorBrush(Color.Parse("#D97706"));
+    private static readonly IBrush DiagnosticWarningBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
+    private static readonly IReadOnlyList<SampleIntervalOption> SampleIntervalChoices =
+    [
+        .. Enumerable.Range(1, 10).Select(seconds =>
+            new SampleIntervalOption($"{seconds} second{(seconds == 1 ? string.Empty : "s")}", (ushort)seconds)),
+        new("20 seconds", 20),
+        new("30 seconds", 30),
+        new("1 minute", 60),
+        new("2 minutes", 120),
+        new("5 minutes", 300),
+        new("10 minutes", 600),
+        new("20 minutes", 1200),
+        new("30 minutes", 1800),
+        new("1 hour", 3600),
+        new("Custom...", null)
+    ];
+    private static readonly IReadOnlyList<StorageModeOption> StorageModeChoices =
+    [
+        new("Full capacity (64 MiB)", GaugeStorageMode.Full),
+        new("Mirrored (32 MiB, redundant)", GaugeStorageMode.Mirror)
+    ];
+    private static readonly IReadOnlyList<DeploymentJobLengthOption> DeploymentJobLengthChoices =
+    [
+        new("< 1 day", TimeSpan.FromDays(1)),
+        new("1 day", TimeSpan.FromDays(1)),
+        new("2 days", TimeSpan.FromDays(2)),
+        new("3 days", TimeSpan.FromDays(3)),
+        new("4 days", TimeSpan.FromDays(4)),
+        new("5 days", TimeSpan.FromDays(5)),
+        new("10 days", TimeSpan.FromDays(10)),
+        new("20 days", TimeSpan.FromDays(20)),
+        new("1 month", TimeSpan.FromDays(30)),
+        new("2 months", TimeSpan.FromDays(60)),
+        new("3 months", TimeSpan.FromDays(90)),
+        new("6 months", TimeSpan.FromDays(180)),
+        new("1 year", TimeSpan.FromDays(365))
+    ];
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Northstar",
         "GaugeInterface",
         "settings.json");
+    private static readonly string DiagnosticsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Northstar",
+        "GaugeInterface",
+        "communication-failures.log");
+    private static readonly string CrashCapsuleReportsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Northstar",
+        "GaugeInterface",
+        "crash-capsules");
     private readonly CancellationTokenSource _pollingCancellation = new();
     private readonly SemaphoreSlim _serialGate = new(1, 1);
     private readonly BoundedCommunicationEventLog _communicationEvents = new();
+    private readonly object _diagnosticsSync = new();
     private int _communicationRefreshPending;
+    private int _connectedPollMisses;
+    private int _selectedPortMissingPolls;
     private readonly Task _pollingTask;
 
     private GaugeFileTable? _fileTable;
+    private V3GaugeCatalog? _v3Catalog;
     private SensorCalibrationBundle? _calibration;
     private DeviceData? _connectedDevice;
     private CancellationTokenSource? _backgroundDownloadCancellation;
     private CancellationTokenSource? _manualDownloadCancellation;
     private CancellationTokenSource? _foregroundOperationCancellation;
+    private CancellationTokenSource? _sensorLiveCancellation;
     private Task? _foregroundOperationTask;
     private Task? _backgroundDownloadTask;
+    private Task? _sensorLiveTask;
     private GaugeFileRowViewModel? _activeDownload;
+    private readonly List<SensorLivePlotPoint> _sensorLivePoints = [];
     private AppSettings _settings;
     private SerialPortOption? _selectedPortOption;
     private string _selectedPort = string.Empty;
@@ -94,6 +163,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool _isAppSettingsVisible;
     private bool _isGaugeSettingsVisible;
     private bool _isEngineeringModeVisible;
+    private bool _isDiagnosticsVisible;
+    private bool _isSensorLiveVisible;
+    private bool _isSensorLiveRunning;
+    private string _sensorLiveStatus = "Ready";
+    private string _sensorLiveDetail = "Open Sensor Live to test the attached sensor.";
+    private string _sensorLivePressure = "-- psi";
+    private string _sensorLiveTemperature = "-- C";
+    private string _sensorLiveLastReading = "No live reading";
+    private string _sensorLiveSampleSummary = "0 readings in the last 60 seconds";
+    private IBrush _sensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#D97706"));
+    private ChartDataSet _sensorLiveChartData = ChartDataSet.Empty;
     private bool _ignoreSmallFiles = true;
     private bool _isBusy;
     private bool _isInitialising = true;
@@ -103,44 +183,122 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private FileListSortColumn _fileSortColumn = FileListSortColumn.FileNumber;
     private bool _fileSortDescending = true;
     private BootloaderApplicationImage? _firmwareImage;
-    private FirmwareAction _pendingFirmwareAction;
+    private Version? _firmwareMinimumBootloader;
     private string _firmwareImageName = "No image selected";
     private string _firmwareImageSummary = "Select an Offset production HEX file";
     private string _firmwareStatus = "Ready";
-    private string _firmwareConfirmationText = string.Empty;
     private string _firmwareLoaderDetails = "Not connected";
     private double _firmwareProgressPercent;
     private bool _isFirmwareUpdating;
-    private bool _isFirmwareConfirmationVisible;
+    private bool _isCheckingFirmware;
+    private string _firmwareCatalogUrl;
+    private string _firmwareRemoteStatus = "Connect a gauge, then check the public release catalog.";
     private bool _isFirmwareRecoveryRequired;
+    private bool _isErasePageVisible;
+    private bool _isFileInfoPageVisible;
+    private double _fileInfoProgressPercent;
+    private bool _isEraseConfirmationVisible;
+    private bool _isErasingMemory;
+    private bool _isEraseRecoveryRequired;
+    private bool _eraseCompletedSuccessfully;
+    private double _eraseProgressPercent;
+    private string _eraseProgressText = "Preparing erase";
+    private string _eraseTimingText = string.Empty;
+    private string _eraseResultText = string.Empty;
+    private ushort? _eraseInitialCompleted;
     private bool _isShuttingDown;
     private DateTime _retainedSessionUntilUtc = DateTime.MinValue;
     private uint? _retainedDeviceSerial;
     private string _retainedPort = string.Empty;
     private string? _calibrationFailure;
+    private SampleIntervalOption _selectedSampleInterval = SampleIntervalChoices[0];
+    private StorageModeOption _selectedStorageMode = StorageModeChoices[0];
+    private string _customSampleIntervalSeconds = string.Empty;
+    private string _gaugeSettingsStatus = string.Empty;
+    private GaugeStorageMode? _pendingStorageMode;
+    private bool _externalMemoryKnownEmpty;
+    private bool _isPrepareDeploymentVisible;
+    private DeploymentPreparationStep _deploymentStep = DeploymentPreparationStep.EraseChoice;
+    private DeploymentJobLengthOption _selectedDeploymentJobLength = DeploymentJobLengthChoices[1];
+    private string _deploymentConfigurationStatus = string.Empty;
+    private string _deploymentNotFitReason = string.Empty;
+    private string _deploymentStabilityText = "Waiting for live readings";
+    private string _deploymentPressureText = string.Empty;
+    private bool _deploymentPressureSourceAnswered;
+    private bool _deploymentPressureSourceConnected;
+    private bool _resumePrepareDeploymentAfterErase;
+    private int? _deploymentSensorId;
+    private string _deploymentSensorSerial = string.Empty;
+    private double _deploymentFullScalePsi = 15000;
+    private V3Capabilities? _deploymentV3Capabilities;
 
     public MainWindowViewModel()
     {
         _settings = LoadSettings();
+        _firmwareCatalogUrl = string.IsNullOrWhiteSpace(_settings.FirmwareCatalogUrl)
+            ? DefaultFirmwareCatalogUrl
+            : _settings.FirmwareCatalogUrl;
+        _ignoreSmallFiles = _settings.IgnoreSmallFiles;
         _outputDirectory = string.IsNullOrWhiteSpace(_settings.OutputDirectory)
             ? Path.Combine(Environment.CurrentDirectory, "artifacts", "desktop-downloads")
             : _settings.OutputDirectory;
         RefreshPortsCommand = new RelayCommand(RefreshPortsAsync);
-        StartCommand = new RelayCommand(StartAsync, () => !IsFirmwareUpdating && !string.IsNullOrWhiteSpace(SelectedPort));
+        StartCommand = new RelayCommand(
+            StartAsync,
+            () => !IsBusy &&
+                  !IsFirmwareUpdating &&
+                  !string.IsNullOrWhiteSpace(SelectedPort));
         ReadFilesCommand = new RelayCommand(ReadFilesAsync, () => !IsBusy && !string.IsNullOrWhiteSpace(SelectedPort));
         ShowGraphCommand = new RelayCommand(ShowGraphAsync, () => SelectedFile?.HasPlotData == true || ChartData.Count > 0);
         BackToFilesCommand = new RelayCommand(BackToFilesAsync);
         OpenSettingsCommand = new RelayCommand(OpenSettingsAsync, () => !IsFirmwareUpdating);
         OpenAppSettingsCommand = new RelayCommand(OpenAppSettingsAsync, () => !IsFirmwareUpdating);
         OpenGaugeSettingsCommand = new RelayCommand(OpenGaugeSettingsAsync);
+        OpenPrepareDeploymentCommand = new RelayCommand(
+            OpenPrepareDeploymentAsync,
+            () => CanOpenSensorLive);
+        ApplySampleIntervalCommand = new RelayCommand(
+            ApplySampleIntervalAsync,
+            CanApplySampleInterval);
+        ChangeStorageModeCommand = new RelayCommand(
+            ChangeStorageModeAsync,
+            CanChangeStorageMode);
+        OpenDiagnosticsCommand = new RelayCommand(OpenDiagnosticsAsync, () => !IsFirmwareUpdating);
         OpenEngineeringModeCommand = new RelayCommand(OpenEngineeringModeAsync);
+        OpenSensorLiveCommand = new RelayCommand(OpenSensorLiveAsync, () => CanOpenSensorLive);
+        StartSensorLiveCommand = new RelayCommand(StartSensorLiveAsync, () => IsSensorLiveVisible && !IsSensorLiveRunning && IsGaugeConnected);
+        StopSensorLiveCommand = new RelayCommand(StopSensorLiveAsync, () => IsSensorLiveVisible && IsSensorLiveRunning);
         CloseSettingsOverlayCommand = new RelayCommand(CloseSettingsOverlayAsync, () => !IsFirmwareUpdating);
         ToggleDeviceDetailsCommand = new RelayCommand(ToggleDeviceDetailsAsync);
         CancelOperationCommand = new RelayCommand(CancelOperationAsync, () => CanCancelOperation);
         BeginFirmwareProgramCommand = new RelayCommand(BeginFirmwareProgramAsync, CanBeginFirmwareProgram);
         BeginFirmwareRecoveryCommand = new RelayCommand(BeginFirmwareRecoveryAsync, CanBeginFirmwareRecovery);
-        ConfirmFirmwareActionCommand = new RelayCommand(ConfirmFirmwareActionAsync, CanConfirmFirmwareAction);
-        CancelFirmwareConfirmationCommand = new RelayCommand(CancelFirmwareConfirmationAsync, () => !IsFirmwareUpdating);
+        CheckFirmwareUpdatesCommand = new RelayCommand(CheckFirmwareUpdatesAsync, CanCheckFirmwareUpdates);
+        BeginMemoryEraseCommand = new RelayCommand(BeginMemoryEraseAsync, CanBeginMemoryErase);
+        ConfirmMemoryEraseCommand = new RelayCommand(
+            ConfirmMemoryEraseAsync,
+            () => IsEraseConfirmationVisible && !IsErasingMemory && !IsBusy && IsGaugeConnected);
+        CancelMemoryEraseCommand = new RelayCommand(
+            CancelMemoryEraseAsync,
+            () => IsErasePageVisible &&
+                  ((IsEraseConfirmationVisible && !IsEraseRecoveryRequired) || IsErasingMemory));
+        CloseMemoryEraseCommand = new RelayCommand(CloseMemoryEraseAsync, () => IsErasePageVisible && !IsEraseConfirmationVisible && !IsErasingMemory);
+        DeploymentEraseCommand = new RelayCommand(BeginDeploymentEraseAsync);
+        DeploymentSkipEraseCommand = new RelayCommand(ContinueDeploymentWithoutEraseAsync);
+        ApplyDeploymentConfigurationCommand = new RelayCommand(
+            ApplyDeploymentConfigurationAsync,
+            CanApplyDeploymentConfiguration);
+        DeploymentPressureSourceYesCommand = new RelayCommand(
+            () => AnswerDeploymentPressureSourceAsync(true));
+        DeploymentPressureSourceNoCommand = new RelayCommand(
+            () => AnswerDeploymentPressureSourceAsync(false));
+        DeploymentReadingsYesCommand = new RelayCommand(
+            ConfirmDeploymentReadingsAsync,
+            () => IsDeploymentSensorCheckVisible &&
+                  _sensorLivePoints.Count >= 3 &&
+                  !IsDeploymentPressureSourceQuestionVisible);
+        DeploymentReadingsNoCommand = new RelayCommand(RejectDeploymentReadingsAsync);
+        ExitDeploymentPreparationCommand = new RelayCommand(ExitDeploymentPreparationAsync);
         RefreshPorts();
         _isInitialising = false;
         _pollingTask = PollGaugeAsync(_pollingCancellation.Token);
@@ -182,7 +340,21 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public ICommand OpenGaugeSettingsCommand { get; }
 
+    public ICommand OpenPrepareDeploymentCommand { get; }
+
+    public ICommand ApplySampleIntervalCommand { get; }
+
+    public ICommand ChangeStorageModeCommand { get; }
+
+    public ICommand OpenDiagnosticsCommand { get; }
+
     public ICommand OpenEngineeringModeCommand { get; }
+
+    public ICommand OpenSensorLiveCommand { get; }
+
+    public ICommand StartSensorLiveCommand { get; }
+
+    public ICommand StopSensorLiveCommand { get; }
 
     public ICommand CloseSettingsOverlayCommand { get; }
 
@@ -194,9 +366,31 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public ICommand BeginFirmwareRecoveryCommand { get; }
 
-    public ICommand ConfirmFirmwareActionCommand { get; }
+    public ICommand CheckFirmwareUpdatesCommand { get; }
 
-    public ICommand CancelFirmwareConfirmationCommand { get; }
+    public ICommand BeginMemoryEraseCommand { get; }
+
+    public ICommand ConfirmMemoryEraseCommand { get; }
+
+    public ICommand CancelMemoryEraseCommand { get; }
+
+    public ICommand CloseMemoryEraseCommand { get; }
+
+    public ICommand DeploymentEraseCommand { get; }
+
+    public ICommand DeploymentSkipEraseCommand { get; }
+
+    public ICommand ApplyDeploymentConfigurationCommand { get; }
+
+    public ICommand DeploymentPressureSourceYesCommand { get; }
+
+    public ICommand DeploymentPressureSourceNoCommand { get; }
+
+    public ICommand DeploymentReadingsYesCommand { get; }
+
+    public ICommand DeploymentReadingsNoCommand { get; }
+
+    public ICommand ExitDeploymentPreparationCommand { get; }
 
     public string SelectedPort
     {
@@ -249,7 +443,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public string LastFirmwareDirectory => _settings.LastFirmwareDirectory;
 
     public IReadOnlyList<NorthstarActivitySpeed> DisconnectedAnimationSpeeds { get; } =
-        Enum.GetValues<NorthstarActivitySpeed>();
+        [NorthstarActivitySpeed.Slow, NorthstarActivitySpeed.Fast];
 
     public NorthstarActivitySpeed DisconnectedAnimationSpeed
     {
@@ -438,14 +632,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             if (SetField(ref _isGaugeConnected, value))
             {
+                OnPropertyChanged(nameof(IsConnectedHeaderVisible));
                 OnPropertyChanged(nameof(IsDisconnectedVisible));
                 OnPropertyChanged(nameof(IsFileTableVisible));
                 RaiseFirmwareCommandStates();
+                RaiseEraseCommandStates();
+                RaiseGaugeConfigurationChanged();
             }
         }
     }
 
-    public bool IsDisconnectedVisible => IsPortConfigured && !IsGaugeConnected;
+    public bool IsConnectedHeaderVisible => IsGaugeConnected && !IsErasePageVisible;
+
+    public bool IsDisconnectedVisible =>
+        IsPortConfigured && !IsGaugeConnected && !IsErasePageVisible;
 
     public bool IsGraphVisible
     {
@@ -459,7 +659,167 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    public bool IsFileTableVisible => IsPortConfigured && IsGaugeConnected && !IsGraphVisible;
+    public bool IsFileTableVisible =>
+        IsPortConfigured &&
+        IsGaugeConnected &&
+        !IsGraphVisible &&
+        !IsErasePageVisible &&
+        !IsFileInfoPageVisible;
+
+    public bool IsFileInfoPageVisible
+    {
+        get => _isFileInfoPageVisible;
+        private set
+        {
+            if (SetField(ref _isFileInfoPageVisible, value))
+            {
+                OnPropertyChanged(nameof(IsFileTableVisible));
+            }
+        }
+    }
+
+    public double FileInfoProgressPercent
+    {
+        get => _fileInfoProgressPercent;
+        private set
+        {
+            if (SetField(ref _fileInfoProgressPercent, Math.Clamp(value, 0, 100)))
+            {
+                OnPropertyChanged(nameof(FileInfoProgressText));
+            }
+        }
+    }
+
+    public string FileInfoProgressText => $"{FileInfoProgressPercent:F0}% Complete";
+
+    public bool IsErasePageVisible
+    {
+        get => _isErasePageVisible;
+        private set
+        {
+            if (SetField(ref _isErasePageVisible, value))
+            {
+                OnPropertyChanged(nameof(IsConnectedHeaderVisible));
+                OnPropertyChanged(nameof(IsDisconnectedVisible));
+                OnPropertyChanged(nameof(IsFileTableVisible));
+                OnPropertyChanged(nameof(IsEraseOperationVisible));
+                OnPropertyChanged(nameof(IsEraseFinished));
+                OnPropertyChanged(nameof(EraseTitle));
+                RaiseEraseCommandStates();
+            }
+        }
+    }
+
+    public bool IsEraseConfirmationVisible
+    {
+        get => _isEraseConfirmationVisible;
+        private set
+        {
+            if (SetField(ref _isEraseConfirmationVisible, value))
+            {
+                OnPropertyChanged(nameof(IsEraseOperationVisible));
+                OnPropertyChanged(nameof(IsEraseFinished));
+                OnPropertyChanged(nameof(EraseTitle));
+                RaiseEraseCommandStates();
+            }
+        }
+    }
+
+    public bool IsEraseOperationVisible => IsErasePageVisible && !IsEraseConfirmationVisible;
+
+    public bool IsEraseRecoveryRequired
+    {
+        get => _isEraseRecoveryRequired;
+        private set
+        {
+            if (SetField(ref _isEraseRecoveryRequired, value))
+            {
+                OnPropertyChanged(nameof(EraseWarningTitle));
+                OnPropertyChanged(nameof(EraseWarningText));
+                OnPropertyChanged(nameof(EraseConfirmationActionText));
+                OnPropertyChanged(nameof(CanDismissEraseConfirmation));
+                RaiseEraseCommandStates();
+            }
+        }
+    }
+
+    public string EraseWarningTitle =>
+        IsEraseRecoveryRequired
+            ? "Erase cycle incomplete"
+            : _pendingStorageMode.HasValue
+                ? "Storage mode change requires erase"
+            : "This operation is irreversible";
+
+    public string EraseWarningText =>
+        IsEraseRecoveryRequired
+            ? "A previous external-memory erase did not complete. This gauge is not safe to deploy until a full erase completes. Restarting will erase both 32 MiB flash devices again from the beginning."
+            : _pendingStorageMode.HasValue
+                ? $"Changing to {DescribeStorageMode((byte)_pendingStorageMode.Value)} requires empty external memory. All recorded files will be permanently erased, then the new storage mode will be written and verified."
+            : "All recorded files on both 32 MiB external flash devices will be permanently erased. The operation must not be started unless this data is no longer required.";
+
+    public string EraseConfirmationActionText =>
+        IsEraseRecoveryRequired
+            ? "Restart Erase"
+            : _pendingStorageMode.HasValue
+                ? "Erase and Change Mode"
+                : "OK, Erase Memory";
+
+    public bool CanDismissEraseConfirmation => !IsEraseRecoveryRequired;
+
+    public bool IsErasingMemory
+    {
+        get => _isErasingMemory;
+        private set
+        {
+            if (SetField(ref _isErasingMemory, value))
+            {
+                OnPropertyChanged(nameof(IsEraseFinished));
+                OnPropertyChanged(nameof(EraseTitle));
+                RaiseEraseCommandStates();
+            }
+        }
+    }
+
+    public bool IsEraseFinished =>
+        IsEraseOperationVisible && !IsErasingMemory && !string.IsNullOrWhiteSpace(EraseResultText);
+
+    public string EraseTitle =>
+        IsEraseConfirmationVisible
+            ? "Erase Memory"
+            : IsEraseFinished
+                ? "Erase Complete"
+                : "Erase Active";
+
+    public double EraseProgressPercent
+    {
+        get => _eraseProgressPercent;
+        private set => SetField(ref _eraseProgressPercent, value);
+    }
+
+    public string EraseProgressText
+    {
+        get => _eraseProgressText;
+        private set => SetField(ref _eraseProgressText, value);
+    }
+
+    public string EraseTimingText
+    {
+        get => _eraseTimingText;
+        private set => SetField(ref _eraseTimingText, value);
+    }
+
+    public string EraseResultText
+    {
+        get => _eraseResultText;
+        private set
+        {
+            if (SetField(ref _eraseResultText, value))
+            {
+                OnPropertyChanged(nameof(IsEraseFinished));
+                OnPropertyChanged(nameof(EraseTitle));
+            }
+        }
+    }
 
     public bool ShowDeviceDetails
     {
@@ -503,7 +863,452 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    public bool IsSettingsOverlayVisible => IsAppSettingsVisible || IsGaugeSettingsVisible || IsEngineeringModeVisible;
+    public bool IsDiagnosticsVisible
+    {
+        get => _isDiagnosticsVisible;
+        private set
+        {
+            if (SetField(ref _isDiagnosticsVisible, value))
+            {
+                OnPropertyChanged(nameof(IsSettingsOverlayVisible));
+            }
+        }
+    }
+
+    public bool IsSensorLiveVisible
+    {
+        get => _isSensorLiveVisible;
+        private set
+        {
+            if (SetField(ref _isSensorLiveVisible, value))
+            {
+                OnPropertyChanged(nameof(IsSettingsOverlayVisible));
+                RaiseSensorLiveCommandStates();
+            }
+        }
+    }
+
+    public bool IsSensorLiveRunning
+    {
+        get => _isSensorLiveRunning;
+        private set
+        {
+            if (SetField(ref _isSensorLiveRunning, value))
+            {
+                OnPropertyChanged(nameof(IsSensorLiveStopped));
+                RaiseSensorLiveCommandStates();
+            }
+        }
+    }
+
+    public bool IsSensorLiveStopped => !IsSensorLiveRunning;
+
+    public bool CanOpenSensorLive =>
+        IsGaugeConnected &&
+        !IsBusy &&
+        !IsFirmwareUpdating &&
+        !IsErasePageVisible &&
+        _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+
+    public string SensorLiveStatus
+    {
+        get => _sensorLiveStatus;
+        private set => SetField(ref _sensorLiveStatus, value);
+    }
+
+    public string SensorLiveDetail
+    {
+        get => _sensorLiveDetail;
+        private set => SetField(ref _sensorLiveDetail, value);
+    }
+
+    public string SensorLivePressure
+    {
+        get => _sensorLivePressure;
+        private set => SetField(ref _sensorLivePressure, value);
+    }
+
+    public string SensorLiveTemperature
+    {
+        get => _sensorLiveTemperature;
+        private set => SetField(ref _sensorLiveTemperature, value);
+    }
+
+    public string SensorLiveLastReading
+    {
+        get => _sensorLiveLastReading;
+        private set => SetField(ref _sensorLiveLastReading, value);
+    }
+
+    public string SensorLiveSampleSummary
+    {
+        get => _sensorLiveSampleSummary;
+        private set => SetField(ref _sensorLiveSampleSummary, value);
+    }
+
+    public IBrush SensorLiveStatusBrush
+    {
+        get => _sensorLiveStatusBrush;
+        private set => SetField(ref _sensorLiveStatusBrush, value);
+    }
+
+    public ChartDataSet SensorLiveChartData
+    {
+        get => _sensorLiveChartData;
+        private set => SetField(ref _sensorLiveChartData, value);
+    }
+
+    public bool IsPrepareDeploymentVisible
+    {
+        get => _isPrepareDeploymentVisible;
+        private set
+        {
+            if (SetField(ref _isPrepareDeploymentVisible, value))
+            {
+                OnPropertyChanged(nameof(IsSettingsOverlayVisible));
+                RaiseDeploymentStepVisibility();
+            }
+        }
+    }
+
+    public bool IsDeploymentEraseChoiceVisible =>
+        IsPrepareDeploymentVisible &&
+        _deploymentStep == DeploymentPreparationStep.EraseChoice;
+
+    public bool IsDeploymentConfigurationVisible =>
+        IsPrepareDeploymentVisible &&
+        _deploymentStep == DeploymentPreparationStep.Configuration;
+
+    public bool IsDeploymentSensorCheckVisible =>
+        IsPrepareDeploymentVisible &&
+        _deploymentStep == DeploymentPreparationStep.SensorCheck;
+
+    public bool IsDeploymentReadyVisible =>
+        IsPrepareDeploymentVisible &&
+        _deploymentStep == DeploymentPreparationStep.Ready;
+
+    public bool IsDeploymentNotFitVisible =>
+        IsPrepareDeploymentVisible &&
+        _deploymentStep == DeploymentPreparationStep.NotFit;
+
+    public IReadOnlyList<DeploymentJobLengthOption> DeploymentJobLengthOptions =>
+        DeploymentJobLengthChoices;
+
+    public DeploymentJobLengthOption SelectedDeploymentJobLength
+    {
+        get => _selectedDeploymentJobLength;
+        set
+        {
+            if (SetField(ref _selectedDeploymentJobLength, value))
+            {
+                RaiseDeploymentConfigurationChanged();
+            }
+        }
+    }
+
+    public bool CanSelectDeploymentStorageMode => IsExternalMemoryEmpty();
+
+    public string DeploymentStorageModeText =>
+        CanSelectDeploymentStorageMode
+            ? "Select full capacity or mirrored storage."
+            : "Storage mode cannot be changed while the gauge contains data.";
+
+    public string DeploymentMemoryLifeText
+    {
+        get
+        {
+            var estimate = GetDeploymentRecordingEstimate();
+            return estimate is null
+                ? "Memory estimate unavailable."
+                : FormatDeploymentMemoryLife(estimate.Value.Seconds);
+        }
+    }
+
+    public string DeploymentMemorySuitabilityText
+    {
+        get
+        {
+            var estimate = GetDeploymentRecordingEstimate();
+            if (estimate is null)
+            {
+                return "Memory capacity cannot be confirmed.";
+            }
+
+            var jobSeconds = SelectedDeploymentJobLength.Duration.TotalSeconds;
+            if (estimate.Value.Seconds < jobSeconds)
+            {
+                var shortfall = 100 * (1 - estimate.Value.Seconds / jobSeconds);
+                return $"{shortfall:F0}% short of the selected job length";
+            }
+
+            var safetyFactor = 100 * ((estimate.Value.Seconds / jobSeconds) - 1);
+            return $"{safetyFactor:F0}% overrun safety factor";
+        }
+    }
+
+    public IBrush DeploymentMemorySuitabilityBrush =>
+        HasSufficientDeploymentMemory ? DiagnosticNormalBrush : DiagnosticWarningBrush;
+
+    public bool HasSufficientDeploymentMemory
+    {
+        get
+        {
+            var estimate = GetDeploymentRecordingEstimate();
+            return estimate is not null &&
+                   estimate.Value.Seconds >= SelectedDeploymentJobLength.Duration.TotalSeconds;
+        }
+    }
+
+    public string DeploymentConfigurationStatus
+    {
+        get => _deploymentConfigurationStatus;
+        private set => SetField(ref _deploymentConfigurationStatus, value);
+    }
+
+    public string DeploymentStabilityText
+    {
+        get => _deploymentStabilityText;
+        private set => SetField(ref _deploymentStabilityText, value);
+    }
+
+    public string DeploymentPressureText
+    {
+        get => _deploymentPressureText;
+        private set => SetField(ref _deploymentPressureText, value);
+    }
+
+    public bool IsDeploymentPressureSourceQuestionVisible =>
+        IsDeploymentSensorCheckVisible &&
+        _sensorLivePoints.Count > 0 &&
+        IsLatestPressureOutsideAmbientBand() &&
+        !_deploymentPressureSourceAnswered;
+
+    public bool IsDeploymentReadingConfirmationVisible =>
+        IsDeploymentSensorCheckVisible &&
+        _sensorLivePoints.Count >= 3 &&
+        !IsDeploymentPressureSourceQuestionVisible;
+
+    public string DeploymentSensorType =>
+        _deploymentSensorId is int sensorId
+            ? $"{GetSensorTypeName(sensorId)} · {_deploymentFullScalePsi:N0} psi FSO"
+            : "Reading sensor identity";
+
+    public string DeploymentSensorSerial =>
+        string.IsNullOrWhiteSpace(_deploymentSensorSerial)
+            ? string.Empty
+            : $"Sensor serial {_deploymentSensorSerial}";
+
+    public string DeploymentNotFitReason
+    {
+        get => _deploymentNotFitReason;
+        private set => SetField(ref _deploymentNotFitReason, value);
+    }
+
+    public bool IsSettingsOverlayVisible =>
+        IsAppSettingsVisible ||
+        IsGaugeSettingsVisible ||
+        IsDiagnosticsVisible ||
+        IsEngineeringModeVisible ||
+        IsSensorLiveVisible ||
+        IsPrepareDeploymentVisible;
+
+    public string DiagnosticsFileSummary
+    {
+        get
+        {
+            if (Files.Count == 0)
+            {
+                return "No files are available to review.";
+            }
+
+            var errors = Files.Count(file => file.HasErrors);
+            var warnings = Files.Count(file => file.HasWarnings && !file.HasErrors);
+            return errors == 0 && warnings == 0
+                ? $"{Files.Count:N0} file{(Files.Count == 1 ? string.Empty : "s")} reviewed; no data-quality issues found."
+                : $"{Files.Count:N0} file{(Files.Count == 1 ? string.Empty : "s")} reviewed; " +
+                  $"{errors:N0} with data errors and {warnings:N0} with warnings.";
+        }
+    }
+
+    public string DiagnosticsGaugeHealth
+    {
+        get
+        {
+            var status = _v3Catalog?.DiagnosticStatus;
+            if (_v3Catalog is null)
+            {
+                return IsGaugeConnected
+                    ? "V3 diagnostics are not available from this firmware."
+                    : "Connect a gauge to review its diagnostic journal.";
+            }
+
+            if (status is null)
+            {
+                return "The V3 catalog is available, but no diagnostic status was returned.";
+            }
+
+            if (status.RequiresMemoryService ||
+                status.Flags.HasFlag(V3DiagnosticFlags.Degraded))
+            {
+                return "External memory requires review before deployment.";
+            }
+
+            return "No current memory or diagnostic fault is reported.";
+        }
+    }
+
+    public IBrush DiagnosticsGaugeHealthBrush
+    {
+        get
+        {
+            var status = _v3Catalog?.DiagnosticStatus;
+            return status?.RequiresMemoryService == true ||
+                   status?.Flags.HasFlag(V3DiagnosticFlags.Degraded) == true
+                ? DiagnosticWarningBrush
+                : _v3Catalog is null || status is null
+                    ? DiagnosticAdvisoryBrush
+                    : DiagnosticNormalBrush;
+        }
+    }
+
+    public string DiagnosticsLastEventTitle
+    {
+        get
+        {
+            var status = _v3Catalog?.DiagnosticStatus;
+            return status is null
+                ? "No event information available"
+                : V3DiagnosticEventCatalog.Describe(status.LatestEventId).Title;
+        }
+    }
+
+    public string DiagnosticsLastEventDetail
+    {
+        get
+        {
+            var status = _v3Catalog?.DiagnosticStatus;
+            if (status is null)
+            {
+                return "Connect a V3 gauge and refresh the file information to read its latest recorded event.";
+            }
+
+            return V3DiagnosticEventCatalog.Describe(status.LatestEventId).Detail;
+        }
+    }
+
+    public IBrush DiagnosticsLastEventBrush =>
+        _v3Catalog?.DiagnosticStatus is { } status
+            ? DiagnosticBrush(V3DiagnosticEventCatalog.Describe(status.LatestEventId).Level)
+            : DiagnosticAdvisoryBrush;
+
+    public string DiagnosticsCapsuleTitle =>
+        _v3Catalog?.CrashCapsuleRead?.Status switch
+        {
+            CrashCapsuleReadStatus.Available => "Protected logging fault report downloaded",
+            CrashCapsuleReadStatus.NoLongerAvailable => "Protected logging fault report no longer available",
+            CrashCapsuleReadStatus.Unsupported => "Protected logging fault download unsupported",
+            _ => _v3Catalog?.DiagnosticStatus?.Flags.HasFlag(V3DiagnosticFlags.CrashCapsuleValid) == true
+                ? "Protected logging fault report available"
+                : "No protected logging fault report"
+        };
+
+    public string DiagnosticsCapsuleDetail
+    {
+        get
+        {
+            var status = _v3Catalog?.DiagnosticStatus;
+            if (status is null)
+            {
+                return "Protected logging-fault information is not available from the connected firmware.";
+            }
+
+            if (!status.Flags.HasFlag(V3DiagnosticFlags.CrashCapsuleValid))
+            {
+                return "The gauge does not report a stored fatal-event capsule. Normal power removal is recorded as a routine logging stop, not as a crash.";
+            }
+
+            if (_v3Catalog?.CrashCapsule is { } capsule)
+            {
+                return "The gauge preserved this report after a fatal logging event. " +
+                       "Its recorded context is shown below. Downloading the report did not clear or acknowledge it.";
+            }
+
+            return _v3Catalog?.CrashCapsuleRead?.Status switch
+            {
+                CrashCapsuleReadStatus.NoLongerAvailable =>
+                    "The status indicated a report, but it was no longer available when read. Refresh to check again.",
+                CrashCapsuleReadStatus.Unsupported =>
+                    $"Firmware reports capsule generation {status.CrashCapsuleGeneration:N0}, but does not support the read-only download command.",
+                _ =>
+                    $"The gauge reports preserved capsule generation {status.CrashCapsuleGeneration:N0}, but no capsule data was downloaded."
+            };
+        }
+    }
+
+    public bool HasDownloadedCrashCapsule =>
+        _v3Catalog?.CrashCapsule is not null;
+
+    public string DiagnosticsCapsuleGeneration =>
+        _v3Catalog?.CrashCapsule is { } capsule
+            ? capsule.Generation.ToString("N0", CultureInfo.CurrentCulture)
+            : "--";
+
+    public string DiagnosticsCapsuleBootId =>
+        _v3Catalog?.CrashCapsule is { } capsule
+            ? capsule.BootId.ToString("N0", CultureInfo.CurrentCulture)
+            : "--";
+
+    public string DiagnosticsCapsuleState =>
+        _v3Catalog?.CrashCapsule is { } capsule
+            ? $"{UppercaseFirst(capsule.ApplicationStateDisplay)} (state {capsule.ApplicationState})"
+            : "--";
+
+    public string DiagnosticsCapsuleEvent =>
+        _v3Catalog?.CrashCapsule is { } capsule
+            ? $"{V3DiagnosticEventCatalog.Describe(capsule.EventId).Title} (event {capsule.EventId})"
+            : "--";
+
+    public string DiagnosticsCapsuleFault =>
+        _v3Catalog?.CrashCapsule is { } capsule
+            ? $"Fault/operation ID {capsule.FaultId}"
+            : "--";
+
+    public string DiagnosticsCapsuleFile =>
+        _v3Catalog?.CrashCapsule is { } capsule
+            ? $"0x{capsule.FileId:X8}"
+            : "--";
+
+    public string DiagnosticsCapsuleCommittedSamples =>
+        _v3Catalog?.CrashCapsule is { } capsule
+            ? capsule.CommittedSampleCount.ToString("N0", CultureInfo.CurrentCulture)
+            : "--";
+
+    public string DiagnosticsCapsuleRawRcon =>
+        _v3Catalog?.CrashCapsule is { } capsule
+            ? $"0x{capsule.RawRcon:X2}"
+            : "--";
+
+    public IBrush DiagnosticsCapsuleBrush =>
+        _v3Catalog?.CrashCapsule is not null ||
+        _v3Catalog?.DiagnosticStatus?.Flags.HasFlag(V3DiagnosticFlags.CrashCapsuleValid) == true
+            ? DiagnosticAdvisoryBrush
+            : DiagnosticNormalBrush;
+
+    public string DiagnosticsTechnicalDetail
+    {
+        get
+        {
+            var status = _v3Catalog?.DiagnosticStatus;
+            if (status is null)
+            {
+                return "Diagnostic status unavailable";
+            }
+
+            return $"Journal pages {status.CommittedPageCount:N0} | pending RAM events {status.PendingRamEventCount:N0} | " +
+                   $"failed chips 0x{status.FailedChipMask:X2} | degraded replicas 0x{status.DegradedReplicaMask:X2} | " +
+                   $"flags 0x{(byte)status.Flags:X2}";
+        }
+    }
 
     public bool HasSetupMessage => !IsPortConfigured && Ports.Count == 0;
 
@@ -517,7 +1322,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string GaugeFirmware => _connectedDevice is null
         ? "--"
-        : $"{_connectedDevice.FirmwareMajor}.{_connectedDevice.FirmwareMinor}";
+        : _connectedDevice.FirmwareVersion;
 
     public string GaugePcb => _connectedDevice is null
         ? "--"
@@ -525,23 +1330,88 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string GaugeMeasurementInterval => _connectedDevice is null
         ? "--"
-        : $"{_connectedDevice.MeasurementInterval} sec";
+        : FormatSampleInterval(_connectedDevice.MeasurementInterval);
 
-    public string GaugeMemoryMode => _connectedDevice?.MemoryMode.ToString() ?? "--";
+    public string GaugeMemoryMode => _connectedDevice is null
+        ? "--"
+        : DescribeStorageMode(_connectedDevice.MemoryMode);
 
     public string GaugeEraseStatus => _connectedDevice?.EraseStatus?.ToString() ?? "--";
+
+    public IReadOnlyList<SampleIntervalOption> SampleIntervalOptions => SampleIntervalChoices;
+
+    public SampleIntervalOption SelectedSampleInterval
+    {
+        get => _selectedSampleInterval;
+        set
+        {
+            if (SetField(ref _selectedSampleInterval, value))
+            {
+                OnPropertyChanged(nameof(IsCustomSampleInterval));
+                RaiseGaugeConfigurationChanged();
+            }
+        }
+    }
+
+    public bool IsCustomSampleInterval => SelectedSampleInterval.Seconds is null;
+
+    public string CustomSampleIntervalSeconds
+    {
+        get => _customSampleIntervalSeconds;
+        set
+        {
+            if (SetField(ref _customSampleIntervalSeconds, value))
+            {
+                RaiseGaugeConfigurationChanged();
+            }
+        }
+    }
+
+    public IReadOnlyList<StorageModeOption> StorageModeOptions => StorageModeChoices;
+
+    public StorageModeOption SelectedStorageMode
+    {
+        get => _selectedStorageMode;
+        set
+        {
+            if (SetField(ref _selectedStorageMode, value))
+            {
+                RaiseGaugeConfigurationChanged();
+            }
+        }
+    }
+
+    public string RecordingTimeEstimate => BuildRecordingTimeEstimate();
+
+    public string StorageModeCompatibilityText =>
+        _v3Catalog is not null
+            ? "Changing V3 storage mode requires empty memory. Recorded files will be erased before the new mode is applied."
+            : "Changing storage mode requires empty memory. Recorded files will be erased before the new mode is applied.";
+
+    public string GaugeSettingsStatus
+    {
+        get => _gaugeSettingsStatus;
+        private set => SetField(ref _gaugeSettingsStatus, value);
+    }
 
     public string EngineeringTransport => string.IsNullOrWhiteSpace(SelectedPort)
         ? "No serial port selected"
         : $"{SelectedPort} | wake {WakeBaud:N0} baud | data {FastBaud:N0} baud";
 
-    public string EngineeringFileTable => _fileTable is null
-        ? "Not loaded"
-        : $"{_fileTable.Records.Count:N0} file record(s) | EOF 0x{_fileTable.EndOfFile.Value:X8}";
+    public string EngineeringFileTable => _v3Catalog is not null
+        ? $"V3.{_v3Catalog.Capabilities.StorageMinor} catalog loaded | " +
+          $"{_v3Catalog.Files.Count:N0} committed file{(_v3Catalog.Files.Count == 1 ? string.Empty : "s")}"
+        : _fileTable is not null
+            ? $"{_fileTable.Records.Count:N0} V2 file record(s) | EOF 0x{_fileTable.EndOfFile.Value:X8}"
+            : "Not loaded";
 
-    public string EngineeringCalibration => _calibration is not null
-        ? "Captured"
-        : string.IsNullOrWhiteSpace(_calibrationFailure) ? "Not captured" : _calibrationFailure;
+    public string EngineeringCalibration => _v3Catalog is not null
+        ? _v3Catalog.Files.Count == 0
+            ? "File-local calibration will be read from each V3 file"
+            : $"{_v3Catalog.Files.Count:N0} file-local calibration{(_v3Catalog.Files.Count == 1 ? string.Empty : "s")} validated"
+        : _calibration is not null
+            ? "Connected sensor calibration captured"
+            : string.IsNullOrWhiteSpace(_calibrationFailure) ? "Not captured" : _calibrationFailure;
 
     public string EngineeringDeviceDetails => string.IsNullOrWhiteSpace(DeviceDetails)
         ? "No gauge identity available"
@@ -635,6 +1505,67 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         private set => SetField(ref _firmwareImageName, value);
     }
 
+    public string ApplicationVersion
+    {
+        get
+        {
+            var assembly = typeof(MainWindowViewModel).Assembly;
+            var version = assembly.GetName().Version;
+            if (version is null)
+            {
+                return "unknown";
+            }
+
+            var semanticVersion = $"{version.Major}.{version.Minor}.{version.Build}";
+            var informationalVersion = assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion;
+            var separator = informationalVersion?.IndexOf('+') ?? -1;
+            if (separator < 0 || informationalVersion is null || separator == informationalVersion.Length - 1)
+            {
+                return semanticVersion;
+            }
+
+            var revision = informationalVersion[(separator + 1)..];
+            return $"{semanticVersion} ({revision[..Math.Min(12, revision.Length)]})";
+        }
+    }
+
+    public string FirmwareCatalogUrl
+    {
+        get => _firmwareCatalogUrl;
+        set
+        {
+            if (!SetField(ref _firmwareCatalogUrl, value))
+            {
+                return;
+            }
+
+            _settings = _settings with { FirmwareCatalogUrl = value };
+            SaveSettings();
+            RaiseFirmwareCommandStates();
+        }
+    }
+
+    public string FirmwareRemoteStatus
+    {
+        get => _firmwareRemoteStatus;
+        private set => SetField(ref _firmwareRemoteStatus, value);
+    }
+
+    public bool IsCheckingFirmware
+    {
+        get => _isCheckingFirmware;
+        private set
+        {
+            if (SetField(ref _isCheckingFirmware, value))
+            {
+                OnPropertyChanged(nameof(CanChooseFirmware));
+                RaiseFirmwareCommandStates();
+            }
+        }
+    }
+
     public string FirmwareImageSummary
     {
         get => _firmwareImageSummary;
@@ -649,6 +1580,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             if (SetField(ref _firmwareStatus, value))
             {
                 OnPropertyChanged(nameof(FirmwareStatusBrush));
+                OnPropertyChanged(nameof(IsFirmwareComplete));
+                OnPropertyChanged(nameof(IsFirmwareNormalActionVisible));
+                OnPropertyChanged(nameof(IsFirmwareRecoveryActionVisible));
             }
         }
     }
@@ -662,17 +1596,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public double FirmwareProgressPercent
     {
         get => _firmwareProgressPercent;
-        private set => SetField(ref _firmwareProgressPercent, value);
-    }
-
-    public string FirmwareConfirmationText
-    {
-        get => _firmwareConfirmationText;
-        set
+        private set
         {
-            if (SetField(ref _firmwareConfirmationText, value))
+            if (SetField(ref _firmwareProgressPercent, value))
             {
-                RaiseFirmwareCommandStates();
+                OnPropertyChanged(nameof(IsFirmwareProgressVisible));
             }
         }
     }
@@ -686,15 +1614,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 OnPropertyChanged(nameof(CanChooseFirmware));
                 OnPropertyChanged(nameof(CanCancelOperation));
+                OnPropertyChanged(nameof(IsFirmwareProgressVisible));
+                OnPropertyChanged(nameof(IsFirmwareComplete));
+                OnPropertyChanged(nameof(IsFirmwareNormalActionVisible));
+                OnPropertyChanged(nameof(IsFirmwareRecoveryActionVisible));
                 RaiseCommandStates();
             }
         }
-    }
-
-    public bool IsFirmwareConfirmationVisible
-    {
-        get => _isFirmwareConfirmationVisible;
-        private set => SetField(ref _isFirmwareConfirmationVisible, value);
     }
 
     public bool IsFirmwareRecoveryRequired
@@ -713,19 +1639,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public bool IsFirmwareImageSelected => _firmwareImage is not null;
 
-    public bool CanChooseFirmware => !IsFirmwareUpdating;
+    public bool IsFirmwareProgressVisible =>
+        IsFirmwareUpdating || FirmwareProgressPercent > 0;
 
-    public bool IsFirmwareNormalActionVisible => !IsFirmwareRecoveryRequired;
+    public bool IsFirmwareComplete =>
+        !IsFirmwareUpdating &&
+        FirmwareStatus.StartsWith("Complete", StringComparison.OrdinalIgnoreCase);
 
-    public bool IsFirmwareRecoveryActionVisible => IsFirmwareRecoveryRequired;
+    public bool CanChooseFirmware => !IsFirmwareUpdating && !IsCheckingFirmware;
 
-    public string FirmwareConfirmationPrompt => _pendingFirmwareAction == FirmwareAction.Recover
-        ? "Type RECOVER to rewrite the application while the gauge remains in bootloader mode."
-        : $"Type device serial {GaugeDeviceSerial} to confirm this firmware update.";
+    public bool IsFirmwareNormalActionVisible =>
+        IsFirmwareImageSelected &&
+        !IsFirmwareRecoveryRequired &&
+        !IsFirmwareComplete;
 
-    public string FirmwareConfirmationAction => _pendingFirmwareAction == FirmwareAction.Recover
-        ? "Recover Firmware"
-        : "Program Firmware";
+    public bool IsFirmwareRecoveryActionVisible =>
+        IsFirmwareImageSelected &&
+        IsFirmwareRecoveryRequired &&
+        !IsFirmwareComplete;
 
     public IBrush FirmwareStatusBrush => IsFirmwareRecoveryRequired
         ? new SolidColorBrush(Color.Parse("#D97706"))
@@ -741,7 +1672,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         get => _ignoreSmallFiles;
         set
         {
-            if (SetField(ref _ignoreSmallFiles, value) && _fileTable is not null)
+            if (!SetField(ref _ignoreSmallFiles, value))
+            {
+                return;
+            }
+
+            _settings = _settings with { IgnoreSmallFiles = value };
+            SaveSettings();
+            if (_fileTable is not null)
             {
                 CancelBackgroundDownloads();
                 PopulateFiles(_fileTable);
@@ -759,6 +1697,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 OnPropertyChanged(nameof(CanCancelOperation));
                 RaiseCommandStates();
+                RaiseGaugeConfigurationChanged();
             }
         }
     }
@@ -812,6 +1751,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _autoDownloadsPaused = true;
         _foregroundOperationCancellation?.Cancel();
         _manualDownloadCancellation?.Cancel();
+        _sensorLiveCancellation?.Cancel();
         CancelBackgroundDownloads();
         Status = "Cancelling current operation";
         return Task.CompletedTask;
@@ -834,31 +1774,1563 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private Task OpenGaugeSettingsAsync()
     {
         IsAppSettingsVisible = false;
+        IsDiagnosticsVisible = false;
         IsEngineeringModeVisible = false;
+        IsSensorLiveVisible = false;
+        IsPrepareDeploymentVisible = false;
+        RefreshGaugeSettingSelections();
+        GaugeSettingsStatus = string.Empty;
         IsGaugeSettingsVisible = true;
         RaiseDeviceInformationChanged();
         return Task.CompletedTask;
+    }
+
+    private async Task OpenPrepareDeploymentAsync()
+    {
+        if (!CanOpenSensorLive)
+        {
+            return;
+        }
+
+        CancelBackgroundDownloads();
+        await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
+        _autoDownloadsPaused = true;
+        CloseSettingsOverlay();
+        RefreshGaugeSettingSelections();
+        _deploymentV3Capabilities = _v3Catalog?.Capabilities;
+        _resumePrepareDeploymentAfterErase = false;
+        _deploymentPressureSourceAnswered = false;
+        _deploymentPressureSourceConnected = false;
+        _deploymentSensorId = null;
+        _deploymentSensorSerial = string.Empty;
+        _deploymentFullScalePsi = 15000;
+        DeploymentConfigurationStatus = string.Empty;
+        DeploymentNotFitReason = string.Empty;
+        DeploymentStabilityText = "Waiting for live readings";
+        DeploymentPressureText = string.Empty;
+        SetDeploymentStep(DeploymentPreparationStep.EraseChoice);
+        IsPrepareDeploymentVisible = true;
+        RaiseDeploymentConfigurationChanged();
+    }
+
+    private Task ContinueDeploymentWithoutEraseAsync()
+    {
+        SetDeploymentStep(DeploymentPreparationStep.Configuration);
+        RaiseDeploymentConfigurationChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task BeginDeploymentEraseAsync()
+    {
+        _resumePrepareDeploymentAfterErase = true;
+        IsPrepareDeploymentVisible = false;
+        IsGraphVisible = false;
+        _pendingStorageMode = null;
+        PrepareErasePage(recoveryRequired: false);
+        Status = "Preparing gauge memory erase for deployment";
+        return Task.CompletedTask;
+    }
+
+    private bool CanApplyDeploymentConfiguration()
+    {
+        return IsDeploymentConfigurationVisible &&
+               IsGaugeConfigurationAvailable() &&
+               TryGetSelectedSampleInterval(out _) &&
+               HasSufficientDeploymentMemory &&
+               (CanSelectDeploymentStorageMode ||
+                (byte)SelectedStorageMode.Mode == _connectedDevice!.MemoryMode);
+    }
+
+    private async Task ApplyDeploymentConfigurationAsync()
+    {
+        if (!CanApplyDeploymentConfiguration() ||
+            !TryGetSelectedSampleInterval(out var intervalSeconds) ||
+            _connectedDevice is null)
+        {
+            return;
+        }
+
+        var expectedSerial = _connectedDevice.DeviceSerial;
+        var requestedMode = SelectedStorageMode.Mode;
+        var startSensorCheck = false;
+        DeploymentConfigurationStatus = "Applying gauge settings";
+        IsBusy = true;
+        await _serialGate.WaitAsync(_pollingCancellation.Token).ConfigureAwait(true);
+        try
+        {
+            await using var connection = await OpenVerifiedConnectionAsync(
+                preferFast: true,
+                cancellationToken: _pollingCancellation.Token).ConfigureAwait(true);
+            var service = new GaugeConfigurationService(
+                new GaugeSession(connection.Transport));
+            var device = DecodeDevice(connection.Identity.Payload)
+                ?? throw new InvalidDataException("Gauge identity could not be decoded.");
+            if (device.DeviceSerial != expectedSerial)
+            {
+                throw new InvalidOperationException(
+                    "The connected gauge changed during deployment preparation.");
+            }
+
+            if (device.MeasurementInterval != intervalSeconds)
+            {
+                device = await service
+                    .SetMeasurementIntervalAsync(
+                        intervalSeconds,
+                        expectedSerial,
+                        _pollingCancellation.Token)
+                    .ConfigureAwait(true);
+            }
+
+            if (device.MemoryMode != (byte)requestedMode)
+            {
+                if (!IsExternalMemoryEmpty())
+                {
+                    throw new InvalidOperationException(
+                        "Storage mode cannot be changed while the gauge contains data.");
+                }
+
+                device = await service
+                    .SetStorageModeAsync(
+                        requestedMode,
+                        expectedSerial,
+                        _pollingCancellation.Token)
+                    .ConfigureAwait(true);
+            }
+
+            UpdateConfiguredDevice(device);
+            DeploymentConfigurationStatus = "Settings applied";
+            _deploymentPressureSourceAnswered = false;
+            _deploymentPressureSourceConnected = false;
+            _deploymentSensorId = null;
+            _deploymentSensorSerial = string.Empty;
+            ResetSensorLiveDisplay();
+            SetDeploymentStep(DeploymentPreparationStep.SensorCheck);
+            startSensorCheck = true;
+        }
+        catch (Exception ex) when (IsExpectedUiFailure(ex))
+        {
+            DeploymentConfigurationStatus = $"Settings could not be applied: {ex.Message}";
+        }
+        finally
+        {
+            _serialGate.Release();
+            IsBusy = false;
+            RaiseDeploymentConfigurationChanged();
+        }
+
+        if (startSensorCheck)
+        {
+            await StartSensorLiveAsync().ConfigureAwait(true);
+        }
+    }
+
+    private void RefreshGaugeSettingSelections()
+    {
+        if (_connectedDevice is null)
+        {
+            return;
+        }
+
+        var interval = SampleIntervalChoices.FirstOrDefault(
+            option => option.Seconds == _connectedDevice.MeasurementInterval);
+        if (interval is null)
+        {
+            interval = SampleIntervalChoices[^1];
+            CustomSampleIntervalSeconds =
+                _connectedDevice.MeasurementInterval.ToString(CultureInfo.InvariantCulture);
+        }
+
+        SelectedSampleInterval = interval;
+        SelectedStorageMode = StorageModeChoices.FirstOrDefault(
+                option => (byte)option.Mode == _connectedDevice.MemoryMode)
+            ?? StorageModeChoices[0];
+        RaiseGaugeConfigurationChanged();
+    }
+
+    private bool CanApplySampleInterval()
+    {
+        return IsGaugeConfigurationAvailable() &&
+            TryGetSelectedSampleInterval(out var seconds) &&
+            seconds != _connectedDevice!.MeasurementInterval;
+    }
+
+    private async Task ApplySampleIntervalAsync()
+    {
+        if (!CanApplySampleInterval() ||
+            !TryGetSelectedSampleInterval(out var seconds))
+        {
+            return;
+        }
+
+        var device = await ApplyGaugeConfigurationAsync(
+            (service, serial, token) =>
+                service.SetMeasurementIntervalAsync(seconds, serial, token),
+            "changing the sample interval").ConfigureAwait(true);
+        if (device is null)
+        {
+            return;
+        }
+
+        UpdateConfiguredDevice(device);
+        GaugeSettingsStatus =
+            $"Sample interval changed to {FormatSampleInterval(seconds)}. It will be used for the next recording.";
+        Status = $"Gauge sample interval set to {seconds} second(s)";
+        RefreshGaugeSettingSelections();
+    }
+
+    private bool CanChangeStorageMode()
+    {
+        return IsGaugeConfigurationAvailable() &&
+            (byte)SelectedStorageMode.Mode != _connectedDevice!.MemoryMode;
+    }
+
+    private async Task ChangeStorageModeAsync()
+    {
+        if (!CanChangeStorageMode())
+        {
+            return;
+        }
+
+        var requestedMode = SelectedStorageMode.Mode;
+        CancelBackgroundDownloads();
+        await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
+        _autoDownloadsPaused = true;
+        _pendingStorageMode = requestedMode;
+        OnPropertyChanged(nameof(EraseWarningTitle));
+        OnPropertyChanged(nameof(EraseWarningText));
+        OnPropertyChanged(nameof(EraseConfirmationActionText));
+        CloseSettingsOverlay();
+        IsGraphVisible = false;
+        PrepareErasePage(recoveryRequired: false);
+        Status =
+            $"External memory must be erased before changing to {DescribeStorageMode((byte)requestedMode)}";
+    }
+
+    private async Task<DeviceData?> ApplyGaugeConfigurationAsync(
+        Func<GaugeConfigurationService, uint, CancellationToken, Task<DeviceData>> apply,
+        string operation)
+    {
+        var expectedSerial = _connectedDevice?.DeviceSerial;
+        if (!expectedSerial.HasValue)
+        {
+            return null;
+        }
+
+        CancelBackgroundDownloads();
+        await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
+        _autoDownloadsPaused = true;
+        IsBusy = true;
+        await _serialGate.WaitAsync(_pollingCancellation.Token).ConfigureAwait(true);
+        try
+        {
+            await using var connection = await OpenVerifiedConnectionAsync(
+                preferFast: true,
+                cancellationToken: _pollingCancellation.Token).ConfigureAwait(true);
+            return await apply(
+                new GaugeConfigurationService(new GaugeSession(connection.Transport)),
+                expectedSerial.Value,
+                _pollingCancellation.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (_pollingCancellation.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (Exception ex) when (IsGaugeConfigurationConnectionFailure(ex))
+        {
+            TransitionToDisconnected(
+                $"Gauge stopped responding while {operation}: {ex.Message}");
+            return null;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException)
+        {
+            GaugeSettingsStatus = $"Could not apply setting: {ex.Message}";
+            Status = GaugeSettingsStatus;
+            return null;
+        }
+        finally
+        {
+            _serialGate.Release();
+            IsBusy = false;
+            RaiseGaugeConfigurationChanged();
+        }
+    }
+
+    private bool IsGaugeConfigurationAvailable() =>
+        !IsBusy &&
+        !IsFirmwareUpdating &&
+        !IsErasePageVisible &&
+        IsGaugeConnected &&
+        _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+
+    private static bool IsGaugeConfigurationConnectionFailure(Exception exception) =>
+        exception is TimeoutException
+            or IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or GaugeProtocolException;
+
+    private bool TryGetSelectedSampleInterval(out ushort seconds)
+    {
+        if (SelectedSampleInterval.Seconds is ushort preset)
+        {
+            seconds = preset;
+            return true;
+        }
+
+        return ushort.TryParse(
+                CustomSampleIntervalSeconds,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out seconds) &&
+            seconds > 0;
+    }
+
+    private bool IsExternalMemoryEmpty()
+    {
+        if (_externalMemoryKnownEmpty)
+        {
+            return true;
+        }
+
+        if (_v3Catalog is not null)
+        {
+            return _v3Catalog.Recovery.Records.Count == 0 &&
+                _v3Catalog.RejectedRecords.Count == 0;
+        }
+
+        return _fileTable is { Records.Count: 0 } table &&
+            table.EndOfFile.Value <= 0x00004000U;
+    }
+
+    private string BuildRecordingTimeEstimate()
+    {
+        if (!TryGetSelectedSampleInterval(out var seconds))
+        {
+            return "Enter a whole-number interval from 1 to 65,535 seconds.";
+        }
+
+        var estimate = EstimateRemainingRecording(seconds, SelectedStorageMode.Mode);
+        if (estimate is null)
+        {
+            return "Recording estimate unavailable until the file catalog has loaded.";
+        }
+
+        return $"Estimated recording time: {FormatEstimatedRecordingTime(estimate.Value.Seconds)} " +
+            $"from {FormatBytes(checked((int)estimate.Value.RemainingBytes))} remaining.";
+    }
+
+    private (double Seconds, uint RemainingBytes)? EstimateRemainingRecording(
+        ushort intervalSeconds,
+        GaugeStorageMode selectedMode)
+    {
+        if (_v3Catalog is not null)
+        {
+            var capabilities = _v3Catalog.Capabilities;
+            var nextFileStart = capabilities.DataStart;
+            var v3ModeWillChange =
+                _connectedDevice is not null &&
+                (byte)selectedMode != _connectedDevice.MemoryMode;
+            if (!v3ModeWillChange && _v3Catalog.Files.LastOrDefault() is { } latest)
+            {
+                var occupiedEnd = Math.Max(latest.DataStart, latest.DataEnd);
+                nextFileStart = AlignUp(occupiedEnd, capabilities.SectorBytes);
+            }
+
+            var storageEnd = selectedMode == GaugeStorageMode.Mirror
+                ? V3Capabilities.MirrorStorageEnd
+                : V3Capabilities.FullStorageEnd;
+            var nextDataStart = checked(nextFileStart + capabilities.SectorBytes);
+            var remaining = nextDataStart >= storageEnd
+                ? 0U
+                : storageEnd - nextDataStart;
+            var sampleCount =
+                (remaining / V3PageCodec.PhysicalBytes) * V3PageCodec.MaximumSamples;
+            return ((double)sampleCount * intervalSeconds, remaining);
+        }
+
+        if (_fileTable is null || _connectedDevice is null)
+        {
+            if (!_externalMemoryKnownEmpty || _connectedDevice is null)
+            {
+                return null;
+            }
+
+            if (_deploymentV3Capabilities is { } emptyCapabilities)
+            {
+                var storageEnd = selectedMode == GaugeStorageMode.Mirror
+                    ? V3Capabilities.MirrorStorageEnd
+                    : V3Capabilities.FullStorageEnd;
+                var nextDataStart = checked(
+                    emptyCapabilities.DataStart + emptyCapabilities.SectorBytes);
+                var remaining = nextDataStart >= storageEnd
+                    ? 0U
+                    : storageEnd - nextDataStart;
+                var samples =
+                    (remaining / V3PageCodec.PhysicalBytes) *
+                    V3PageCodec.MaximumSamples;
+                return ((double)samples * intervalSeconds, remaining);
+            }
+        }
+
+        var capacity = selectedMode == GaugeStorageMode.Mirror
+            ? 0x02000000U
+            : 0x04000000U;
+        var modeWillChange = (byte)selectedMode != _connectedDevice.MemoryMode;
+        var usedEnd = modeWillChange ||
+                      _externalMemoryKnownEmpty ||
+                      _fileTable?.Records.Count == 0
+            ? 0x00004000U
+            : checked(_fileTable!.EndOfFile.Value + (uint)MemoryGaugeFileRecord.Length);
+        var remainingBytes = usedEnd >= capacity ? 0U : capacity - usedEnd;
+        var sampleCountV2 = remainingBytes / 8U;
+        return ((double)sampleCountV2 * intervalSeconds, remainingBytes);
+    }
+
+    private (double Seconds, uint RemainingBytes)? GetDeploymentRecordingEstimate()
+    {
+        return TryGetSelectedSampleInterval(out var intervalSeconds)
+            ? EstimateRemainingRecording(intervalSeconds, SelectedStorageMode.Mode)
+            : null;
+    }
+
+    private static uint AlignUp(uint value, ushort alignment)
+    {
+        var remainder = value % alignment;
+        return remainder == 0
+            ? value
+            : checked(value + alignment - remainder);
+    }
+
+    private static string FormatEstimatedRecordingTime(double totalSeconds)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        if (duration.TotalDays >= 365.25)
+        {
+            return $"approximately {duration.TotalDays / 365.25:F1} years";
+        }
+
+        if (duration.TotalDays >= 1)
+        {
+            return $"approximately {duration.TotalDays:F1} days";
+        }
+
+        if (duration.TotalHours >= 1)
+        {
+            return $"approximately {duration.TotalHours:F1} hours";
+        }
+
+        if (duration.TotalMinutes >= 1)
+        {
+            return $"approximately {duration.TotalMinutes:F1} minutes";
+        }
+
+        return $"approximately {duration.TotalSeconds:F0} seconds";
+    }
+
+    private static string FormatDeploymentMemoryLife(double totalSeconds)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        if (duration.TotalDays >= 365.25)
+        {
+            return $"{duration.TotalDays / 365.25:F1} years";
+        }
+
+        if (duration.TotalDays >= 1)
+        {
+            return $"{duration.TotalDays:F1} days";
+        }
+
+        if (duration.TotalHours >= 1)
+        {
+            return $"{duration.TotalHours:F1} hours";
+        }
+
+        return $"{duration.TotalMinutes:F0} minutes";
+    }
+
+    private static string FormatSampleInterval(ushort seconds)
+    {
+        if (seconds % 3600 == 0)
+        {
+            var hours = seconds / 3600;
+            return $"{hours} hour{(hours == 1 ? string.Empty : "s")}";
+        }
+
+        if (seconds % 60 == 0)
+        {
+            var minutes = seconds / 60;
+            return $"{minutes} minute{(minutes == 1 ? string.Empty : "s")}";
+        }
+
+        return $"{seconds} second{(seconds == 1 ? string.Empty : "s")}";
+    }
+
+    private static string DescribeStorageMode(byte mode) => mode switch
+    {
+        (byte)GaugeStorageMode.Full => "Full capacity",
+        (byte)GaugeStorageMode.Mirror => "Mirrored",
+        _ => $"Unknown ({mode})"
+    };
+
+    private void UpdateConfiguredDevice(DeviceData device)
+    {
+        _connectedDevice = device;
+        DeviceSummary = DescribeGauge(device);
+        DeviceDetails = BuildDeviceDetails(device, []);
+        _connectedPollMisses = 0;
+        _nextConnectedPollUtc = DateTime.UtcNow + ConnectedPollInterval;
+        RaiseDeviceInformationChanged();
+    }
+
+    private void RaiseGaugeConfigurationChanged()
+    {
+        OnPropertyChanged(nameof(RecordingTimeEstimate));
+        OnPropertyChanged(nameof(StorageModeCompatibilityText));
+        if (ApplySampleIntervalCommand is RelayCommand applyInterval)
+        {
+            applyInterval.RaiseCanExecuteChanged();
+        }
+
+        if (ChangeStorageModeCommand is RelayCommand changeMode)
+        {
+            changeMode.RaiseCanExecuteChanged();
+        }
+
+        RaiseDeploymentConfigurationChanged();
+    }
+
+    private void RaiseDeploymentConfigurationChanged()
+    {
+        OnPropertyChanged(nameof(CanSelectDeploymentStorageMode));
+        OnPropertyChanged(nameof(DeploymentStorageModeText));
+        OnPropertyChanged(nameof(DeploymentMemoryLifeText));
+        OnPropertyChanged(nameof(DeploymentMemorySuitabilityText));
+        OnPropertyChanged(nameof(DeploymentMemorySuitabilityBrush));
+        OnPropertyChanged(nameof(HasSufficientDeploymentMemory));
+        if (ApplyDeploymentConfigurationCommand is RelayCommand apply)
+        {
+            apply.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task OpenSensorLiveAsync()
+    {
+        if (!CanOpenSensorLive)
+        {
+            return;
+        }
+
+        CancelBackgroundDownloads();
+        await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
+        _autoDownloadsPaused = true;
+        IsAppSettingsVisible = false;
+        IsGaugeSettingsVisible = false;
+        IsDiagnosticsVisible = false;
+        IsEngineeringModeVisible = false;
+        IsSensorLiveVisible = true;
+        ResetSensorLiveDisplay();
+        await StartSensorLiveAsync().ConfigureAwait(true);
+    }
+
+    private Task StartSensorLiveAsync()
+    {
+        if ((!IsSensorLiveVisible && !IsDeploymentSensorCheckVisible) ||
+            !IsGaugeConnected ||
+            IsSensorLiveRunning ||
+            _sensorLiveTask is { IsCompleted: false })
+        {
+            return Task.CompletedTask;
+        }
+
+        _sensorLiveCancellation?.Dispose();
+        _sensorLiveCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _pollingCancellation.Token);
+        IsSensorLiveRunning = true;
+        SensorLiveStatus = "Starting sensor";
+        SensorLiveDetail = "Checking firmware support and reading sensor calibration.";
+        SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#D97706"));
+        _sensorLiveTask = RunSensorLiveAsync(_sensorLiveCancellation.Token);
+        return Task.CompletedTask;
+    }
+
+    private async Task StopSensorLiveAsync()
+    {
+        var task = _sensorLiveTask;
+        _sensorLiveCancellation?.Cancel();
+        if (task is not null)
+        {
+            try
+            {
+                await task.ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        _sensorLiveCancellation?.Dispose();
+        _sensorLiveCancellation = null;
+        _sensorLiveTask = null;
+        IsSensorLiveRunning = false;
+        if ((IsSensorLiveVisible || IsDeploymentSensorCheckVisible) &&
+            SensorLiveStatus is not ("Firmware update required" or "Sensor error"))
+        {
+            SensorLiveStatus = "Sensor stopped";
+            SensorLiveDetail = "Select Start Sensor to run the live test again.";
+            SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#66737A"));
+        }
+    }
+
+    private async Task RunSensorLiveAsync(CancellationToken cancellationToken)
+    {
+        var expectedSerial = _connectedDevice?.DeviceSerial
+            ?? throw new InvalidOperationException("No connected gauge identity is available.");
+        var gateHeld = false;
+        var disconnected = false;
+        IsBusy = true;
+        try
+        {
+            await _serialGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+            gateHeld = true;
+            await using var connection = await OpenVerifiedConnectionAsync(
+                preferFast: true,
+                cancellationToken: cancellationToken,
+                transactionTimeoutMs: SensorTransactionTimeoutMs,
+                transactionDeadlineMs: SensorTransactionDeadlineMs,
+                wakeScanTimeoutMs: EraseRestartWakeScanTimeoutMs).ConfigureAwait(true);
+            var device = ValidateEraseGauge(
+                connection.Identity,
+                expectedSerial,
+                requireActiveInterlock: false);
+            if (RequiresIncompleteEraseRecovery(device))
+            {
+                throw new InvalidOperationException(
+                    "Sensor Live cannot run while the memory erase interlock is active.");
+            }
+
+            var service = new SensorLiveService(new GaugeSession(connection.Transport));
+            var status = await service.ProbeAsync(cancellationToken).ConfigureAwait(true);
+            if (status is null)
+            {
+                SensorLiveStatus = "Firmware update required";
+                SensorLiveDetail =
+                    "This gauge firmware does not implement Sensor Live commands 66-69.";
+                SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#D97706"));
+                return;
+            }
+            if (!status.Flags.HasFlag(SensorLiveStatusFlags.CalibrationAvailable))
+            {
+                throw new SensorCommunicationException(
+                    SensorCommunicationFailure.InvalidResponse,
+                    "Gauge reports that sensor calibration is unavailable.");
+            }
+
+            SensorLiveDetail = "Reading calibration directly from the attached sensor.";
+            var calibration = await service.ReadCalibrationAsync(cancellationToken).ConfigureAwait(true);
+            var calibrationHeader = SensorCalibrationHeader.Parse(calibration.SensorHeader);
+            _deploymentSensorId = calibrationHeader.SensorId;
+            _deploymentSensorSerial = GetSensorSerial(calibration.SensorSerial);
+            _deploymentFullScalePsi = GetSensorFullScalePsi(_deploymentSensorId);
+            OnPropertyChanged(nameof(DeploymentSensorType));
+            OnPropertyChanged(nameof(DeploymentSensorSerial));
+            var decoder = new SensorLiveDecoder(calibration);
+            status = await service.StartAsync(
+                intervalSeconds: 1,
+                cancellationToken).ConfigureAwait(true);
+            var sensorStarted = true;
+            var clock = Stopwatch.StartNew();
+            uint lastSequence = 0;
+            try
+            {
+                SensorLiveStatus = "Waiting for sensor";
+                SensorLiveDetail = "Sensor started at a one-second interval.";
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    if (status.State == SensorLiveState.Fault)
+                    {
+                        throw new SensorCommunicationException(
+                            SensorCommunicationFailure.InvalidResponse,
+                            $"Gauge reported Sensor Live fault {status.LastError}.");
+                    }
+                    if (status.DataReady && status.LatestSequence != lastSequence)
+                    {
+                        var sample = await service
+                            .ReadLatestAsync(cancellationToken)
+                            .ConfigureAwait(true);
+                        if (sample is not null && sample.Sequence != lastSequence)
+                        {
+                            var reading = decoder.Decode(sample);
+                            lastSequence = sample.Sequence;
+                            AddSensorLiveReading(reading, clock.Elapsed);
+                        }
+                    }
+
+                    await Task.Delay(
+                        SensorLiveService.DefaultPollInterval,
+                        cancellationToken).ConfigureAwait(true);
+                    status = await service
+                        .ReadStatusAsync(cancellationToken)
+                        .ConfigureAwait(true);
+                }
+            }
+            finally
+            {
+                if (sensorStarted)
+                {
+                    using var stopDeadline = new CancellationTokenSource(
+                        TimeSpan.FromSeconds(1));
+                    try
+                    {
+                        await service.StopAsync(stopDeadline.Token).ConfigureAwait(true);
+                    }
+                    catch (Exception ex) when (
+                        ex is OperationCanceledException or
+                            TimeoutException or
+                            IOException or
+                            UnauthorizedAccessException or
+                            GaugeProtocolException or
+                            SensorCommunicationException)
+                    {
+                        // A disconnect or already-reset gauge cannot acknowledge stop.
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (NotSupportedException ex)
+        {
+            if (IsDeploymentSensorCheckVisible)
+            {
+                SetDeploymentNotFit(ex.Message);
+                return;
+            }
+
+            SensorLiveStatus = "Firmware update required";
+            SensorLiveDetail = ex.Message;
+            SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#D97706"));
+        }
+        catch (SensorCommunicationException ex)
+        {
+            if (IsDeploymentSensorCheckVisible)
+            {
+                SetDeploymentNotFit(ex.Message);
+                return;
+            }
+
+            SensorLiveStatus = "Sensor error";
+            SensorLiveDetail = ex.Message;
+            SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
+        }
+        catch (Exception ex) when (IsSensorLiveConnectionFailure(ex))
+        {
+            disconnected = true;
+            IsSensorLiveVisible = false;
+            TransitionToDisconnected(
+                $"Gauge stopped responding during Sensor Live: {ex.Message}",
+                cancelActiveOperations: false);
+        }
+        catch (Exception ex)
+        {
+            if (IsDeploymentSensorCheckVisible)
+            {
+                SetDeploymentNotFit(ex.Message);
+                return;
+            }
+
+            SensorLiveStatus = "Sensor error";
+            SensorLiveDetail = ex.Message;
+            SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
+        }
+        finally
+        {
+            if (gateHeld)
+            {
+                _serialGate.Release();
+            }
+
+            IsSensorLiveRunning = false;
+            IsBusy = false;
+            if (!disconnected && (IsSensorLiveVisible || IsDeploymentSensorCheckVisible) &&
+                cancellationToken.IsCancellationRequested)
+            {
+                SensorLiveStatus = "Sensor stopped";
+                SensorLiveDetail = "Select Start Sensor to run the live test again.";
+                SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#66737A"));
+            }
+        }
+    }
+
+    private void AddSensorLiveReading(
+        DecodedSensorLiveReading reading,
+        TimeSpan elapsed)
+    {
+        _sensorLivePoints.Add(new SensorLivePlotPoint(elapsed, reading));
+        var cutoff = elapsed - TimeSpan.FromSeconds(60);
+        _sensorLivePoints.RemoveAll(point => point.Elapsed < cutoff);
+
+        SensorLivePressure = $"{reading.Pressure:F2} psi";
+        SensorLiveTemperature = $"{reading.Temperature:F2} C";
+        SensorLiveLastReading =
+            $"Reading {reading.Sequence} at {DateTime.Now:HH:mm:ss}";
+        SensorLiveSampleSummary =
+            $"{_sensorLivePoints.Count} reading{(_sensorLivePoints.Count == 1 ? string.Empty : "s")} in the last 60 seconds";
+        var origin = _sensorLivePoints[0].Elapsed.TotalSeconds;
+        SensorLiveChartData = new ChartDataSet(
+            _sensorLivePoints
+                .Select(point => point.Elapsed.TotalSeconds - origin)
+                .ToArray(),
+            _sensorLivePoints
+                .Select(point => point.Reading.Pressure)
+                .ToArray(),
+            _sensorLivePoints
+                .Select(point => point.Reading.Temperature)
+                .ToArray());
+
+        if (reading.IsSensible)
+        {
+            SensorLiveStatus = "Sensor OK";
+            SensorLiveDetail = "Sensor frames are valid and pressure and temperature decode to sensible values.";
+            SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
+        }
+        else
+        {
+            SensorLiveStatus = "Check sensor";
+            SensorLiveDetail = reading.QualityFlags == 0
+                ? "The sensor frame decoded, but a reading is outside the expected test range."
+                : $"The sensor reported quality flags 0x{reading.QualityFlags:X2}.";
+            SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#D97706"));
+        }
+
+        if (IsDeploymentSensorCheckVisible)
+        {
+            UpdateDeploymentSensorAssessment(reading);
+        }
+    }
+
+    private void ResetSensorLiveDisplay()
+    {
+        _sensorLivePoints.Clear();
+        SensorLiveChartData = ChartDataSet.Empty;
+        SensorLiveStatus = "Starting sensor";
+        SensorLiveDetail = "Checking firmware support and reading sensor calibration.";
+        SensorLivePressure = "-- psi";
+        SensorLiveTemperature = "-- C";
+        SensorLiveLastReading = "No live reading";
+        SensorLiveSampleSummary = "0 readings in the last 60 seconds";
+        SensorLiveStatusBrush = new SolidColorBrush(Color.Parse("#D97706"));
+    }
+
+    private void UpdateDeploymentSensorAssessment(DecodedSensorLiveReading reading)
+    {
+        var pressureTolerance = _deploymentFullScalePsi * 0.0002;
+        if (!reading.IsSensible)
+        {
+            SetDeploymentNotFit(
+                reading.QualityFlags == 0
+                    ? "The sensor returned a pressure or temperature value outside its valid operating limits."
+                    : $"The sensor reported quality flags 0x{reading.QualityFlags:X2}.");
+            _sensorLiveCancellation?.Cancel();
+            return;
+        }
+
+        if (reading.Pressure < -pressureTolerance)
+        {
+            SetDeploymentNotFit(
+                $"Pressure is substantially below the valid atmospheric range ({reading.Pressure:F2} psi).");
+            _sensorLiveCancellation?.Cancel();
+            return;
+        }
+
+        var recentCutoff = _sensorLivePoints[^1].Elapsed - TimeSpan.FromSeconds(10);
+        var recent = _sensorLivePoints
+            .Where(point => point.Elapsed >= recentCutoff)
+            .Select(point => point.Reading)
+            .ToArray();
+        if (recent.Length < 3)
+        {
+            DeploymentStabilityText = "Collecting readings for stability check";
+        }
+        else
+        {
+            var pressureSpan = recent.Max(value => value.Pressure) -
+                               recent.Min(value => value.Pressure);
+            var temperatureSpan = recent.Max(value => value.Temperature) -
+                                  recent.Min(value => value.Temperature);
+            DeploymentStabilityText = (pressureSpan > pressureTolerance, temperatureSpan > 1.0) switch
+            {
+                (true, true) => "Pressure and temperature are changing — wait or confirm if expected.",
+                (true, false) => "Pressure is changing — wait or confirm if expected.",
+                (false, true) => "Temperature is changing — wait or confirm if expected.",
+                _ => "Readings appear stable."
+            };
+        }
+
+        DeploymentPressureText = IsLatestPressureOutsideAmbientBand()
+            ? _deploymentPressureSourceAnswered
+                ? _deploymentPressureSourceConnected
+                    ? "Pressure is outside the ambient range; applied pressure source confirmed."
+                    : "Pressure is outside the ambient range; confirm it is reasonable for current conditions."
+                : "Pressure is outside the expected ambient range."
+            : "Pressure is within the expected ambient range.";
+
+        OnPropertyChanged(nameof(IsDeploymentPressureSourceQuestionVisible));
+        OnPropertyChanged(nameof(IsDeploymentReadingConfirmationVisible));
+        if (DeploymentReadingsYesCommand is RelayCommand confirm)
+        {
+            confirm.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool IsLatestPressureOutsideAmbientBand()
+    {
+        if (_sensorLivePoints.Count == 0)
+        {
+            return false;
+        }
+
+        const double standardAtmosphericPressurePsi = 14.6959;
+        var tolerance = _deploymentFullScalePsi * 0.0002;
+        var pressure = _sensorLivePoints[^1].Reading.Pressure;
+        return pressure < standardAtmosphericPressurePsi - tolerance ||
+               pressure > standardAtmosphericPressurePsi + tolerance;
+    }
+
+    private static double GetSensorFullScalePsi(int? sensorId)
+    {
+        var id = sensorId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+        if (id.StartsWith("150", StringComparison.Ordinal))
+        {
+            return 10000;
+        }
+
+        return 15000;
+    }
+
+    private static string GetSensorTypeName(int sensorId)
+    {
+        var id = sensorId.ToString(CultureInfo.InvariantCulture);
+        return id.StartsWith("150", StringComparison.Ordinal)
+            ? "Constellation 150"
+            : id.StartsWith("177", StringComparison.Ordinal)
+                ? "Constellation 177"
+                : "Constellation sensor";
+    }
+
+    private static string GetSensorSerial(ReadOnlySpan<byte> payload)
+    {
+        var lines = SensorAsciiData.DecodePayload(payload)
+            .Split(
+                ["\r\n", "\n"],
+                StringSplitOptions.RemoveEmptyEntries |
+                StringSplitOptions.TrimEntries)
+            .Where(line => line != "=")
+            .ToArray();
+        return lines.ElementAtOrDefault(0) ??
+               string.Empty;
+    }
+
+    private Task AnswerDeploymentPressureSourceAsync(bool connected)
+    {
+        _deploymentPressureSourceAnswered = true;
+        _deploymentPressureSourceConnected = connected;
+        DeploymentPressureText = connected
+            ? "Applied pressure source confirmed."
+            : "No pressure source — confirm the reading is reasonable for current conditions.";
+        OnPropertyChanged(nameof(IsDeploymentPressureSourceQuestionVisible));
+        OnPropertyChanged(nameof(IsDeploymentReadingConfirmationVisible));
+        if (DeploymentReadingsYesCommand is RelayCommand confirm)
+        {
+            confirm.RaiseCanExecuteChanged();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmDeploymentReadingsAsync()
+    {
+        if (!IsDeploymentReadingConfirmationVisible)
+        {
+            return;
+        }
+
+        await StopSensorLiveAsync().ConfigureAwait(true);
+        SetDeploymentStep(DeploymentPreparationStep.Ready);
+        Status = "Gauge ready for deployment";
+    }
+
+    private async Task RejectDeploymentReadingsAsync()
+    {
+        await StopSensorLiveAsync().ConfigureAwait(true);
+        SetDeploymentNotFit(
+            "The operator confirmed that the live readings do not match the expected conditions.");
+    }
+
+    private void SetDeploymentNotFit(string reason)
+    {
+        DeploymentNotFitReason = reason;
+        SetDeploymentStep(DeploymentPreparationStep.NotFit);
+        Status = "Gauge not fit for deployment";
+    }
+
+    private async Task ExitDeploymentPreparationAsync()
+    {
+        if (_sensorLiveTask is { IsCompleted: false })
+        {
+            await StopSensorLiveAsync().ConfigureAwait(true);
+        }
+
+        IsPrepareDeploymentVisible = false;
+        _resumePrepareDeploymentAfterErase = false;
+        _autoDownloadsPaused = false;
+        Status = "Gauge connected";
+        StartBackgroundDownloads();
+    }
+
+    private void SetDeploymentStep(DeploymentPreparationStep step)
+    {
+        _deploymentStep = step;
+        RaiseDeploymentStepVisibility();
+        RaiseDeploymentConfigurationChanged();
+    }
+
+    private void RaiseDeploymentStepVisibility()
+    {
+        OnPropertyChanged(nameof(IsDeploymentEraseChoiceVisible));
+        OnPropertyChanged(nameof(IsDeploymentConfigurationVisible));
+        OnPropertyChanged(nameof(IsDeploymentSensorCheckVisible));
+        OnPropertyChanged(nameof(IsDeploymentReadyVisible));
+        OnPropertyChanged(nameof(IsDeploymentNotFitVisible));
+        OnPropertyChanged(nameof(IsDeploymentPressureSourceQuestionVisible));
+        OnPropertyChanged(nameof(IsDeploymentReadingConfirmationVisible));
+    }
+
+    private static bool IsSensorLiveConnectionFailure(Exception exception) =>
+        exception is TimeoutException
+            or IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or GaugeProtocolException;
+
+    private async Task BeginMemoryEraseAsync()
+    {
+        if (!CanBeginMemoryErase())
+        {
+            return;
+        }
+
+        CancelBackgroundDownloads();
+        await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
+        _autoDownloadsPaused = true;
+        _pendingStorageMode = null;
+        CloseSettingsOverlay();
+        IsGraphVisible = false;
+        PrepareErasePage(recoveryRequired: false);
+    }
+
+    private void PrepareErasePage(bool recoveryRequired)
+    {
+        IsFileInfoPageVisible = false;
+        IsEraseRecoveryRequired = recoveryRequired;
+        OnPropertyChanged(nameof(EraseWarningTitle));
+        OnPropertyChanged(nameof(EraseWarningText));
+        OnPropertyChanged(nameof(EraseConfirmationActionText));
+        EraseProgressPercent = 0;
+        EraseProgressText = "0% complete | Calculating time remaining";
+        EraseTimingText = string.Empty;
+        EraseResultText = string.Empty;
+        _eraseInitialCompleted = null;
+        _eraseCompletedSuccessfully = false;
+        IsEraseConfirmationVisible = true;
+        IsErasePageVisible = true;
+    }
+
+    private async Task ConfirmMemoryEraseAsync()
+    {
+        if (!IsEraseConfirmationVisible ||
+            IsErasingMemory ||
+            IsBusy ||
+            !IsGaugeConnected ||
+            _foregroundOperationTask is { IsCompleted: false })
+        {
+            return;
+        }
+
+        IsEraseConfirmationVisible = false;
+        await RunForegroundOperationAsync(EraseMemoryCoreAsync).ConfigureAwait(true);
+    }
+
+    private Task CancelMemoryEraseAsync()
+    {
+        if (IsEraseConfirmationVisible)
+        {
+            if (IsEraseRecoveryRequired)
+            {
+                return Task.CompletedTask;
+            }
+
+            IsEraseConfirmationVisible = false;
+            IsErasePageVisible = false;
+            _pendingStorageMode = null;
+            _resumePrepareDeploymentAfterErase = false;
+            _autoDownloadsPaused = false;
+            StartBackgroundDownloads();
+            return Task.CompletedTask;
+        }
+
+        if (IsErasingMemory)
+        {
+            _foregroundOperationCancellation?.Cancel();
+            EraseResultText = "Cancelling polling; erase will be incomplete.";
+            Status = "Cancelling external-memory erase";
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task CloseMemoryEraseAsync()
+    {
+        if (IsErasingMemory || IsEraseConfirmationVisible)
+        {
+            return;
+        }
+
+        if (!_eraseCompletedSuccessfully && IsGaugeConnected)
+        {
+            PrepareErasePage(recoveryRequired: true);
+            Status = "External-memory erase remains incomplete; restart is required before deployment";
+            return;
+        }
+
+        IsErasePageVisible = false;
+        if (_eraseCompletedSuccessfully && IsGaugeConnected)
+        {
+            if (_resumePrepareDeploymentAfterErase)
+            {
+                _resumePrepareDeploymentAfterErase = false;
+                RefreshGaugeSettingSelections();
+                SetDeploymentStep(DeploymentPreparationStep.Configuration);
+                IsPrepareDeploymentVisible = true;
+                Status = "Select deployment settings";
+                RaiseDeploymentConfigurationChanged();
+                return;
+            }
+
+            _autoDownloadsPaused = false;
+            await ReadFilesAsync().ConfigureAwait(true);
+        }
+    }
+
+    private async Task EraseMemoryCoreAsync(CancellationToken cancellationToken)
+    {
+        var expectedSerial = _connectedDevice?.DeviceSerial
+            ?? throw new InvalidOperationException("No connected gauge identity is available.");
+        var restartFromBeginning = IsEraseRecoveryRequired;
+        var eraseCompleted = false;
+        IsBusy = true;
+        IsErasingMemory = true;
+        EraseProgressPercent = 0;
+        EraseProgressText = "0% complete | Calculating time remaining";
+        EraseTimingText = string.Empty;
+        EraseResultText = string.Empty;
+        Status = "Erasing external memory";
+
+        var gateHeld = false;
+        try
+        {
+            await _serialGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+            gateHeld = true;
+
+            if (restartFromBeginning)
+            {
+                await using (var restartConnection = await OpenVerifiedConnectionAsync(
+                    preferFast: true,
+                    cancellationToken: cancellationToken,
+                    transactionTimeoutMs: EraseTransactionTimeoutMs,
+                    transactionDeadlineMs: EraseTransactionDeadlineMs,
+                    wakeScanTimeoutMs: EraseRestartWakeScanTimeoutMs).ConfigureAwait(true))
+                {
+                    ValidateEraseGauge(
+                        restartConnection.Identity,
+                        expectedSerial,
+                        requireActiveInterlock: true);
+                    await new ExternalMemoryEraseService(new GaugeSession(restartConnection.Transport))
+                        .PrepareRestartFromBeginningAsync(cancellationToken)
+                        .ConfigureAwait(true);
+                }
+
+                await Task.Delay(FastVerifyDelay, cancellationToken).ConfigureAwait(true);
+            }
+
+            var progress = new Progress<ExternalEraseProgress>(UpdateEraseProgress);
+            ExternalEraseResult result;
+            DeviceData device;
+            await using (var eraseConnection = await OpenVerifiedConnectionAsync(
+                preferFast: !restartFromBeginning,
+                cancellationToken: cancellationToken,
+                transactionTimeoutMs: EraseTransactionTimeoutMs,
+                transactionDeadlineMs: EraseTransactionDeadlineMs,
+                wakeScanTimeoutMs: EraseRestartWakeScanTimeoutMs).ConfigureAwait(true))
+            {
+                device = ValidateEraseGauge(
+                    eraseConnection.Identity,
+                    expectedSerial,
+                    requireActiveInterlock: false);
+                result = await new ExternalMemoryEraseService(new GaugeSession(eraseConnection.Transport))
+                    .EraseAsync(progress, cancellationToken)
+                    .ConfigureAwait(true);
+                eraseCompleted = true;
+
+                if (_pendingStorageMode is GaugeStorageMode requestedMode)
+                {
+                    device = await new GaugeConfigurationService(
+                            new GaugeSession(eraseConnection.Transport))
+                        .SetStorageModeAsync(
+                            requestedMode,
+                            expectedSerial,
+                            cancellationToken)
+                        .ConfigureAwait(true);
+                }
+            }
+
+            EraseProgressPercent = 100;
+            EraseProgressText = "100% complete | 0 sec remaining";
+            EraseTimingText = $"Completed in {FormatElapsedTime(result.Elapsed.TotalSeconds)}";
+            EraseResultText = _pendingStorageMode is GaugeStorageMode changedMode
+                ? $"External memory erased and storage mode changed to {DescribeStorageMode((byte)changedMode)}."
+                : "External memory erased successfully.";
+            _eraseCompletedSuccessfully = true;
+            IsEraseRecoveryRequired = false;
+            Status = _pendingStorageMode is GaugeStorageMode
+                ? "External memory erase and storage-mode change complete"
+                : "External memory erase complete";
+            _pendingStorageMode = null;
+            _externalMemoryKnownEmpty = true;
+            _connectedDevice = device with { EraseStatus = 0 };
+            DeviceSummary = DescribeGauge(_connectedDevice);
+            DeviceDetails = BuildDeviceDetails(_connectedDevice, []);
+            ConnectionStatus = "Connected";
+            ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
+            _connectedPollMisses = 0;
+            _nextConnectedPollUtc = DateTime.UtcNow + ConnectedPollInterval;
+            RaiseDeviceInformationChanged();
+
+            Files.Clear();
+            Samples.Clear();
+            ChartData = ChartDataSet.Empty;
+            SelectedFile = null;
+            _fileTable = null;
+            _v3Catalog = null;
+            FileSummary = "No committed files found";
+            ResetReview();
+        }
+        catch (OperationCanceledException) when (!_pollingCancellation.IsCancellationRequested)
+        {
+            LeaveEraseForDisconnectedState(
+                "Gauge communication stopped during the external-memory erase");
+        }
+        catch (Exception ex) when (IsEraseConnectionFailure(ex))
+        {
+            LeaveEraseForDisconnectedState(
+                $"Gauge stopped responding during the external-memory erase: {ex.Message}");
+        }
+        catch (Exception ex) when (eraseCompleted)
+        {
+            _pendingStorageMode = null;
+            _externalMemoryKnownEmpty = true;
+            _eraseCompletedSuccessfully = true;
+            IsEraseRecoveryRequired = false;
+            EraseProgressPercent = 100;
+            EraseProgressText = "100% complete | 0 sec remaining";
+            EraseResultText =
+                $"External memory was erased, but the storage mode could not be changed: {ex.Message}";
+            Status = "External memory erased; storage-mode change failed";
+
+            Files.Clear();
+            Samples.Clear();
+            ChartData = ChartDataSet.Empty;
+            SelectedFile = null;
+            _fileTable = null;
+            _v3Catalog = null;
+            FileSummary = "No committed files found";
+            ResetReview();
+            RaiseGaugeConfigurationChanged();
+        }
+        catch (Exception ex)
+        {
+            IsEraseRecoveryRequired = true;
+            PrepareErasePage(recoveryRequired: true);
+            Status = $"External-memory erase remains incomplete: {ex.Message}";
+        }
+        finally
+        {
+            if (gateHeld)
+            {
+                _serialGate.Release();
+            }
+
+            IsErasingMemory = false;
+            IsBusy = false;
+        }
+    }
+
+    private void LeaveEraseForDisconnectedState(string reason)
+    {
+        _pendingStorageMode = null;
+        _externalMemoryKnownEmpty = false;
+        _eraseCompletedSuccessfully = false;
+        IsEraseRecoveryRequired = false;
+        IsEraseConfirmationVisible = false;
+        EraseResultText = string.Empty;
+        EraseTimingText = string.Empty;
+        IsErasePageVisible = false;
+        TransitionToDisconnected(reason, cancelActiveOperations: false);
+    }
+
+    private static bool IsEraseConnectionFailure(Exception exception) =>
+        exception is TimeoutException
+            or IOException
+            or UnauthorizedAccessException
+            or InvalidOperationException
+            or GaugeProtocolException;
+
+    private void UpdateEraseProgress(ExternalEraseProgress progress)
+    {
+        _eraseInitialCompleted ??= progress.Completed;
+        EraseProgressPercent = Math.Clamp(progress.Percent, 0, 100);
+
+        string remaining;
+        if (progress.IsEstimated)
+        {
+            var estimate = ExternalMemoryEraseService.LegacyEstimatedDuration - progress.Elapsed;
+            remaining = estimate > TimeSpan.Zero
+                ? $"{FormatElapsedTime(estimate.TotalSeconds)} remaining"
+                : "Waiting for gauge completion";
+        }
+        else
+        {
+            var completedThisRun = progress.Completed - _eraseInitialCompleted.Value;
+            if (completedThisRun > 0 && progress.Completed < progress.Total)
+            {
+                var secondsPerPair = progress.Elapsed.TotalSeconds / completedThisRun;
+                var estimate = TimeSpan.FromSeconds(
+                    secondsPerPair * (progress.Total - progress.Completed));
+                remaining = $"{FormatElapsedTime(estimate.TotalSeconds)} remaining";
+            }
+            else if (progress.Completed >= progress.Total)
+            {
+                remaining = "0 sec remaining";
+            }
+            else
+            {
+                remaining = "Calculating time remaining";
+            }
+        }
+
+        EraseProgressText = progress.IsEstimated
+            ? $"Approximately {progress.Percent:F0}% complete | {remaining}"
+            : $"{progress.Percent:F0}% complete | {remaining}";
+    }
+
+    private bool CanBeginMemoryErase() =>
+        !IsBusy &&
+        !IsFirmwareUpdating &&
+        IsGaugeConnected &&
+        _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+
+    private static bool RequiresIncompleteEraseRecovery(DeviceData device) =>
+        device.DeviceType == MemoryGaugeDeviceType &&
+        device.EraseStatus.GetValueOrDefault() != 0;
+
+    private static DeviceData ValidateEraseGauge(
+        GaugeFrame identity,
+        uint expectedSerial,
+        bool requireActiveInterlock)
+    {
+        var device = DecodeDevice(identity.Payload)
+            ?? throw new GaugeProtocolException("Gauge returned an incomplete identity.");
+        if (device.DeviceType != MemoryGaugeDeviceType ||
+            device.DeviceSerial != expectedSerial)
+        {
+            throw new InvalidOperationException(
+                "Connected gauge identity does not match the gauge selected for erase.");
+        }
+        if (requireActiveInterlock && !RequiresIncompleteEraseRecovery(device))
+        {
+            throw new InvalidDataException(
+                "Gauge reset without preserving its incomplete-erase interlock.");
+        }
+
+        return device;
+    }
+
+    private void EnterIncompleteEraseRecovery(DeviceData device, byte[] identityPayload)
+    {
+        IsFileInfoPageVisible = false;
+        _pendingStorageMode = null;
+        _externalMemoryKnownEmpty = false;
+        CancelBackgroundDownloads();
+        _autoDownloadsPaused = true;
+        Files.Clear();
+        Samples.Clear();
+        ChartData = ChartDataSet.Empty;
+        SelectedFile = null;
+        _fileTable = null;
+        _v3Catalog = null;
+        _calibration = null;
+        _calibrationFailure = null;
+        ResetReview();
+
+        _connectedDevice = device;
+        DeviceSummary = DescribeGauge(device);
+        DeviceDetails = BuildDeviceDetails(device, identityPayload);
+        IsGaugeConnected = true;
+        _connectedPollMisses = 0;
+        _nextConnectedPollUtc = DateTime.UtcNow + ConnectedPollInterval;
+        ConnectionStatus = "Erase required";
+        ConnectionBrush = new SolidColorBrush(Color.Parse("#D97706"));
+        IsGraphVisible = false;
+        FileSummary = "File access locked until erase completes";
+        PrepareErasePage(recoveryRequired: true);
+        Status = "Incomplete external-memory erase detected; restart is required before deployment";
+        RaiseDeviceInformationChanged();
     }
 
     private Task OpenEngineeringModeAsync()
     {
         IsAppSettingsVisible = false;
         IsGaugeSettingsVisible = false;
+        IsDiagnosticsVisible = false;
+        IsSensorLiveVisible = false;
         IsEngineeringModeVisible = true;
         RaiseDeviceInformationChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OpenDiagnosticsAsync()
+    {
+        IsAppSettingsVisible = false;
+        IsGaugeSettingsVisible = false;
+        IsEngineeringModeVisible = false;
+        IsSensorLiveVisible = false;
+        IsDiagnosticsVisible = true;
+        RaiseDiagnosticsChanged();
         return Task.CompletedTask;
     }
 
     private Task OpenAppSettingsAsync()
     {
         IsGaugeSettingsVisible = false;
+        IsDiagnosticsVisible = false;
         IsEngineeringModeVisible = false;
+        IsSensorLiveVisible = false;
         IsAppSettingsVisible = true;
         return Task.CompletedTask;
     }
 
+    private bool CanCheckFirmwareUpdates() =>
+        IsGaugeConnected &&
+        _connectedDevice is not null &&
+        !IsFirmwareUpdating &&
+        !IsCheckingFirmware &&
+        !string.IsNullOrWhiteSpace(FirmwareCatalogUrl);
+
+    private async Task CheckFirmwareUpdatesAsync()
+    {
+        var device = _connectedDevice;
+        if (device is null)
+        {
+            FirmwareRemoteStatus = "Connect a gauge before checking for firmware.";
+            return;
+        }
+
+        if (!Uri.TryCreate(FirmwareCatalogUrl.Trim(), UriKind.Absolute, out var manifestUri))
+        {
+            FirmwareRemoteStatus = "The firmware catalog URL is invalid. Update it in App Settings.";
+            return;
+        }
+
+        IsCheckingFirmware = true;
+        FirmwareRemoteStatus = "Checking the public release catalog...";
+        try
+        {
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var client = new FirmwareReleaseCatalogClient(httpClient);
+            var releaseCheck = await client.CheckAsync(
+                manifestUri,
+                device.DeviceType,
+                device.PcbType,
+                device.FirmwareVersion).ConfigureAwait(true);
+
+            if (releaseCheck is null)
+            {
+                FirmwareRemoteStatus = $"No stable firmware is published for device type {device.DeviceType}.";
+                return;
+            }
+
+            if (!releaseCheck.IsUpdateAvailable)
+            {
+                FirmwareRemoteStatus =
+                    $"Firmware {device.FirmwareVersion} is current (latest stable: {releaseCheck.Release.Version}).";
+                return;
+            }
+
+            FirmwareRemoteStatus = $"Downloading firmware {releaseCheck.Release.Version}...";
+            var bytes = await client.DownloadAsync(releaseCheck).ConfigureAwait(true);
+            var cacheDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Northstar",
+                "GaugeInterface",
+                "firmware-cache",
+                "Offset",
+                "production");
+            Directory.CreateDirectory(cacheDirectory);
+            var fileName = $"memory-gauge-{device.DeviceType}-v{releaseCheck.Release.Version}.hex";
+            var cachedPath = Path.Combine(cacheDirectory, fileName);
+            var temporaryPath = cachedPath + ".download";
+            await File.WriteAllBytesAsync(temporaryPath, bytes).ConfigureAwait(true);
+            File.Move(temporaryPath, cachedPath, overwrite: true);
+
+            SelectFirmwareImage(cachedPath);
+            if (_firmwareImage is null)
+            {
+                FirmwareRemoteStatus = "The downloaded image failed application safety validation and was rejected.";
+                return;
+            }
+
+            var minimumBootloaderText = releaseCheck.Release.MinimumBootloader.Trim().TrimStart('v', 'V');
+            if (!Version.TryParse(minimumBootloaderText, out _firmwareMinimumBootloader))
+            {
+                _firmwareImage = null;
+                FirmwareRemoteStatus = "The release has an invalid minimum bootloader version and was rejected.";
+                FirmwareStatus = "Rejected firmware release";
+                RaiseFirmwareCommandStates();
+                return;
+            }
+
+            FirmwareRemoteStatus = string.IsNullOrWhiteSpace(releaseCheck.Release.ReleaseNotes)
+                ? $"Firmware {releaseCheck.Release.Version} downloaded and verified. Review, then select Program Firmware."
+                : $"Firmware {releaseCheck.Release.Version} downloaded and verified: {releaseCheck.Release.ReleaseNotes}";
+        }
+        catch (Exception ex) when (ex is HttpRequestException
+            or TaskCanceledException
+            or IOException
+            or UnauthorizedAccessException
+            or JsonException
+            or InvalidDataException)
+        {
+            FirmwareRemoteStatus = $"Firmware check failed: {ex.Message}";
+        }
+        finally
+        {
+            IsCheckingFirmware = false;
+        }
+    }
+
     public void SelectFirmwareImage(string path)
     {
+        _firmwareMinimumBootloader = null;
         FirmwareProgressPercent = 0;
         FirmwareLoaderDetails = "Not connected";
         FirmwareImageName = Path.GetFileName(path);
@@ -887,6 +3359,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
 
         OnPropertyChanged(nameof(IsFirmwareImageSelected));
+        OnPropertyChanged(nameof(IsFirmwareNormalActionVisible));
+        OnPropertyChanged(nameof(IsFirmwareRecoveryActionVisible));
+        OnPropertyChanged(nameof(IsFirmwareProgressVisible));
         RaiseFirmwareCommandStates();
     }
 
@@ -895,43 +3370,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         FirmwareStatus = $"Failed to select image: {message}";
     }
 
-    private Task BeginFirmwareProgramAsync()
-    {
-        _pendingFirmwareAction = FirmwareAction.Program;
-        ShowFirmwareConfirmation();
-        return Task.CompletedTask;
-    }
+    private Task BeginFirmwareProgramAsync() =>
+        ProgramFirmwareAsync(recoveryMode: false);
 
-    private Task BeginFirmwareRecoveryAsync()
-    {
-        _pendingFirmwareAction = FirmwareAction.Recover;
-        ShowFirmwareConfirmation();
-        return Task.CompletedTask;
-    }
-
-    private void ShowFirmwareConfirmation()
-    {
-        FirmwareConfirmationText = string.Empty;
-        IsFirmwareConfirmationVisible = true;
-        OnPropertyChanged(nameof(FirmwareConfirmationPrompt));
-        OnPropertyChanged(nameof(FirmwareConfirmationAction));
-        RaiseFirmwareCommandStates();
-    }
-
-    private Task CancelFirmwareConfirmationAsync()
-    {
-        IsFirmwareConfirmationVisible = false;
-        FirmwareConfirmationText = string.Empty;
-        return Task.CompletedTask;
-    }
-
-    private async Task ConfirmFirmwareActionAsync()
-    {
-        var recoveryMode = _pendingFirmwareAction == FirmwareAction.Recover;
-        IsFirmwareConfirmationVisible = false;
-        FirmwareConfirmationText = string.Empty;
-        await ProgramFirmwareAsync(recoveryMode).ConfigureAwait(true);
-    }
+    private Task BeginFirmwareRecoveryAsync() =>
+        ProgramFirmwareAsync(recoveryMode: true);
 
     private async Task ProgramFirmwareAsync(bool recoveryMode)
     {
@@ -1006,6 +3449,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                         $"Loader device ID 0x{version.DeviceId:X4} does not match PIC18F26K80 ID 0x{Pic18F26K80DeviceId:X4}.");
                 }
 
+                var connectedLoaderVersion = new Version(version.Major, version.Minor);
+                if (_firmwareMinimumBootloader is not null
+                    && connectedLoaderVersion < _firmwareMinimumBootloader)
+                {
+                    throw new InvalidOperationException(
+                        $"Firmware requires bootloader {_firmwareMinimumBootloader}; connected loader is {connectedLoaderVersion}.");
+                }
+
                 var progress = new Progress<FirmwareUpdateProgress>(UpdateFirmwareProgress);
                 var updater = new GaugeFirmwareUpdater(bootloader, version);
                 result = await updater.ProgramAsync(image, progress, CancellationToken.None).ConfigureAwait(true);
@@ -1057,7 +3508,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         catch (Exception ex) when (IsExpectedUiFailure(ex) || ex is FormatException)
         {
-            if (enteredBootloader)
+            if (!IsPortConfigured || !IsSelectedPortAvailable())
+            {
+                HandleSelectedPortRemoved(
+                    $"Serial adapter {SelectedPort} was disconnected");
+                FirmwareStatus = "Failed: serial adapter disconnected";
+            }
+            else if (enteredBootloader)
             {
                 EnterFirmwareRecoveryState(ex.Message);
             }
@@ -1158,23 +3615,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             && !string.IsNullOrWhiteSpace(SelectedPort);
     }
 
-    private bool CanConfirmFirmwareAction()
+    private async Task CloseSettingsOverlayAsync()
     {
-        if (!IsFirmwareConfirmationVisible || IsFirmwareUpdating)
+        if (IsSensorLiveVisible || IsDeploymentSensorCheckVisible)
         {
-            return false;
+            await StopSensorLiveAsync().ConfigureAwait(true);
         }
 
-        var expected = _pendingFirmwareAction == FirmwareAction.Recover
-            ? "RECOVER"
-            : GaugeDeviceSerial;
-        return FirmwareConfirmationText.Equals(expected, StringComparison.Ordinal);
-    }
-
-    private Task CloseSettingsOverlayAsync()
-    {
+        _resumePrepareDeploymentAfterErase = false;
         CloseSettingsOverlay();
-        return Task.CompletedTask;
+        _autoDownloadsPaused = false;
+        if (IsGaugeConnected)
+        {
+            StartBackgroundDownloads();
+        }
     }
 
     private void CloseSettingsOverlay()
@@ -1184,11 +3638,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
-        IsFirmwareConfirmationVisible = false;
-        FirmwareConfirmationText = string.Empty;
         IsAppSettingsVisible = false;
         IsGaugeSettingsVisible = false;
+        IsDiagnosticsVisible = false;
         IsEngineeringModeVisible = false;
+        IsSensorLiveVisible = false;
+        IsPrepareDeploymentVisible = false;
     }
 
     private Task ShowGraphAsync()
@@ -1217,12 +3672,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         return $"gauge-{serial}-{DateTime.Now:yyyyMMdd}-file-{file.Index:000}.rec";
     }
 
-    public string BuildRawFileName(GaugeFileRowViewModel file)
-    {
-        var serial = _connectedDevice?.DeviceSerial.ToString() ?? "unknown";
-        return $"gauge-{serial}-{DateTime.Now:yyyyMMdd}-file-{file.Index:000}.raw";
-    }
-
     public string BuildSupportBundleFileName()
     {
         var serial = _connectedDevice?.DeviceSerial.ToString() ?? "unknown";
@@ -1231,35 +3680,140 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     internal void WriteSupportBundle(Stream output)
     {
-        var files = _fileTable?.Records
-            .Select((record, fileNumber) =>
-            {
-                var row = Files.FirstOrDefault(file => file.Index == fileNumber);
-                return new SupportFileSnapshot(
-                    fileNumber,
-                    record.Index,
-                    record.DataAddress.ToString(),
-                    EstimateBytes(_fileTable, fileNumber),
-                    record.MeasurementInterval,
-                    record.ResetCause,
-                    record.IsCrcValid,
-                    row?.State ?? "Not downloaded",
-                    row?.SampleCount ?? 0,
-                    row?.CrcErrorCount ?? 0,
-                    row?.BatteryWarningCount ?? 0,
-                    row?.AcousticRecordCount ?? 0,
-                    row?.AcousticDiagnosticRecordCount ?? 0,
-                    row?.RawAcousticRecordCount ?? 0,
-                    row?.TimestampRecordCount ?? 0,
-                    row?.UnknownRecordCount ?? 0,
-                    row?.DataQualityDetail ?? "Not inspected");
-            })
-            .ToArray() ?? [];
+        SupportFileSnapshot[] files;
+        if (_v3Catalog is not null)
+        {
+            var format = $"V3.{_v3Catalog.Capabilities.StorageMinor}";
+            files = _v3Catalog.Files
+                .Select(file =>
+                {
+                    var row = Files.FirstOrDefault(candidate => candidate.Index == file.Index);
+                    var download = row?.V3Download;
+                    return new SupportFileSnapshot(
+                        file.Index,
+                        format,
+                        file.CatalogRecord.CatalogSequence <= int.MaxValue
+                            ? (int)file.CatalogRecord.CatalogSequence
+                            : null,
+                        $"0x{file.CatalogRecord.FileId:X8}",
+                        $"0x{file.DataStart:X8}",
+                        checked((int)file.DataLength),
+                        checked((int)file.CatalogRecord.NominalInterval),
+                        null,
+                        null,
+                        row?.State ?? "Not downloaded",
+                        row?.DataQualitySummary ?? "Not yet inspected",
+                        row?.SampleCount ?? 0,
+                        row?.CrcErrorCount ?? 0,
+                        row?.BatteryWarningCount ?? 0,
+                        row?.AcousticRecordCount ?? 0,
+                        row?.AcousticDiagnosticRecordCount ?? 0,
+                        row?.RawAcousticRecordCount ?? 0,
+                        row?.TimestampRecordCount ?? 0,
+                        row?.UnknownRecordCount ?? 0,
+                        row?.DataQualityDetail ?? "Not inspected",
+                        download?.IsOpen,
+                        download?.CorrectedPageCount ?? 0,
+                        download?.MissingSampleCount ?? 0,
+                        download?.PageSequenceGaps.Count ?? 0,
+                        download?.RequiresMemoryService ??
+                            row?.V3RequiresMemoryService ??
+                            _v3Catalog.RequiresMemoryService);
+                })
+                .ToArray();
+        }
+        else
+        {
+            files = _fileTable?.Records
+                .Select((record, fileNumber) =>
+                {
+                    var row = Files.FirstOrDefault(file => file.Index == fileNumber);
+                    return new SupportFileSnapshot(
+                        fileNumber,
+                        "V2",
+                        record.Index,
+                        null,
+                        record.DataAddress.ToString(),
+                        EstimateBytes(_fileTable, fileNumber),
+                        record.MeasurementInterval,
+                        record.ResetCause,
+                        record.IsCrcValid,
+                        row?.State ?? "Not downloaded",
+                        row?.DataQualitySummary ?? "Not yet inspected",
+                        row?.SampleCount ?? 0,
+                        row?.CrcErrorCount ?? 0,
+                        row?.BatteryWarningCount ?? 0,
+                        row?.AcousticRecordCount ?? 0,
+                        row?.AcousticDiagnosticRecordCount ?? 0,
+                        row?.RawAcousticRecordCount ?? 0,
+                        row?.TimestampRecordCount ?? 0,
+                        row?.UnknownRecordCount ?? 0,
+                        row?.DataQualityDetail ?? "Not inspected",
+                        null,
+                        0,
+                        0,
+                        0,
+                        false);
+                })
+                .ToArray() ?? [];
+        }
 
-        SensorCalibrationHeader? header = null;
+        var calibrationArtifacts = new List<SupportCalibrationArtifact>();
         if (_calibration is not null)
         {
-            header = SensorCalibrationHeader.Parse(_calibration.SensorHeader);
+            calibrationArtifacts.Add(new SupportCalibrationArtifact(
+                "calibration",
+                _calibration));
+        }
+
+        calibrationArtifacts.AddRange(
+            Files
+                .Where(file => file.V3Calibration is not null)
+                .OrderBy(file => file.Index)
+                .Select(file => new SupportCalibrationArtifact(
+                    $"calibration/file-{file.Index:000}",
+                    file.V3Calibration!)));
+
+        var primaryCalibration = _calibration ??
+            Files.FirstOrDefault(file => file.V3Calibration is not null)?.V3Calibration;
+        SensorCalibrationHeader? header = primaryCalibration is null
+            ? null
+            : SensorCalibrationHeader.Parse(primaryCalibration.SensorHeader);
+        var diagnosticStatus = _v3Catalog?.DiagnosticStatus;
+        SupportV3DiagnosticSnapshot? v3Diagnostics = null;
+        if (diagnosticStatus is not null)
+        {
+            var eventDescription = V3DiagnosticEventCatalog.Describe(
+                diagnosticStatus.LatestEventId);
+            v3Diagnostics = new SupportV3DiagnosticSnapshot(
+                DiagnosticsGaugeHealth,
+                diagnosticStatus.LatestEventId,
+                eventDescription.Title,
+                eventDescription.Detail,
+                eventDescription.Level.ToString(),
+                diagnosticStatus.Flags.HasFlag(V3DiagnosticFlags.CrashCapsuleValid),
+                diagnosticStatus.CrashCapsuleGeneration,
+                diagnosticStatus.BootId,
+                diagnosticStatus.CommittedPageCount,
+                diagnosticStatus.PendingRamEventCount,
+                diagnosticStatus.FailedChipMask,
+                diagnosticStatus.DegradedReplicaMask,
+                diagnosticStatus.Flags.ToString(),
+                _v3Catalog?.CrashCapsule is { } capsule
+                    ? new SupportCrashCapsuleSnapshot(
+                        capsule.SchemaVersion,
+                        capsule.Generation,
+                        capsule.BootId,
+                        capsule.EventId,
+                        capsule.FaultId,
+                        capsule.ApplicationState,
+                        capsule.ApplicationStateDisplay,
+                        capsule.FileId,
+                        capsule.CommittedSampleCount,
+                        capsule.RawRcon)
+                    : null,
+                _v3Catalog?.CrashCapsuleRead?.Status.ToString() ??
+                    "NotRequested");
         }
 
         var diagnostics = new GaugeSupportBundle(
@@ -1277,18 +3831,34 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 IgnoreSmallFiles),
             _connectedDevice,
             new SupportMemorySnapshot(
-                _fileTable is not null,
-                _fileTable?.Records.Count ?? 0,
-                _fileTable?.EndOfFile.ToString()),
+                _fileTable is not null || _v3Catalog is not null,
+                _v3Catalog is not null
+                    ? $"V3.{_v3Catalog.Capabilities.StorageMinor}"
+                    : _fileTable is not null ? "V2" : "Unknown",
+                _v3Catalog?.Files.Count ?? _fileTable?.Records.Count ?? 0,
+                _v3Catalog?.Files.LastOrDefault() is { } latest
+                    ? $"0x{latest.DataEnd:X8}"
+                    : _fileTable?.EndOfFile.ToString(),
+                _v3Catalog?.Recovery.Records.Count,
+                _v3Catalog?.RejectedRecords.Count),
             new SupportCalibrationSnapshot(
-                _calibration is not null,
-                _calibration is null ? null : SensorAsciiData.DecodePayload(_calibration.SensorSerial),
+                primaryCalibration is not null,
+                _calibration is not null
+                    ? "Connected sensor"
+                    : calibrationArtifacts.Count > 0
+                        ? "V3 file headers"
+                        : "Unavailable",
+                Files.Count(file => file.V3Calibration is not null),
+                primaryCalibration is null
+                    ? null
+                    : SensorAsciiData.DecodePayload(primaryCalibration.SensorSerial),
                 header?.ReferenceClock,
                 header?.SensorId,
                 header?.CountBias,
                 header?.PressureStartupMilliseconds,
                 header?.PllClock),
             files,
+            v3Diagnostics,
             _communicationEvents.Summary(),
             _communicationEvents.Snapshot(),
             new SupportFirmwareSnapshot(
@@ -1301,17 +3871,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 IsFirmwareRecoveryRequired),
             EngineeringDeviceDetails);
 
-        SupportBundleExporter.Write(output, diagnostics, _calibration);
+        SupportBundleExporter.Write(output, diagnostics, calibrationArtifacts);
     }
 
     public LegacyRecordMetadata BuildLegacyRecordMetadata(GaugeFileRowViewModel file)
     {
-        if (_connectedDevice is null || _calibration is null || file.Samples is not { Count: > 0 } samples)
+        var calibration = file.V3Calibration ?? _calibration;
+        if (_connectedDevice is null || calibration is null || file.Samples is not { Count: > 0 } samples)
         {
             throw new InvalidOperationException("Downloaded gauge data and calibration are required for record export.");
         }
 
-        var sensorIdentity = SensorAsciiData.DecodePayload(_calibration.SensorSerial)
+        var sensorIdentity = SensorAsciiData.DecodePayload(calibration.SensorSerial)
             .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var sensorType = sensorIdentity.ElementAtOrDefault(0) ?? "Unknown";
         var sensorSerial = sensorIdentity.ElementAtOrDefault(1) ?? "Unknown";
@@ -1367,7 +3938,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public void UpdateGraphCursor(ChartCursorEventArgs cursor)
     {
         CursorSample = cursor.SampleIndex.ToString("N0");
-        CursorElapsed = FormatElapsedTime(cursor.ElapsedSeconds);
+        CursorElapsed = FormatReviewElapsedTime(cursor.ElapsedSeconds);
         CursorPressure = $"{cursor.Pressure:F2} psi";
         CursorTemperature = $"{cursor.Temperature:F2} C";
     }
@@ -1408,18 +3979,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private async Task ReadFilesCoreAsync(CancellationToken cancellationToken)
     {
-        CancelBackgroundDownloads();
-        await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
-        _autoDownloadsPaused = false;
+        FileInfoProgressPercent = 0;
         IsBusy = true;
-        await _serialGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+        var gateHeld = false;
 
         try
         {
+            CancelBackgroundDownloads();
+            await AwaitBackgroundDownloadAsync().ConfigureAwait(true);
+            _autoDownloadsPaused = false;
+            await _serialGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+            gateHeld = true;
             Status = $"Waking gauge on {SelectedPort}";
             DeviceData device;
             GaugeFrame identity;
-            GaugeFileTable table;
+            GaugeFileTable? table = null;
+            V3GaugeCatalog? v3Catalog = null;
             await using (var connection = await OpenVerifiedConnectionAsync(
                 preferFast: IsGaugeConnected,
                 cancellationToken).ConfigureAwait(true))
@@ -1439,21 +4014,94 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 DeviceSummary = DescribeGauge(device);
                 DeviceDetails = BuildDeviceDetails(device, identity.Payload);
                 IsGaugeConnected = true;
+                _connectedPollMisses = 0;
                 _nextConnectedPollUtc = DateTime.UtcNow + ConnectedPollInterval;
                 ConnectionStatus = "Connected";
                 ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
                 RaiseDeviceInformationChanged();
 
-                Status = "Reading file table";
-                table = await service.ReadFileTableAsync(cancellationToken: cancellationToken).ConfigureAwait(true);
+                if (RequiresIncompleteEraseRecovery(device))
+                {
+                    EnterIncompleteEraseRecovery(device, identity.Payload);
+                    return;
+                }
+
+                IsFileInfoPageVisible = true;
+                Status = "Probing storage format";
+                var fileInfoProgress = new Progress<FileInfoReadProgress>(
+                    update => FileInfoProgressPercent = update.Percent);
+                var v3Service = new V3GaugeJobService(
+                    session,
+                    useMirror: device.MemoryMode == (byte)GaugeStorageMode.Mirror);
+                v3Catalog = await v3Service
+                    .DiscoverAsync(
+                        cancellationToken,
+                        fileInfoProgress,
+                        readCrashCapsule: false)
+                    .ConfigureAwait(true);
+                if (v3Catalog is not null)
+                {
+                    Status = "Checking for protected crash report";
+                    v3Catalog = await v3Service
+                        .DownloadCrashCapsuleIfAvailableAsync(
+                            v3Catalog,
+                            cancellationToken)
+                        .ConfigureAwait(true);
+                }
+
+                if (v3Catalog is null)
+                {
+                    Status = "Reading V2 file table";
+                    table = await service.ReadFileTableAsync(
+                            cancellationToken: cancellationToken,
+                            progress: fileInfoProgress)
+                        .ConfigureAwait(true);
+                }
             }
 
             _fileTable = table;
-            PopulateFiles(table);
-            FileSummary = Files.Count == 0 ? "No valid files found" : string.Empty;
+            _v3Catalog = v3Catalog;
+            if (v3Catalog?.CrashCapsule is { } crashCapsule)
+            {
+                try
+                {
+                    var deviceIdentity =
+                        $"{device.DeviceType}:{device.DeviceSerial}";
+                    _ = new CrashCapsuleReportStore(CrashCapsuleReportsPath)
+                        .SaveIfNew(deviceIdentity, crashCapsule);
+                }
+                catch (Exception ex) when (
+                    ex is IOException or UnauthorizedAccessException)
+                {
+                    Debug.WriteLine(
+                        $"Unable to save crash capsule report: {ex.Message}");
+                }
+            }
+            _externalMemoryKnownEmpty = v3Catalog is not null
+                ? v3Catalog.Recovery.Records.Count == 0 &&
+                  v3Catalog.RejectedRecords.Count == 0
+                : table is { Records.Count: 0 } &&
+                  table.EndOfFile.Value <= 0x00004000U;
+            if (v3Catalog is not null)
+            {
+                PopulateV3Files(v3Catalog);
+            }
+            else
+            {
+                PopulateFiles(table!);
+            }
+            FileSummary = v3Catalog?.RequiresMemoryService == true
+                ? $"{Files.Count} committed file(s) | Data recovered; memory service and complete erase required"
+                : Files.Count == 0
+                    ? "No committed files found"
+                : v3Catalog?.RejectedRecords.Count > 0
+                    ? $"{Files.Count} committed file(s); {v3Catalog.RejectedRecords.Count} uncommitted catalog reservation(s) ignored"
+                    : string.Empty;
             RaiseDeviceInformationChanged();
+            FileInfoProgressPercent = 100;
+            IsFileInfoPageVisible = false;
 
-            if (_calibration is null)
+            if (v3Catalog is null && _calibration is null)
             {
                 Status = "Capturing sensor calibration";
                 try
@@ -1477,8 +4125,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             }
 
             RaiseDeviceInformationChanged();
-            Status = Files.Count == 0
-                ? "Gauge connected; no files found"
+            Status = v3Catalog?.RequiresMemoryService == true
+                ? "Data recovered; memory service and complete erase required"
+                : Files.Count == 0
+                    ? "Gauge connected; no files found"
+                : v3Catalog is not null
+                    ? "Gauge connected; V3 catalog and committed headers validated"
                 : _calibration is null
                     ? "Gauge connected; downloading raw files"
                     : "Gauge connected; downloading files";
@@ -1493,11 +4145,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
         finally
         {
+            IsFileInfoPageVisible = false;
             IsBusy = false;
-            _serialGate.Release();
+            if (gateHeld)
+            {
+                _serialGate.Release();
+            }
         }
 
-        if (IsGaugeConnected && _fileTable is not null)
+        if (IsGaugeConnected && (_fileTable is not null || _v3Catalog is not null))
         {
             StartBackgroundDownloads();
         }
@@ -1521,7 +4177,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return;
         }
 
-        if (_fileTable is null)
+        if (_fileTable is null && _v3Catalog is null)
         {
             SetProtectedStatus("Read the gauge file table before downloading.");
             return;
@@ -1548,7 +4204,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         try
         {
-            await TryEnsureCalibrationAsync(cancellationToken).ConfigureAwait(true);
+            if (_v3Catalog is null)
+            {
+                await TryEnsureCalibrationAsync(cancellationToken).ConfigureAwait(true);
+            }
             if (!IsGaugeConnected)
             {
                 return;
@@ -1562,13 +4221,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 {
                     ShowFileGraph(requestedFile, downloaded.Samples);
                     SetProtectedStatus(
-                        $"Downloaded file {downloaded.Download.FileIndex} with {downloaded.Samples.Count} sample(s)",
+                        $"Downloaded file {downloaded.FileIndex} with {downloaded.Samples.Count} sample(s)",
                         TimeSpan.FromSeconds(20));
                 }
                 else
                 {
                     SetProtectedStatus(
-                        $"Downloaded raw file {downloaded.Download.FileIndex}; sensor calibration is unavailable",
+                        $"Downloaded raw file {downloaded.FileIndex}; sensor calibration is unavailable",
                         TimeSpan.FromSeconds(20));
                 }
             }
@@ -1624,10 +4283,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             try
             {
                 await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(true);
-                if (!IsPortConfigured
-                    || IsBusy
-                    || IsFirmwareRecoveryRequired
-                    || string.IsNullOrWhiteSpace(SelectedPort))
+                if (!IsPortConfigured || string.IsNullOrWhiteSpace(SelectedPort))
+                {
+                    _selectedPortMissingPolls = 0;
+                    continue;
+                }
+
+                if (!IsSelectedPortAvailable())
+                {
+                    _selectedPortMissingPolls++;
+                    if (_selectedPortMissingPolls >= PortRemovalPollLimit)
+                    {
+                        HandleSelectedPortRemoved(
+                            $"Serial adapter {SelectedPort} was disconnected");
+                    }
+                    continue;
+                }
+
+                _selectedPortMissingPolls = 0;
+                if (IsBusy || IsFirmwareRecoveryRequired)
                 {
                     continue;
                 }
@@ -1653,6 +4327,65 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
+    private bool IsSelectedPortAvailable()
+    {
+        try
+        {
+            return SerialPortDiscovery.GetPortNames()
+                .Contains(SelectedPort, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or
+                InvalidOperationException)
+        {
+            // A discovery failure is not proof that the adapter was removed.
+            return true;
+        }
+    }
+
+    private void HandleSelectedPortRemoved(string reason)
+    {
+        if (!IsPortConfigured)
+        {
+            return;
+        }
+
+        var removedPort = SelectedPort;
+        EndCommunicationSession();
+        CancelBackgroundDownloads();
+        _foregroundOperationCancellation?.Cancel();
+        _manualDownloadCancellation?.Cancel();
+        _sensorLiveCancellation?.Cancel();
+        _autoDownloadsPaused = true;
+        _selectedPortMissingPolls = 0;
+
+        IsFileInfoPageVisible = false;
+        IsEraseConfirmationVisible = false;
+        IsErasePageVisible = false;
+        IsEraseRecoveryRequired = false;
+        _eraseCompletedSuccessfully = false;
+        _pendingStorageMode = null;
+        _resumePrepareDeploymentAfterErase = false;
+        IsAppSettingsVisible = false;
+        IsGaugeSettingsVisible = false;
+        IsDiagnosticsVisible = false;
+        IsEngineeringModeVisible = false;
+        IsSensorLiveVisible = false;
+        IsPrepareDeploymentVisible = false;
+        IsGaugeConnected = false;
+        IsGraphVisible = false;
+        ClearRetainedGaugeData();
+
+        IsPortConfigured = false;
+        ConnectionStatus = "Serial adapter disconnected";
+        ConnectionBrush = new SolidColorBrush(Color.Parse("#CE0E2D"));
+        RefreshPorts();
+        Status = string.IsNullOrWhiteSpace(removedPort)
+            ? "Serial adapter disconnected"
+            : $"{reason}. Select a serial port";
+        RaiseDeviceInformationChanged();
+    }
+
     private async Task PollConnectionOnceAsync(CancellationToken cancellationToken)
     {
         ExpireRetainedSessionIfNeeded();
@@ -1672,8 +4405,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 cancellationToken).ConfigureAwait(true);
             if (identity is null)
             {
-                TransitionToDisconnected("Gauge did not respond to connection check");
+                _connectedPollMisses++;
+                if (_connectedPollMisses >= ConnectedPollMissLimit)
+                {
+                    TransitionToDisconnected(
+                        $"Gauge did not respond to {ConnectedPollMissLimit} consecutive connection checks");
+                }
+                else if (CanPollSetStatus())
+                {
+                    Status = $"Gauge connection check delayed ({_connectedPollMisses}/{ConnectedPollMissLimit})";
+                }
                 return;
+            }
+
+            _connectedPollMisses = 0;
+            var connectedDevice = DecodeDevice(identity.Payload);
+            if (connectedDevice is not null && RequiresIncompleteEraseRecovery(connectedDevice))
+            {
+                EnterIncompleteEraseRecovery(connectedDevice, identity.Payload);
+                return;
+            }
+            if (connectedDevice is not null)
+            {
+                _connectedDevice = connectedDevice;
+                DeviceSummary = DescribeGauge(connectedDevice);
+                DeviceDetails = BuildDeviceDetails(connectedDevice, identity.Payload);
+                RaiseDeviceInformationChanged();
             }
 
             if (CanPollSetStatus())
@@ -1694,6 +4451,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         {
             StartCommunicationSession();
             var device = DecodeDevice(slowIdentity.Payload);
+            if (device is not null && RequiresIncompleteEraseRecovery(device))
+            {
+                ClearRetainedGaugeData();
+                await Task.Delay(FastVerifyDelay).ConfigureAwait(true);
+                EnterIncompleteEraseRecovery(device, slowIdentity.Payload);
+                return;
+            }
+
             if (device is not null && CanRestoreRetainedSession(device))
             {
                 RestoreRetainedSession(device, slowIdentity.Payload);
@@ -1721,11 +4486,24 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         bool retainGaugeData = true,
         bool cancelActiveOperations = true)
     {
+        if (!IsPortConfigured)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(SelectedPort) &&
+            !IsSelectedPortAvailable())
+        {
+            HandleSelectedPortRemoved(reason);
+            return;
+        }
+
         EndCommunicationSession();
         if (cancelActiveOperations)
         {
             CancelBackgroundDownloads();
             _manualDownloadCancellation?.Cancel();
+            _sensorLiveCancellation?.Cancel();
         }
 
         if (retainGaugeData && _connectedDevice is not null)
@@ -1739,7 +4517,16 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             ClearRetainedGaugeData();
         }
 
+        IsFileInfoPageVisible = false;
+        IsEraseConfirmationVisible = false;
+        IsErasePageVisible = false;
+        IsEraseRecoveryRequired = false;
+        _eraseCompletedSuccessfully = false;
+        _pendingStorageMode = null;
+        _resumePrepareDeploymentAfterErase = false;
+        IsPrepareDeploymentVisible = false;
         IsGaugeConnected = false;
+        _connectedPollMisses = 0;
         _nextConnectedPollUtc = DateTime.MinValue;
         IsGraphVisible = false;
         DeviceSummary = _retainedDeviceSerial.HasValue
@@ -1757,7 +4544,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         bool preferFast,
         CancellationToken cancellationToken = default,
         int transactionTimeoutMs = DataTransactionTimeoutMs,
-        int transactionDeadlineMs = DataTransactionDeadlineMs)
+        int transactionDeadlineMs = DataTransactionDeadlineMs,
+        int wakeScanTimeoutMs = WakeScanTimeoutMs)
     {
         if (preferFast)
         {
@@ -1781,7 +4569,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         var slowIdentity = await WaitForIdentifyAsync(
             SelectedPort,
             WakeBaud,
-            WakeScanTimeoutMs,
+            wakeScanTimeoutMs,
             WakePollIntervalMs,
             WakeTransactionTimeoutMs,
             cancellationToken).ConfigureAwait(true);
@@ -1939,20 +4727,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         string portName,
         int baudRate,
         int timeoutMs,
-        int transactionDeadlineMs = DataTransactionDeadlineMs)
+        int transactionDeadlineMs = DataTransactionDeadlineMs,
+        int maximumAttempts = 3)
     {
         return new SerialGaugeTransport(new SerialGaugeTransportOptions(
             portName,
             baudRate,
             ReadTimeoutMs: timeoutMs,
             WriteTimeoutMs: timeoutMs,
+            MaxAttempts: maximumAttempts,
             TransactionTimeoutMs: transactionDeadlineMs,
             EventSink: RecordCommunicationEvent));
     }
 
     private void StartBackgroundDownloads()
     {
-        if (_autoDownloadsPaused || !IsGaugeConnected || _fileTable is null || Files.Count == 0)
+        if (_autoDownloadsPaused ||
+            !IsGaugeConnected ||
+            (_fileTable is null && _v3Catalog is null) ||
+            Files.Count == 0)
         {
             return;
         }
@@ -1997,6 +4790,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     }
                     catch (Exception ex)
                     {
+                        if (ex is InvalidDataException or FormatException or
+                            InvalidOperationException or OverflowException)
+                        {
+                            failedFileCount++;
+                            file.MarkError(ex.Message);
+                            break;
+                        }
+
                         var stillConnected = await VerifyGaugeAfterDownloadFailureAsync(
                             file,
                             cancellationToken).ConfigureAwait(true);
@@ -2165,6 +4966,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 samples.Count(sample => sample.BatteryStatus != 0),
                 summary);
         }
+
+        RaiseDiagnosticsChanged();
     }
 
     private async Task<DownloadedGaugeFile?> DownloadFileRowAsync(
@@ -2172,6 +4975,73 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         bool manual,
         CancellationToken cancellationToken)
     {
+        if (_v3Catalog is not null)
+        {
+            if (file.V3Download is not null && file.Samples is not null)
+            {
+                return new DownloadedGaugeFile(file.Index, file.Samples);
+            }
+
+            await _serialGate.WaitAsync(cancellationToken).ConfigureAwait(true);
+            try
+            {
+                _activeDownload = file;
+                file.MarkDownloading();
+                var timer = Stopwatch.StartNew();
+                var progress = new Progress<MemoryReadProgress>(value =>
+                {
+                    file.CapturePartialRaw(value);
+                    file.MarkProgress(value, timer.Elapsed);
+                    if (manual)
+                    {
+                        UpdateDownloadProgress(value, timer.Elapsed);
+                    }
+                });
+                await using var connection = await OpenVerifiedConnectionAsync(
+                    preferFast: true,
+                    cancellationToken).ConfigureAwait(true);
+                var download = await new V3GaugeJobService(
+                        new GaugeSession(connection.Transport),
+                        useMirror: _v3Catalog.UsesMirror)
+                    .DownloadFileAsync(_v3Catalog, file.Index, cancellationToken, progress)
+                    .ConfigureAwait(true);
+                var samples = V3GaugeJobService.BuildCalibratedSamples(download);
+                file.MarkV3Downloaded(download, samples);
+                RaiseDiagnosticsChanged();
+                SetProtectedStatus(
+                    download.RequiresMemoryService
+                        ? "Data recovered; memory service and complete erase required"
+                        : $"V3 file {file.Index}: {samples.Count:N0} calibrated sample(s), {download.CorrectedPageCount:N0} corrected page(s)",
+                    TimeSpan.FromSeconds(30));
+                RaiseCommandStates();
+                if (!manual && IsGraphVisible && ReferenceEquals(SelectedFile, file))
+                {
+                    RefreshFileGraph(file, samples);
+                }
+
+                return new DownloadedGaugeFile(file.Index, samples);
+            }
+            catch (OperationCanceledException)
+            {
+                file.MarkCancelled();
+                throw;
+            }
+            catch (Exception ex) when (IsExpectedUiFailure(ex))
+            {
+                file.MarkError(ex.Message);
+                throw;
+            }
+            finally
+            {
+                if (ReferenceEquals(_activeDownload, file))
+                {
+                    _activeDownload = null;
+                }
+
+                _serialGate.Release();
+            }
+        }
+
         if (_fileTable is null)
         {
             return null;
@@ -2192,7 +5062,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     summary);
             }
 
-            return new DownloadedGaugeFile(file.Download, file.Samples ?? []);
+            return new DownloadedGaugeFile(file.Download.FileIndex, file.Samples ?? []);
         }
 
         await _serialGate.WaitAsync(cancellationToken).ConfigureAwait(true);
@@ -2285,13 +5155,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                     batteryWarningCount: samples.Count(sample => sample.BatteryStatus != 0),
                     finalRecordSummary);
             }
+            RaiseDiagnosticsChanged();
             RaiseCommandStates();
             if (!manual && IsGraphVisible && ReferenceEquals(SelectedFile, file))
             {
                 RefreshFileGraph(file, samples);
             }
 
-            return new DownloadedGaugeFile(download, samples);
+            return new DownloadedGaugeFile(download.FileIndex, samples);
         }
         catch (OperationCanceledException)
         {
@@ -2397,6 +5268,40 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         SelectedFile = Files.FirstOrDefault();
     }
 
+    private void PopulateV3Files(V3GaugeCatalog catalog)
+    {
+        Files.Clear();
+        var sizes = catalog.Files
+            .Select(file => checked((int)file.DataLength))
+            .ToArray();
+        var largest = sizes.Length == 0 ? 0 : sizes.Max();
+        foreach (var file in catalog.Files)
+        {
+            var bytes = sizes[file.Index];
+            var estimatedSamples = file.IsLatest &&
+                !catalog.Summary.SampleCountRequiresRecovery
+                    ? checked((int)catalog.Summary.SamplesCommitted)
+                    : 0;
+            var row = new GaugeFileRowViewModel(
+                file.Index,
+                bytes,
+                estimatedSamples,
+                file.CatalogRecord.NominalInterval,
+                (long)estimatedSamples * file.CatalogRecord.NominalInterval,
+                FormatBytes(bytes),
+                largest == 0 ? 0 : Math.Max(4, bytes * 100.0 / largest),
+                true);
+            row.ConfigureV3(
+                file,
+                catalog.Recovery.SelectedReplicaId,
+                catalog.RequiresMemoryService);
+            Files.Add(row);
+        }
+
+        ApplyFileSort();
+        SelectedFile = Files.FirstOrDefault();
+    }
+
     private void ApplyFileSort()
     {
         var selectedIndex = SelectedFile?.Index;
@@ -2476,9 +5381,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         _foregroundOperationCancellation?.Cancel();
         _manualDownloadCancellation?.Cancel();
+        _sensorLiveCancellation?.Cancel();
         CancelBackgroundDownloads();
 
-        var tasks = new[] { _foregroundOperationTask, _backgroundDownloadTask }
+        var tasks = new[]
+            {
+                _foregroundOperationTask,
+                _backgroundDownloadTask,
+                _sensorLiveTask
+            }
             .Where(task => task is not null)
             .Cast<Task>()
             .Distinct()
@@ -2522,6 +5433,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _manualDownloadCancellation?.Dispose();
         _backgroundDownloadCancellation?.Dispose();
         _foregroundOperationCancellation?.Dispose();
+        _sensorLiveCancellation?.Dispose();
         _pollingCancellation.Dispose();
         _serialGate.Dispose();
     }
@@ -2661,7 +5573,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         return DateTime.UtcNow <= _retainedSessionUntilUtc
             && _retainedDeviceSerial == device.DeviceSerial
             && string.Equals(_retainedPort, SelectedPort, StringComparison.OrdinalIgnoreCase)
-            && _fileTable is not null;
+            && (_fileTable is not null || _v3Catalog is not null);
     }
 
     private void RestoreRetainedSession(DeviceData device, byte[] identityPayload)
@@ -2670,6 +5582,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         DeviceSummary = DescribeGauge(device);
         DeviceDetails = BuildDeviceDetails(device, identityPayload);
         IsGaugeConnected = true;
+        _connectedPollMisses = 0;
         ConnectionStatus = "Connected";
         ConnectionBrush = new SolidColorBrush(Color.Parse("#2DA55D"));
         _nextConnectedPollUtc = DateTime.UtcNow + ConnectedPollInterval;
@@ -2705,6 +5618,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         SelectedFile = null;
         _connectedDevice = null;
         _fileTable = null;
+        _v3Catalog = null;
+        _externalMemoryKnownEmpty = false;
+        _pendingStorageMode = null;
         _calibration = null;
         _calibrationFailure = null;
         ResetReview();
@@ -2780,16 +5696,17 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             return "Gauge connected";
         }
 
-        return $"Connected | Device {device.DeviceSerial} | Firmware {device.FirmwareMajor}.{device.FirmwareMinor}";
+        return $"Connected | Device {device.DeviceSerial} | Firmware {device.FirmwareVersion}";
     }
 
     private static string DescribeDeviceType(uint deviceType)
     {
         return deviceType switch
         {
-            100200 => "Northstar Acoustic Quartz Transducer",
-            100230 => "Northstar 4000AH Quartz Transducer",
-            _ => "Northstar Quartz Transducer"
+            100196 => "Constellation Q177",
+            100160 or 100230 => "Constellation Q150",
+            100187 or 100200 => "Constellation Acoustic Quartz Gauge",
+            _ => $"Gauge Type {deviceType}"
         };
     }
 
@@ -2805,7 +5722,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         builder.AppendLine($"Device serial: {device.DeviceSerial}");
         builder.AppendLine($"PCB type: {device.PcbType}");
         builder.AppendLine($"PCB serial: {device.PcbSerial}");
-        builder.AppendLine($"Firmware: {device.FirmwareMajor}.{device.FirmwareMinor}");
+        builder.AppendLine($"Firmware: {device.FirmwareVersion}");
         builder.AppendLine($"Measurement interval: {device.MeasurementInterval}");
         builder.AppendLine($"Memory mode: {device.MemoryMode}");
         builder.AppendLine($"Erase status: {device.EraseStatus}");
@@ -2882,6 +5799,27 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         return $"{elapsed.TotalSeconds:F0} sec";
     }
 
+    private static string FormatReviewElapsedTime(double elapsedSeconds)
+    {
+        var elapsed = TimeSpan.FromSeconds(Math.Max(0, elapsedSeconds));
+        if (elapsed.TotalDays >= 1)
+        {
+            return $"{(int)elapsed.TotalDays}d {elapsed.Hours:00}h {elapsed.Minutes:00}m";
+        }
+
+        if (elapsed.TotalHours >= 1)
+        {
+            return $"{(int)elapsed.TotalHours}h {elapsed.Minutes:00}m {elapsed.Seconds:00}s";
+        }
+
+        if (elapsed.TotalMinutes >= 1)
+        {
+            return $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds:00}s";
+        }
+
+        return $"{elapsed.TotalSeconds:F0}s";
+    }
+
     private static bool IsExpectedUiFailure(Exception ex)
     {
         return ex is TimeoutException
@@ -2893,6 +5831,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void RaiseCommandStates()
     {
+        OnPropertyChanged(nameof(CanOpenSensorLive));
         if (StartCommand is RelayCommand start)
         {
             start.RaiseCanExecuteChanged();
@@ -2928,7 +5867,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             closeSettings.RaiseCanExecuteChanged();
         }
 
+        if (OpenDiagnosticsCommand is RelayCommand diagnostics)
+        {
+            diagnostics.RaiseCanExecuteChanged();
+        }
+
         RaiseFirmwareCommandStates();
+        RaiseEraseCommandStates();
+        RaiseSensorLiveCommandStates();
     }
 
     private void RaiseFirmwareCommandStates()
@@ -2943,14 +5889,60 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             recover.RaiseCanExecuteChanged();
         }
 
-        if (ConfirmFirmwareActionCommand is RelayCommand confirm)
+        if (CheckFirmwareUpdatesCommand is RelayCommand check)
+        {
+            check.RaiseCanExecuteChanged();
+        }
+    }
+
+    private void RaiseEraseCommandStates()
+    {
+        if (BeginMemoryEraseCommand is RelayCommand begin)
+        {
+            begin.RaiseCanExecuteChanged();
+        }
+
+        if (ConfirmMemoryEraseCommand is RelayCommand confirm)
         {
             confirm.RaiseCanExecuteChanged();
         }
 
-        if (CancelFirmwareConfirmationCommand is RelayCommand cancel)
+        if (CancelMemoryEraseCommand is RelayCommand cancel)
         {
             cancel.RaiseCanExecuteChanged();
+        }
+
+        if (CloseMemoryEraseCommand is RelayCommand close)
+        {
+            close.RaiseCanExecuteChanged();
+        }
+    }
+
+    private void RaiseSensorLiveCommandStates()
+    {
+        if (OpenSensorLiveCommand is RelayCommand open)
+        {
+            open.RaiseCanExecuteChanged();
+        }
+
+        if (OpenPrepareDeploymentCommand is RelayCommand prepare)
+        {
+            prepare.RaiseCanExecuteChanged();
+        }
+
+        if (StartSensorLiveCommand is RelayCommand start)
+        {
+            start.RaiseCanExecuteChanged();
+        }
+
+        if (StopSensorLiveCommand is RelayCommand stop)
+        {
+            stop.RaiseCanExecuteChanged();
+        }
+
+        if (DeploymentReadingsYesCommand is RelayCommand deploymentConfirm)
+        {
+            deploymentConfirm.RaiseCanExecuteChanged();
         }
     }
 
@@ -2975,9 +5967,47 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         OnPropertyChanged(nameof(EngineeringFileTable));
         OnPropertyChanged(nameof(EngineeringCalibration));
         OnPropertyChanged(nameof(EngineeringDeviceDetails));
+        RaiseGaugeConfigurationChanged();
         RaiseFirmwareCommandStates();
         RaiseEngineeringCommunicationChanged();
+        RaiseDiagnosticsChanged();
     }
+
+    private void RaiseDiagnosticsChanged()
+    {
+        OnPropertyChanged(nameof(DiagnosticsFileSummary));
+        OnPropertyChanged(nameof(DiagnosticsGaugeHealth));
+        OnPropertyChanged(nameof(DiagnosticsGaugeHealthBrush));
+        OnPropertyChanged(nameof(DiagnosticsLastEventTitle));
+        OnPropertyChanged(nameof(DiagnosticsLastEventDetail));
+        OnPropertyChanged(nameof(DiagnosticsLastEventBrush));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleTitle));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleDetail));
+        OnPropertyChanged(nameof(HasDownloadedCrashCapsule));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleGeneration));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleBootId));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleState));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleEvent));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleFault));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleFile));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleCommittedSamples));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleRawRcon));
+        OnPropertyChanged(nameof(DiagnosticsCapsuleBrush));
+        OnPropertyChanged(nameof(DiagnosticsTechnicalDetail));
+    }
+
+    private static IBrush DiagnosticBrush(GaugeDiagnosticLevel level) =>
+        level switch
+        {
+            GaugeDiagnosticLevel.Normal => DiagnosticNormalBrush,
+            GaugeDiagnosticLevel.Warning => DiagnosticWarningBrush,
+            _ => DiagnosticAdvisoryBrush
+        };
+
+    private static string UppercaseFirst(string value) =>
+        string.IsNullOrEmpty(value)
+            ? value
+            : char.ToUpper(value[0], CultureInfo.CurrentCulture) + value[1..];
 
     private void StartCommunicationSession()
     {
@@ -2994,6 +6024,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private void RecordCommunicationEvent(SerialGaugeTransportEvent value)
     {
         _communicationEvents.Record(value);
+        if (value.Kind is SerialGaugeTransportEventKind.Retry
+            or SerialGaugeTransportEventKind.Failed
+            or SerialGaugeTransportEventKind.OpenFailed)
+        {
+            try
+            {
+                lock (_diagnosticsSync)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(DiagnosticsPath)!);
+                    File.AppendAllText(
+                        DiagnosticsPath,
+                        $"{value.TimestampUtc:O}\t{value.Kind}\t{value.PortName}\t{value.BaudRate}\t{value.Command}\t{value.Attempt}/{value.MaximumAttempts}\t{value.FailureKind}\t{value.ErrorType}\t{value.Message}{Environment.NewLine}");
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Diagnostics must never alter serial behaviour.
+            }
+        }
+
         if (Interlocked.Exchange(ref _communicationRefreshPending, 1) == 0)
         {
             _ = RefreshEngineeringCommunicationAsync();
@@ -3063,7 +6113,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return new AppSettings();
             }
 
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
+            var json = File.ReadAllText(SettingsPath);
+            var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty(nameof(AppSettings.IgnoreSmallFiles), out _)
+                ? settings
+                : settings with { IgnoreSmallFiles = true };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -3091,13 +6146,9 @@ public sealed record AppSettings(
     string LastRecordExportDirectory = "",
     string LastSupportBundleDirectory = "",
     string LastFirmwareDirectory = "",
-    NorthstarActivitySpeed DisconnectedAnimationSpeed = NorthstarActivitySpeed.Slow);
-
-internal enum FirmwareAction
-{
-    Program,
-    Recover
-}
+    string FirmwareCatalogUrl = MainWindowViewModel.DefaultFirmwareCatalogUrl,
+    NorthstarActivitySpeed DisconnectedAnimationSpeed = NorthstarActivitySpeed.Slow,
+    bool IgnoreSmallFiles = true);
 
 public enum FileListSortColumn
 {
@@ -3117,7 +6168,7 @@ public sealed record SerialPortOption(
 }
 
 public sealed record DownloadedGaugeFile(
-    GaugeMemoryDownload Download,
+    int FileIndex,
     IReadOnlyList<CalibratedGaugeSample> Samples);
 
 public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
@@ -3146,7 +6197,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         int index,
         int bytes,
         int estimatedSamples,
-        ushort measurementInterval,
+        uint measurementInterval,
         long estimatedDurationSeconds,
         string size,
         double sizePercent,
@@ -3171,7 +6222,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public int EstimatedSamples { get; }
 
-    public ushort MeasurementInterval { get; }
+    public uint MeasurementInterval { get; }
 
     public string Interval => MeasurementInterval == 1 ? "1 sec" : $"{MeasurementInterval} sec";
 
@@ -3189,17 +6240,36 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public bool IsCrcValid { get; }
 
-    public bool IsDownloaded => Download is not null;
+    public bool IsDownloaded => Download is not null || V3Download is not null;
 
     public bool CanExportRecord => IsDownloaded && HasPlotData;
 
-    public bool CanExportRaw => IsRawOnly;
+    public bool CanExportRaw => V3Download is not null || IsRawOnly;
 
-    public bool IsRawOnly => Download is not null && Samples is null;
+    public bool IsRawOnly =>
+        (V3Download is not null || Download is not null) &&
+        Samples is null;
 
     public bool HasPlotData => Samples is { Count: >= 2 };
 
     public GaugeMemoryDownload? Download { get; private set; }
+
+    public V3GaugeDownload? V3Download { get; private set; }
+
+    public SensorCalibrationBundle? V3Calibration { get; private set; }
+
+    public ReadOnlyMemory<byte> RawExportBytes =>
+        V3Download?.SelectedRawBytes ?? Download?.RawBytes ?? [];
+
+    public string V3FileIdentity { get; private set; } = string.Empty;
+
+    public string V3CatalogReplica { get; private set; } = string.Empty;
+
+    public string V3HeaderReplica { get; private set; } = string.Empty;
+
+    public bool IsV3 { get; private set; }
+
+    public bool V3RequiresMemoryService { get; private set; }
 
     public IReadOnlyList<CalibratedGaugeSample>? Samples { get; private set; }
 
@@ -3322,6 +6392,19 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         ? ErrorBrush
         : HasWarnings ? WarningBrush : ReadyBrush;
 
+    public string DataQualitySummary => State switch
+    {
+        "Downloading" => "Download in progress",
+        "Downloaded" when HasErrors => "Data errors found",
+        "Downloaded" when HasWarnings => "Warnings require review",
+        "Downloaded" => "No errors",
+        "Raw downloaded" => "Calibration unavailable",
+        "Error" => "Download failed",
+        "Cancelled" => "Download cancelled",
+        "Interrupted" => "Download interrupted",
+        _ => "Not yet inspected"
+    };
+
     public string DataQualityDetail
     {
         get
@@ -3330,6 +6413,68 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
             if (!IsCrcValid)
             {
                 details.Add("File CRC error");
+            }
+
+            if (IsV3)
+            {
+                details.Add("File information and calibration validated");
+            }
+
+            if (V3Download is not null)
+            {
+                details.Add("File structure valid");
+                details.Add($"Page checksum valid on {V3Download.Pages.Count(page => page.Selected.IsCrcValid):N0}/{V3Download.Pages.Count:N0} inspected page(s)");
+                details.Add($"{V3Download.CorrectedPageCount:N0} corrected page(s); raw primary bytes retained");
+                details.Add(V3Download.UsesMirror
+                    ? V3Download.MirrorPageReadCount == 0
+                        ? "Mirror not inspected (primary passed host validation)"
+                        : $"Mirror read for {V3Download.MirrorPageReadCount:N0} failed primary page(s)"
+                    : "Full-capacity mode; no mirror replica");
+                if (V3Download.HasMirrorDivergence)
+                {
+                    details.Add("mirror degraded/divergent");
+                }
+                if (V3Download.RequiresMemoryService)
+                {
+                    details.Add("Data recovered; memory service and complete erase required");
+                }
+
+                if (V3Download.MissingSampleCount > 0)
+                {
+                    details.Add(
+                        $"{V3Download.MissingSampleCount:N0} scheduled sensor reading{(V3Download.MissingSampleCount == 1 ? string.Empty : "s")} missing");
+                }
+
+                if (V3Download.PageSequenceGaps.Count > 0)
+                {
+                    details.Add(
+                        $"{V3Download.PageSequenceGaps.Count:N0} missing data page{(V3Download.PageSequenceGaps.Count == 1 ? string.Empty : "s")} " +
+                        $"(sequence {string.Join(", ", V3Download.PageSequenceGaps.Take(8))}" +
+                        $"{(V3Download.PageSequenceGaps.Count > 8 ? ", ..." : string.Empty)})");
+                }
+
+                if (V3Download.SampleSequenceGaps.Count > 0)
+                {
+                    details.Add(
+                        $"{V3Download.SampleSequenceGaps.Count:N0} sample-sequence gap{(V3Download.SampleSequenceGaps.Count == 1 ? string.Empty : "s")}");
+                }
+
+                foreach (var page in V3Download.Pages.Where(page => page.Selected.Status == V3PageStatus.Corrected))
+                {
+                    details.Add(
+                        $"0x{page.Address:X8} replica {page.SelectedReplicaId} corrected bits [{string.Join(',', page.Selected.CorrectedBitLocations)}]");
+                }
+
+                if (V3Download.UncorrectablePageCount > 0)
+                {
+                    details.Add($"{V3Download.UncorrectablePageCount:N0} uncorrectable page(s)");
+                }
+
+                foreach (var page in V3Download.Pages.Where(page => !page.Selected.IsAccepted))
+                {
+                    details.Add(
+                        $"0x{page.Address:X8} {page.Selected.Status}: {page.Selected.StructuralFailure}");
+                }
             }
 
             if (CrcErrorCount > 0)
@@ -3370,6 +6515,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     public void MarkDownloading()
     {
         Download = null;
+        V3Download = null;
         Samples = null;
         SampleCount = 0;
         BatteryWarningCount = 0;
@@ -3391,6 +6537,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     public void MarkQueued()
     {
         Download = null;
+        V3Download = null;
         Samples = null;
         SampleCount = 0;
         BatteryWarningCount = 0;
@@ -3532,6 +6679,66 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         RaisePresentationChanged();
     }
 
+    public void ConfigureV3(
+        V3GaugeFile file,
+        int selectedCatalogReplica,
+        bool requiresMemoryService = false)
+    {
+        IsV3 = true;
+        V3FileIdentity = $"0x{file.CatalogRecord.FileId:X8}";
+        V3CatalogReplica = selectedCatalogReplica.ToString();
+        V3HeaderReplica = file.HeaderReplicaId.ToString();
+        V3RequiresMemoryService = requiresMemoryService;
+        HasWarnings = requiresMemoryService;
+        V3Calibration = V3GaugeJobService.GetCalibrationBundle(file.Header);
+        OnPropertyChanged(nameof(V3FileIdentity));
+        OnPropertyChanged(nameof(V3CatalogReplica));
+        OnPropertyChanged(nameof(V3HeaderReplica));
+        OnPropertyChanged(nameof(V3RequiresMemoryService));
+        OnPropertyChanged(nameof(IsV3));
+        RaisePresentationChanged();
+    }
+
+    public void MarkV3Downloaded(
+        V3GaugeDownload download,
+        IReadOnlyList<CalibratedGaugeSample> samples)
+    {
+        V3Download = download;
+        Download = null;
+        Samples = samples;
+        ClearPartialRaw();
+        SampleCount = samples.Count;
+        CrcErrorCount = download.Pages.Count(page => !page.Selected.IsCrcValid);
+        BatteryWarningCount = 0;
+        HasWarnings =
+            download.CorrectedPageCount > 0 ||
+            download.MissingSampleCount > 0 ||
+            download.IsIncomplete ||
+            download.HasMirrorDivergence ||
+            download.RequiresMemoryService;
+        HasErrors = download.UncorrectablePageCount > 0 || CrcErrorCount > 0;
+        Duration = samples.Count <= 1
+            ? FormatFileDuration(0)
+            : FormatFileDuration(checked((long)Math.Round(
+                (double.IsNaN(samples[^1].ExactTimestampSeconds)
+                    ? samples[^1].Timestamp
+                    : samples[^1].ExactTimestampSeconds) -
+                (double.IsNaN(samples[0].ExactTimestampSeconds)
+                    ? samples[0].Timestamp
+                    : samples[0].ExactTimestampSeconds))));
+        ProgressPercent = 100;
+        ProgressText = "100%";
+        State = "Downloaded";
+        OnPropertyChanged(nameof(IsDownloaded));
+        OnPropertyChanged(nameof(IsRawOnly));
+        OnPropertyChanged(nameof(CanExportRecord));
+        OnPropertyChanged(nameof(CanExportRaw));
+        OnPropertyChanged(nameof(RawExportBytes));
+        OnPropertyChanged(nameof(Samples));
+        OnPropertyChanged(nameof(HasPlotData));
+        RaisePresentationChanged();
+    }
+
     public void MarkError(string message)
     {
         State = "Error";
@@ -3655,6 +6862,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(ActionBrush));
         OnPropertyChanged(nameof(StatusBrush));
         OnPropertyChanged(nameof(DataQualityBrush));
+        OnPropertyChanged(nameof(DataQualitySummary));
         OnPropertyChanged(nameof(DataQualityDetail));
         OnPropertyChanged(nameof(ActionToolTip));
     }
@@ -3677,6 +6885,34 @@ public sealed record SampleRowViewModel(
     string Timestamp,
     string Crc);
 
+public sealed record SampleIntervalOption(string Label, ushort? Seconds)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record StorageModeOption(string Label, GaugeStorageMode Mode)
+{
+    public override string ToString() => Label;
+}
+
+public sealed record DeploymentJobLengthOption(string Label, TimeSpan Duration)
+{
+    public override string ToString() => Label;
+}
+
+internal enum DeploymentPreparationStep
+{
+    EraseChoice,
+    Configuration,
+    SensorCheck,
+    Ready,
+    NotFit
+}
+
+internal sealed record SensorLivePlotPoint(
+    TimeSpan Elapsed,
+    DecodedSensorLiveReading Reading);
+
 public sealed record ChartDataSet(
     double[] ElapsedSeconds,
     double[] Pressure,
@@ -3696,12 +6932,17 @@ public sealed record ChartDataSet(
         var elapsedSeconds = new double[samples.Count];
         var pressure = new double[samples.Count];
         var temperature = new double[samples.Count];
-        var startTimestamp = samples[0].Timestamp;
+        var startTimestamp = double.IsNaN(samples[0].ExactTimestampSeconds)
+            ? samples[0].Timestamp
+            : samples[0].ExactTimestampSeconds;
 
         for (var index = 0; index < samples.Count; index++)
         {
             var sample = samples[index];
-            elapsedSeconds[index] = sample.Timestamp - startTimestamp;
+            var timestamp = double.IsNaN(sample.ExactTimestampSeconds)
+                ? sample.Timestamp
+                : sample.ExactTimestampSeconds;
+            elapsedSeconds[index] = timestamp - startTimestamp;
             pressure[index] = sample.Pressure;
             temperature[index] = sample.Temperature;
         }

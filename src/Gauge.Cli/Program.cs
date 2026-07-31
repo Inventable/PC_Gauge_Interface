@@ -14,8 +14,12 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("Commands:");
     Console.WriteLine("  list-ports        List serial ports visible to .NET.");
     Console.WriteLine("  encode-identify   Print the legacy wire bytes for an IDENTIFY request.");
+    Console.WriteLine("  inspect-v3 <data|header|catalog> <raw-image>");
+    Console.WriteLine("  extract-v3-data <raw-image> <output-csv>");
     Console.WriteLine("  probe-identify-raw <port> [baud] [listen-ms]");
     Console.WriteLine("  identify <port> [baud]");
+    Console.WriteLine("  erase-status <port> [baud] [timeout-ms] [deadline-ms]");
+    Console.WriteLine("  probe-storage <port> [baud] [timeout-ms] [deadline-ms]");
     Console.WriteLine("  scan-identify [baud|auto] [seconds]");
     Console.WriteLine("  wait-identify <port> [baud] [seconds] [interval-ms]");
     Console.WriteLine("  verify-serial <port> [slow-baud] [fast-baud] [delay-ms]");
@@ -30,6 +34,7 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  list-files <port> [baud] [table-bytes] [chunk-bytes]");
     Console.WriteLine("  download-file <port> <file-index> <output-path> [baud] [chunk-bytes]");
     Console.WriteLine("  download-latest-calibrated <port> <output-dir> [baud] [chunk-bytes]");
+    Console.WriteLine("  sensor-live-smoke <port> [baud] [seconds]");
     Console.WriteLine("  decode-raw <input-path> [start-address] [measurement-interval] [count-bias]");
     Console.WriteLine("  export-raw-csv <input-path> <output-path> [start-address] [measurement-interval] [count-bias]");
     Console.WriteLine("  export-calibrated-csv <input-path> <output-path> <sensor-header-path> <pressure-poly-path> <temperature-poly-path> [start-address] [measurement-interval]");
@@ -41,6 +46,67 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     Console.WriteLine("  read-temperature-poly <port> [baud]");
     Console.WriteLine();
     return 0;
+}
+
+if (args[0] == "inspect-v3")
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("Usage: inspect-v3 <data|header|catalog> <raw-image>");
+        return 1;
+    }
+
+    try
+    {
+        var bytes = await File.ReadAllBytesAsync(args[2], CancellationToken.None).ConfigureAwait(false);
+        IReadOnlyList<string> lines = args[1] switch
+        {
+            "data" => V3CsvInspector.InspectData(bytes),
+            "header" => V3CsvInspector.InspectHeader(bytes),
+            "catalog" => V3CsvInspector.InspectCatalog(bytes),
+            _ => throw new ArgumentException($"Unknown V3 inspection mode '{args[1]}'.")
+        };
+        foreach (var line in lines)
+        {
+            Console.WriteLine(line);
+        }
+
+        return 0;
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or IOException)
+    {
+        Console.Error.WriteLine($"V3 inspection failed: {ex.Message}");
+        return 2;
+    }
+}
+
+if (args[0] == "extract-v3-data")
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("Usage: extract-v3-data <raw-image> <output-csv>");
+        return 1;
+    }
+
+    try
+    {
+        var bytes = await File.ReadAllBytesAsync(args[1], CancellationToken.None).ConfigureAwait(false);
+        var lines = V3CsvInspector.InspectData(bytes);
+        var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(args[2]));
+        if (!string.IsNullOrEmpty(outputDirectory))
+        {
+            Directory.CreateDirectory(outputDirectory);
+        }
+
+        await File.WriteAllLinesAsync(args[2], lines, CancellationToken.None).ConfigureAwait(false);
+        Console.WriteLine($"Wrote {lines.Count - 1} V3 sample/page row(s) to {args[2]}.");
+        return 0;
+    }
+    catch (Exception ex) when (ex is InvalidDataException or ArgumentException or IOException)
+    {
+        Console.Error.WriteLine($"V3 extraction failed: {ex.Message}");
+        return 2;
+    }
 }
 
 if (args[0] == "list-ports")
@@ -95,6 +161,122 @@ if (args[0] == "identify")
     }
     
     PrintIdentifyResult(portName, baudRate, reply);
+    return 0;
+}
+
+if (args[0] == "erase-status")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: erase-status <port> [baud] [timeout-ms] [deadline-ms]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    var timeoutMs = args.Length >= 4 ? int.Parse(args[3]) : 2000;
+    var deadlineMs = args.Length >= 5 ? int.Parse(args[4]) : 7000;
+    await using var transport = new SerialGaugeTransport(new SerialGaugeTransportOptions(
+        portName,
+        baudRate,
+        ReadTimeoutMs: timeoutMs,
+        WriteTimeoutMs: timeoutMs,
+        TransactionTimeoutMs: deadlineMs));
+    await transport.OpenAsync(CancellationToken.None).ConfigureAwait(false);
+    var session = new GaugeSession(transport);
+    var before = DeviceData.DecodeMemoryGauge(
+        (await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false)).Payload);
+    var reply = await session
+        .SendCommandAsync(GaugeCommand.GetEraseProgress, CancellationToken.None)
+        .ConfigureAwait(false);
+    var status = ExternalEraseStatus.Parse(reply.Payload);
+    var after = DeviceData.DecodeMemoryGauge(
+        (await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false)).Payload);
+    Console.WriteLine($"Device: {before.DeviceSerial}");
+    Console.WriteLine($"Interlock before: {before.EraseStatus.GetValueOrDefault()}");
+    Console.WriteLine($"State: {status.State}");
+    Console.WriteLine($"Progress: {status.Completed}/{status.Total} ({status.Percent:F1}%)");
+    Console.WriteLine($"Address: 0x{status.Address:X8}");
+    Console.WriteLine($"Busy mask: 0x{status.BusyMask:X2}");
+    Console.WriteLine($"Error mask: 0x{status.ErrorMask:X2}");
+    Console.WriteLine($"Interlock after: {after.EraseStatus.GetValueOrDefault()}");
+    return 0;
+}
+
+if (args[0] == "probe-storage")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: probe-storage <port> [baud] [timeout-ms] [deadline-ms]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    var timeoutMs = args.Length >= 4 ? int.Parse(args[3]) : 1000;
+    var deadlineMs = args.Length >= 5 ? int.Parse(args[4]) : 0;
+    await using var transport = new SerialGaugeTransport(new SerialGaugeTransportOptions(
+        portName,
+        baudRate,
+        ReadTimeoutMs: timeoutMs,
+        WriteTimeoutMs: timeoutMs,
+        TransactionTimeoutMs: deadlineMs));
+    await transport.OpenAsync(CancellationToken.None).ConfigureAwait(false);
+    var session = new GaugeSession(transport);
+    var identity = await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false);
+    var device = DeviceData.DecodeMemoryGauge(identity.Payload);
+    var capabilities = await session.ProbeV3CapabilitiesAsync(CancellationToken.None).ConfigureAwait(false);
+    if (capabilities is not null)
+    {
+        var catalog = await new V3GaugeJobService(
+                session,
+                useMirror: device.MemoryMode == (byte)GaugeStorageMode.Mirror)
+            .DiscoverAsync(CancellationToken.None)
+            .ConfigureAwait(false);
+        Console.WriteLine($"Storage: V3.{capabilities.StorageMinor}");
+        Console.WriteLine($"Mode: {(byte)capabilities.MemoryMode} ({capabilities.MemoryMode})");
+        Console.WriteLine($"Storage end: 0x{capabilities.StorageEnd:X8}");
+        Console.WriteLine($"Write target mask: 0x{capabilities.WriteTargetMask:X2}");
+        if (catalog!.DiagnosticStatus is { } diagnostic)
+        {
+            Console.WriteLine($"Diagnostic flags: 0x{(byte)diagnostic.Flags:X2}");
+            Console.WriteLine($"Failed chip mask: 0x{diagnostic.FailedChipMask:X2}");
+            Console.WriteLine($"Diagnostic start: 0x{diagnostic.RegionStart:X8}");
+            if (catalog.CrashCapsule is { } capsule)
+            {
+                Console.WriteLine("Crash capsule: available (read-only)");
+                Console.WriteLine($"Capsule generation: {capsule.Generation}");
+                Console.WriteLine($"Capsule boot ID: {capsule.BootId}");
+                Console.WriteLine(
+                    $"Capsule state: {capsule.ApplicationState} ({capsule.ApplicationStateDisplay})");
+                Console.WriteLine($"Capsule event ID: {capsule.EventId}");
+                Console.WriteLine($"Capsule fault/operation ID: {capsule.FaultId}");
+                Console.WriteLine($"Capsule file ID: 0x{capsule.FileId:X8}");
+                Console.WriteLine(
+                    $"Capsule committed samples: {capsule.CommittedSampleCount}");
+                Console.WriteLine($"Capsule raw RCON: 0x{capsule.RawRcon:X2}");
+            }
+            else if (catalog.CrashCapsuleRead is { } capsuleRead)
+            {
+                Console.WriteLine($"Crash capsule: {capsuleRead.Status}");
+            }
+        }
+        Console.WriteLine($"Files: {catalog!.Files.Count}");
+        Console.WriteLine($"Uncommitted catalog reservations: {catalog.RejectedRecords.Count}");
+        foreach (var rejected in catalog.RejectedRecords)
+        {
+            Console.WriteLine(
+                $"Ignored catalog seq {rejected.CatalogRecord.CatalogSequence}, file 0x{rejected.CatalogRecord.FileId:X8}: {rejected.Reason}");
+        }
+        return 0;
+    }
+
+    var table = await new GaugeJobService(session)
+        .ReadFileTableAsync(chunkBytes: 792, cancellationToken: CancellationToken.None)
+        .ConfigureAwait(false);
+    Console.WriteLine("Storage: V2");
+    Console.WriteLine($"Files: {table.Records.Count}");
+    Console.WriteLine($"EOF: {table.EndOfFile}");
     return 0;
 }
 
@@ -432,6 +614,36 @@ if (args[0] == "find-eof")
     var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
     await using var transport = await OpenSerialTransportAsync(portName, baudRate, CancellationToken.None);
     var session = new GaugeSession(transport);
+    var identity = await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false);
+    var device = DeviceData.DecodeMemoryGauge(identity.Payload);
+    var v3Service = new V3GaugeJobService(
+        session,
+        useMirror: device.MemoryMode == (byte)GaugeStorageMode.Mirror);
+    var v3Catalog = await v3Service
+        .DiscoverAsync(CancellationToken.None)
+        .ConfigureAwait(false);
+    if (v3Catalog is not null)
+    {
+        Console.WriteLine($"Storage: V3.{v3Catalog.Capabilities.StorageMinor}");
+        Console.WriteLine($"Mode: {(byte)v3Catalog.Capabilities.MemoryMode} ({v3Catalog.Capabilities.MemoryMode})");
+        Console.WriteLine($"Files: {v3Catalog.Files.Count}");
+        Console.WriteLine("File  Catalog  File ID     Data Start  Data End    Rate  Header");
+        foreach (var file in v3Catalog.Files)
+        {
+            Console.WriteLine(
+                $"{file.Index,4}  {file.CatalogRecord.CatalogSequence,7}  " +
+                $"0x{file.CatalogRecord.FileId:X8}  0x{file.DataStart:X8}  " +
+                $"0x{file.DataEnd:X8}  {file.CatalogRecord.NominalInterval,4}  " +
+                $"replica {file.HeaderReplicaId}");
+        }
+        if (v3Catalog.RequiresMemoryService)
+        {
+            Console.WriteLine("Data recovered; memory service and complete erase required.");
+        }
+
+        return 0;
+    }
+
     var eof = await session.FindEndOfFileAsync(CancellationToken.None).ConfigureAwait(false);
 
     Console.WriteLine($"EOF: {eof} ({eof.Value})");
@@ -477,6 +689,35 @@ if (args[0] == "list-files")
 
     await using var transport = await OpenSerialTransportAsync(portName, baudRate, CancellationToken.None);
     var session = new GaugeSession(transport);
+    var identity = await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false);
+    var device = DeviceData.DecodeMemoryGauge(identity.Payload);
+    var v3Service = new V3GaugeJobService(
+        session,
+        useMirror: device.MemoryMode == (byte)GaugeStorageMode.Mirror);
+    var v3Catalog = await v3Service
+        .DiscoverAsync(CancellationToken.None)
+        .ConfigureAwait(false);
+    if (v3Catalog is not null)
+    {
+        Console.WriteLine($"Storage: V3.{v3Catalog.Capabilities.StorageMinor}");
+        Console.WriteLine($"Mode: {(byte)v3Catalog.Capabilities.MemoryMode} ({v3Catalog.Capabilities.MemoryMode})");
+        Console.WriteLine($"Files: {v3Catalog.Files.Count}");
+        Console.WriteLine("File  Catalog  File ID     Data Start  Data End    Rate  Header");
+        foreach (var file in v3Catalog.Files)
+        {
+            Console.WriteLine(
+                $"{file.Index,4}  {file.CatalogRecord.CatalogSequence,7}  " +
+                $"0x{file.CatalogRecord.FileId:X8}  0x{file.DataStart:X8}  " +
+                $"0x{file.DataEnd:X8}  {file.CatalogRecord.NominalInterval,4}  " +
+                $"replica {file.HeaderReplicaId}");
+        }
+        if (v3Catalog.RequiresMemoryService)
+        {
+            Console.WriteLine("Data recovered; memory service and complete erase required.");
+        }
+        return 0;
+    }
+
     var eof = await session.FindEndOfFileAsync(CancellationToken.None).ConfigureAwait(false);
     var table = await session
         .ReadExternalMemoryChunkedAsync(0, tableBytes, chunkBytes, GaugeCommand.ReadFileSector, CancellationToken.None)
@@ -523,6 +764,55 @@ if (args[0] == "download-file")
 
     await using var transport = await OpenSerialTransportAsync(portName, baudRate, CancellationToken.None);
     var session = new GaugeSession(transport);
+    var identity = await session.IdentifyAsync(CancellationToken.None).ConfigureAwait(false);
+    var device = DeviceData.DecodeMemoryGauge(identity.Payload);
+    var v3Service = new V3GaugeJobService(
+        session,
+        useMirror: device.MemoryMode == (byte)GaugeStorageMode.Mirror);
+    var v3Catalog = await v3Service
+        .DiscoverAsync(CancellationToken.None)
+        .ConfigureAwait(false);
+    if (v3Catalog is not null)
+    {
+        if (fileIndex < 0 || fileIndex >= v3Catalog.Files.Count)
+        {
+            Console.Error.WriteLine(
+                $"File index {fileIndex} is not valid. Valid range is 0 to {v3Catalog.Files.Count - 1}.");
+            return 2;
+        }
+
+        var download = await v3Service
+            .DownloadFileAsync(v3Catalog, fileIndex, CancellationToken.None)
+            .ConfigureAwait(false);
+        var v3OutputDirectory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+        if (!string.IsNullOrWhiteSpace(v3OutputDirectory))
+        {
+            Directory.CreateDirectory(v3OutputDirectory);
+        }
+
+        var selectedBytes = download.SelectedRawBytes;
+        await File.WriteAllBytesAsync(
+            outputPath,
+            selectedBytes,
+            CancellationToken.None).ConfigureAwait(false);
+        Console.WriteLine(
+            $"Downloaded V3 file {fileIndex}: {download.Samples.Count} sample(s), " +
+            $"{download.MissingSampleCount} missing slot(s), " +
+            $"{download.CorrectedPageCount} corrected page(s), " +
+            $"{download.AlternateRecoveryCount} alternate recovery page(s).");
+        if (download.IsIncomplete)
+        {
+            Console.WriteLine("Recording is open or incomplete; all recoverable pages were retained.");
+        }
+        Console.WriteLine($"Wrote {selectedBytes.Length} byte(s) to {outputPath}.");
+        if (download.RequiresMemoryService)
+        {
+            Console.WriteLine("Data recovered; memory service and complete erase required.");
+        }
+
+        return 0;
+    }
+
     var eof = await session.FindEndOfFileAsync(CancellationToken.None).ConfigureAwait(false);
     var table = await session
         .ReadExternalMemoryChunkedAsync(0, 0x4000, chunkBytes, GaugeCommand.ReadFileSector, CancellationToken.None)
@@ -605,6 +895,70 @@ if (args[0] == "download-latest-calibrated")
         Console.Error.WriteLine($"Latest calibrated download did not complete: {ex.Message}");
         return 2;
     }
+}
+
+if (args[0] == "sensor-live-smoke")
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("Usage: sensor-live-smoke <port> [baud] [seconds]");
+        return 1;
+    }
+
+    var portName = args[1];
+    var baudRate = args.Length >= 3 ? int.Parse(args[2]) : 460800;
+    var seconds = args.Length >= 4 ? Math.Max(1, ParseInt32(args[3])) : 5;
+    await using var transport = await OpenSerialTransportWithTimeoutAsync(
+        portName,
+        baudRate,
+        12000,
+        CancellationToken.None);
+    var service = new SensorLiveService(new GaugeSession(transport));
+    var started = false;
+    var sampleCount = 0;
+    try
+    {
+        var start = await service.StartAsync(
+            intervalSeconds: 1,
+            CancellationToken.None).ConfigureAwait(false);
+        started = true;
+        Console.WriteLine($"Sensor Live started: state {start.State}, sequence {start.LatestSequence}.");
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(seconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(
+                SensorLiveService.DefaultPollInterval,
+                CancellationToken.None).ConfigureAwait(false);
+            var sample = await service.ReadLatestAsync(CancellationToken.None).ConfigureAwait(false);
+            if (sample is null)
+            {
+                continue;
+            }
+
+            sampleCount++;
+            Console.WriteLine(
+                $"Sample {sample.Sequence}: P={sample.PressureRaw}, T={sample.TemperatureRaw}, " +
+                $"iteration={sample.SensorIteration}, quality=0x{sample.QualityFlags:X2}.");
+        }
+    }
+    finally
+    {
+        if (started)
+        {
+            await service.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            Console.WriteLine("Sensor Live stopped.");
+        }
+    }
+
+    if (sampleCount == 0)
+    {
+        Console.Error.WriteLine("Sensor Live returned no samples.");
+        return 2;
+    }
+
+    Console.WriteLine($"Sensor Live smoke test passed with {sampleCount} sample read(s).");
+    return 0;
 }
 
 if (args[0] == "decode-raw")
@@ -1342,7 +1696,7 @@ static void PrintIdentifyResult(string portName, int baudRate, GaugeFrame reply)
 
 static void PrintDevice(DeviceData device)
 {
-    Console.WriteLine($"Firmware: {device.FirmwareMajor}.{device.FirmwareMinor}");
+    Console.WriteLine($"Firmware: {device.FirmwareVersion}");
     Console.WriteLine($"Device type: {device.DeviceType}");
     Console.WriteLine($"Device serial: {device.DeviceSerial}");
     Console.WriteLine($"PCB type: {device.PcbType}");

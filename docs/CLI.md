@@ -8,6 +8,47 @@ Run commands through the wrapper:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 <command>
 ```
 
+## V3 offline validation and extraction
+
+The V3 inspection and extraction commands are read-only. Inspect immutable raw
+captures without calibration guesses:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 inspect-v3 catalog catalog.bin
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 inspect-v3 header header.bin
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 inspect-v3 data data.bin
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 extract-v3-data data.bin samples.csv
+```
+
+The data report includes page status, corrected-bit count, file/page/sample
+sequence, timestamps, raw counts, sensor iteration, and quality. Header and
+catalog inspection reject malformed required fields. Existing V2 commands are
+unchanged.
+
+Live V3 discovery and downloads also validate on the PC. After the static
+capability/geometry probe, the application uses ordinary address reads against
+replica 0. It does not request firmware catalog recovery, and it reads a replica
+1 address only when the corresponding primary catalog, header, or data content
+fails host validation.
+
+The next catalog start is an allocation boundary, not necessarily the exact end
+of the preceding file. The host locates the first invalid page in that file's
+final allocated sector. It also performs a bounded sector-frontier search for
+the latest file. A page advances either search only when its file ID and page
+sequence match the file being recovered. Missing footers and erased/torn tail
+bytes are healthy termination and are excluded from the displayed size and
+download.
+
+Each committed V3 file is self-contained. Its `SER`, `HDR`, `PLP`, and `PLT`
+header values are converted into that file's calibration bundle; downloaded
+counts are processed without reading the currently attached sensor. The desktop
+application automatically downloads V3 files in the same newest-first workflow
+as V2. A malformed header or calibration fails only that file and does not
+substitute calibration from another file.
+
+The implemented desktop workflow and current live-validation status are
+summarised in `docs/V3_APPLICATION_VALIDATION.md`.
+
 ## Connection
 
 Cold gauges should be woken at `57600` baud first. A valid `IDENTIFY` puts the gauge into serial mode, turns on the PLL in firmware, and keeps the gauge in serial mode until power is removed.

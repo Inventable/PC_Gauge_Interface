@@ -6,6 +6,7 @@ obj/
 *.suo
 TestResults/
 artifacts/
+dist/
 *.log
 .dotnet-appdata/
 .dotnet-home/

@@ -21,7 +21,10 @@ public static class SerialPortDiscovery
 
     public static IReadOnlyList<string> GetPortNames()
     {
-        return GetPorts().Select(port => port.Name).ToArray();
+        return SerialPort.GetPortNames()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(port => port, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     [SupportedOSPlatform("windows")]

@@ -17,23 +17,35 @@ internal static class SupportBundleExporter
     public static void Write(
         Stream output,
         GaugeSupportBundle diagnostics,
-        SensorCalibrationBundle? calibration)
+        IReadOnlyList<SupportCalibrationArtifact> calibrations)
     {
         using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
         WriteTextEntry(
             archive,
             "diagnostics.json",
             JsonSerializer.Serialize(diagnostics, JsonOptions));
-
-        if (calibration is null)
+        if (diagnostics.V3Diagnostics?.CrashCapsule is { } crashCapsule)
         {
-            return;
+            WriteTextEntry(
+                archive,
+                "diagnostics/crash-capsule.json",
+                JsonSerializer.Serialize(
+                    new SupportCrashCapsuleReport(
+                        diagnostics.GeneratedUtc,
+                        diagnostics.Device?.DeviceType,
+                        diagnostics.Device?.DeviceSerial,
+                        diagnostics.Device?.FirmwareVersion,
+                        crashCapsule),
+                    JsonOptions));
         }
 
-        WriteBytesEntry(archive, "calibration/sensor-serial.txt", calibration.SensorSerial);
-        WriteBytesEntry(archive, "calibration/sensor-header.txt", calibration.SensorHeader);
-        WriteBytesEntry(archive, "calibration/pressure-poly.txt", calibration.PressurePolynomial);
-        WriteBytesEntry(archive, "calibration/temperature-poly.txt", calibration.TemperaturePolynomial);
+        foreach (var artifact in calibrations)
+        {
+            WriteBytesEntry(archive, $"{artifact.Directory}/sensor-serial.txt", artifact.Calibration.SensorSerial);
+            WriteBytesEntry(archive, $"{artifact.Directory}/sensor-header.txt", artifact.Calibration.SensorHeader);
+            WriteBytesEntry(archive, $"{artifact.Directory}/pressure-poly.txt", artifact.Calibration.PressurePolynomial);
+            WriteBytesEntry(archive, $"{artifact.Directory}/temperature-poly.txt", artifact.Calibration.TemperaturePolynomial);
+        }
     }
 
     private static void WriteTextEntry(ZipArchive archive, string path, string value)
@@ -59,6 +71,7 @@ internal sealed record GaugeSupportBundle(
     SupportMemorySnapshot Memory,
     SupportCalibrationSnapshot Calibration,
     IReadOnlyList<SupportFileSnapshot> Files,
+    SupportV3DiagnosticSnapshot? V3Diagnostics,
     CommunicationSessionSummary CommunicationSummary,
     IReadOnlyList<CommunicationEventLogEntry> CommunicationEvents,
     SupportFirmwareSnapshot Firmware,
@@ -84,11 +97,16 @@ internal sealed record SupportConnectionSnapshot(
 
 internal sealed record SupportMemorySnapshot(
     bool IsLoaded,
+    string Format,
     int FileCount,
-    string? EndOfFileAddress);
+    string? EndOfFileAddress,
+    int? CatalogRecordCount,
+    int? RejectedCatalogRecordCount);
 
 internal sealed record SupportCalibrationSnapshot(
     bool IsCaptured,
+    string Source,
+    int FileLocalCalibrationCount,
     string? SensorIdentity,
     double? ReferenceClock,
     int? SensorId,
@@ -98,13 +116,16 @@ internal sealed record SupportCalibrationSnapshot(
 
 internal sealed record SupportFileSnapshot(
     int FileNumber,
-    int FileTableRecordIndex,
+    string Format,
+    int? FileTableRecordIndex,
+    string? FileIdentity,
     string DataAddress,
     int EstimatedBytes,
     int MeasurementIntervalSeconds,
-    byte ResetCause,
-    bool FileTableCrcValid,
+    byte? ResetCause,
+    bool? FileTableCrcValid,
     string DownloadState,
+    string QualitySummary,
     int ConvertedSampleCount,
     int DataCrcErrors,
     int BatteryWarnings,
@@ -113,4 +134,49 @@ internal sealed record SupportFileSnapshot(
     int RawAcousticRecords,
     int TimestampRecords,
     int UnknownRecords,
-    string DataQuality);
+    string DataQuality,
+    bool? IsOpen,
+    int CorrectedPages,
+    int MissingSamples,
+    int PageSequenceGaps,
+    bool RequiresMemoryService);
+
+internal sealed record SupportV3DiagnosticSnapshot(
+    string Health,
+    ushort LatestEventId,
+    string LatestEvent,
+    string LatestEventDetail,
+    string Severity,
+    bool ProtectedLoggingFaultReportAvailable,
+    uint ProtectedLoggingFaultReportGeneration,
+    uint BootId,
+    uint JournalPageCount,
+    byte PendingRamEventCount,
+    byte FailedChipMask,
+    byte DegradedReplicaMask,
+    string Flags,
+    SupportCrashCapsuleSnapshot? CrashCapsule,
+    string CrashCapsuleReadStatus);
+
+internal sealed record SupportCrashCapsuleSnapshot(
+    byte SchemaVersion,
+    uint Generation,
+    uint BootId,
+    ushort EventId,
+    byte FaultId,
+    byte ApplicationState,
+    string ApplicationStateName,
+    uint FileId,
+    uint CommittedSampleCount,
+    byte RawRcon);
+
+internal sealed record SupportCrashCapsuleReport(
+    DateTimeOffset ExportedUtc,
+    uint? DeviceType,
+    uint? DeviceSerial,
+    string? FirmwareVersion,
+    SupportCrashCapsuleSnapshot Capsule);
+
+internal sealed record SupportCalibrationArtifact(
+    string Directory,
+    SensorCalibrationBundle Calibration);

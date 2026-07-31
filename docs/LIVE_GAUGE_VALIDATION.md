@@ -50,3 +50,10 @@ Date: 21 July 2026
 - A separate process opened COM8 at 57600 baud immediately after shutdown, proving that the application had released the port.
 
 This verifies the host shutdown and same-port recovery mechanics. The physical unplug and sensor-absent matrix above remains required before H0 automated download commissioning resumes.
+
+## V3 Application Check
+
+On 25 July 2026 the operator confirmed V3.0 connection, Sensor Live, and
+logging. The separate V3 catalog, atomic-file decoding, logical-end, automatic
+download, erase, and remaining interruption checks are recorded in
+`docs/V3_APPLICATION_VALIDATION.md`.

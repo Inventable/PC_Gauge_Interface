@@ -55,6 +55,15 @@ public enum GaugeCommand : byte
     GetDeviceStatus = 60,
     GetTimestamp = 61,
     ToggleSensorInstalled = 62,
-    StartSensorMeasurement = 63
+    StartSensorMeasurement = 63,
+    StartProgressErase = 64,
+    GetEraseProgress = 65,
+    SensorLiveStart = 66,
+    SensorLiveStatus = 67,
+    SensorLiveRead = 68,
+    SensorLiveStop = 69,
+    V3DiagnosticStatus = 70,
+    V3GetCrashCapsule = 71,
+    V3Capabilities = 73,
+    V3CatalogSummary = 74
 }
-

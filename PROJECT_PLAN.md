@@ -416,8 +416,12 @@ Current status:
 
 ### Phase 7: Deployment And Future USB
 
-- Package Windows installer or self-contained application.
-- Define update process.
+- Package Windows installer or self-contained application. **Implemented for
+  `1.0.0`: self-contained ZIP plus per-user single-file Setup EXE.** Clean-PC
+  and signing validation remain release gates.
+- Define update process. **Implemented for compatible gauge firmware through a
+  public stable manifest, HTTPS download, SHA-256 verification, and the existing
+  recovery-first programmer.** Application self-update remains deferred.
 - Add crash/error log bundle export.
 - Add USB transport implementation when hardware direction is known.
 - Investigate macOS/Linux builds once Windows version is stable.

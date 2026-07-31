@@ -63,6 +63,16 @@ public static class GaugeFrameCodec
         }
     }
 
+    public static bool IsExactRequestEcho(GaugeFrame request, GaugeFrame candidate)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(candidate);
+        return candidate.Command == request.Command &&
+            candidate.DataLength == request.DataLength &&
+            candidate.Address == request.Address &&
+            candidate.Payload.AsSpan().SequenceEqual(request.Payload);
+    }
+
     private static void WriteBody(GaugeFrame frame, Span<byte> body)
     {
         body[0] = (byte)frame.Command;

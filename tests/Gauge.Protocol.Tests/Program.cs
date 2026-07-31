@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using Gauge.Calibration;
 using Gauge.Core;
@@ -15,15 +18,22 @@ var tests = new (string Name, Action Run)[]
     ("Bad CRC is rejected", BadCrcIsRejected),
     ("Echo-only IDENTIFY is rejected", EchoOnlyIdentifyIsRejected),
     ("Echo-only FIND_EOF is rejected", EchoOnlyFindEofIsRejected),
+    ("V3 probe echo is distinguished from invalid-command fallback", V3ProbeEchoIsDistinguishedFromFallback),
     ("Chunked memory read resumes after retained prefix", ChunkedMemoryReadResumesAfterPrefix),
     ("Interrupted memory read retains only confirmed packets", InterruptedMemoryReadRetainsConfirmedPackets),
+    ("Command 24 read splits at the physical chip boundary", Command24ReadSplitsAtPhysicalChipBoundary),
     ("Bootloader read-version request matches firmware frame", BootloaderReadVersionRequestMatchesFirmwareFrame),
     ("Bootloader write request carries keys and 24-bit address", BootloaderWriteRequestCarriesKeysAndAddress),
     ("Bootloader version response decodes", BootloaderVersionResponseDecodes),
     ("Intel HEX validates checksums and extended addresses", IntelHexValidatesChecksumsAndExtendedAddresses),
     ("Bootloader image rejects application data below offset", BootloaderImageRejectsDataBelowOffset),
     ("Firmware updater erases start first and writes it last", FirmwareUpdaterErasesStartFirstAndWritesItLast),
+    ("Firmware release catalog selects, downloads, and verifies the latest stable image", FirmwareReleaseCatalogSelectsAndVerifiesLatest),
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
+    ("Firmware display reverses identity byte order", FirmwareDisplayReversesIdentityByteOrder),
+    ("Gauge interval setting uses V2/V3 wire format and verifies IDENTIFY", GaugeIntervalSettingUsesCompatibleWireFormat),
+    ("Gauge storage setting resolves a lost acknowledgement by IDENTIFY", GaugeStorageSettingResolvesLostAcknowledgement),
+    ("Gauge storage setting rejects an unknown mode without writing", GaugeStorageSettingRejectsUnknownMode),
     ("Memory gauge file record parses and validates CRC", MemoryGaugeFileRecordParsesAndValidatesCrc),
     ("Memory gauge file table ignores continuation records", MemoryGaugeFileTableIgnoresContinuationRecords),
     ("Memory gauge data record parses counts and CRC", MemoryGaugeDataRecordParsesCountsAndCrc),
@@ -33,9 +43,54 @@ var tests = new (string Name, Action Run)[]
     ("Sensor calibration header parses fields", SensorCalibrationHeaderParsesFields),
     ("Quartz calibration converts counts to frequencies", QuartzCalibrationConvertsCountsToFrequencies),
     ("Quartz calibration evaluates live gauge measurement", QuartzCalibrationEvaluatesLiveGaugeMeasurement),
+    ("Sensor Live status and sample payloads decode", SensorLivePayloadsDecode),
+    ("Sensor Live reads calibration without initialising the sensor", SensorLiveReadsCalibrationWithoutInitialise),
+    ("Sensor Live raw counts use the V3 calibration pipeline", SensorLiveRawCountsCalibrate),
     ("Calibrated CSV exporter formats rows", CalibratedCsvExporterFormatsRows),
     ("Legacy record exporter writes ASCII format", LegacyRecordExporterWritesAsciiFormat),
-    ("Communication session summary counts integrity events", CommunicationSessionSummaryCountsIntegrityEvents)
+    ("Communication session summary counts integrity events", CommunicationSessionSummaryCountsIntegrityEvents),
+    ("Erase progress payload validates protocol state and bounds", ExternalEraseProgressPayloadValidates),
+    ("Progress erase reports all 512 pairs and clears the interlock", ProgressEraseReportsEveryPair),
+    ("Lost progress-erase acknowledgement recovers through command 65", ProgressEraseLostStartReplyUsesStatus),
+    ("Progress erase then mode selection verifies IDENTIFY and capabilities", ProgressEraseThenModeSelectionVerifiesLayout),
+    ("Progress erase surfaces a lost gauge response immediately", ProgressEraseStopsOnLostResponse),
+    ("Unavailable progress erase falls back to estimated V2 polling", ProgressEraseFallsBackToLegacyV2),
+    ("V2 erase is not complete while its EEPROM interlock remains set", LegacyEraseRequiresClearedInterlock),
+    ("Incomplete V3 erase restarts from zero after interlock clears", IncompleteEraseRestartBeginsFresh),
+    ("V3 capabilities parse exact V3.1 full and mirror layouts", V3CapabilitiesAndFallbackWork),
+    ("V3 capabilities reject inconsistent mode layouts", V3CapabilitiesRejectInconsistentLayouts),
+    ("V3 diagnostic failover hints select preferred read order", V3DiagnosticFailoverHintsWork),
+    ("V3 crash capsule parses and validates every field", V3CrashCapsuleParsesKnownPayload),
+    ("V3 crash capsule rejects each invalid envelope field", V3CrashCapsuleValidationFailures),
+    ("V3 crash capsule command handles all response forms", V3CrashCapsuleCommandResponses),
+    ("V3 diagnostic availability controls capsule retrieval", V3CrashCapsuleAvailabilityWorkflow),
+    ("V3 crash capsule retrieval completes before file transfer", V3CrashCapsulePrecedesFileTransfer),
+    ("V3 crash capsule reports deduplicate by device and event identity", V3CrashCapsuleReportsDeduplicate),
+    ("V3 diagnostic events distinguish power removal from a logging fault", V3DiagnosticEventsUseOperatorLanguage),
+    ("V3 clean catalog discovery uses raw primary reads only", V3CatalogDiscoveryUsesPrimaryRawReadsOnly),
+    ("V3 catalog union retains a longer alternate prefix", V3CatalogUnionRetainsLongerAlternatePrefix),
+    ("V3 discovery retains chip-2-only catalog header and data", V3DiscoveryRetainsChip2OnlyPublication),
+    ("V3 corrected single-copy header requires memory service", V3CorrectedSingleCopyHeaderRequiresService),
+    ("V3 discovery resolves the latest file logical end", V3DiscoveryResolvesLatestLogicalEnd),
+    ("V3 data download reads mirror only for a failed primary page", V3DataDownloadUsesLazyMirrorFallback),
+    ("V3 full-capacity data download never reads a mirror", V3FullCapacityDownloadDoesNotReadMirror),
+    ("V3 full-capacity file crosses into chip 2 with split reads", V3FullCapacityFileCrossesChipBoundary),
+    ("V3 clean and 16-bit corrected target pages decode", V3BchTargetFixturesDecode),
+    ("V3 six-file target catalog decodes monotonically", V3CatalogTargetFixtureDecodes),
+    ("V3 target header reassembles required calibration TLVs", V3HeaderTargetFixtureDecodes),
+    ("V3 file-local header calibrates its downloaded samples", V3FileLocalHeaderCalibratesSamples),
+    ("V3 open target file extracts committed samples without footer", V3OpenTargetFileDecodes),
+    ("V3.1 compact golden page preserves bitmap slots and Timer1 phase", V31CompactGoldenPageDecodes),
+    ("V3.1 BCH corrects one through sixteen errors and rejects unsafe corruption", V31CompactIntegrityGatesWork),
+    ("V3.1 partial pages and explicit missing samples export without collapse", V31PartialAndMissingExport),
+    ("V3.1 schema-2 calibration stream decodes exact raw fields", V31Schema2HeaderDecodes),
+    ("V3.2 compact CRC64 fallback remains readable", V32FallbackPageDecodes),
+    ("V3.1 stored counts match Sensor Live raw-count semantics", V31StoredCountsMatchSensorLive),
+    ("V3.1 mirrored download lazily recovers an invalid preferred page", V31MirroredLazyFallback),
+    ("V3.1 divergent valid replicas prefer the clean copy and report service", V31DivergentReplicas),
+    ("V3.1 completed file retains valid pages after an unrecoverable page", V31PartialRecoveryContinues),
+    ("V3 unknown required fields and non-monotonic sequences are rejected", V3RequiredFieldsAndSequencesAreRejected),
+    ("V3 malformed padding and over-limit BCH damage are rejected", V3MalformedPagesAreRejected)
 };
 
 var failures = 0;
@@ -60,6 +115,75 @@ static void Crc16MatchesIdentifyVector()
 {
     var body = new byte[] { 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
     AssertEqual((ushort)0x0CC0, Crc16.Compute(body));
+}
+
+static void FirmwareReleaseCatalogSelectsAndVerifiesLatest()
+{
+    var firmwareBytes = Encoding.ASCII.GetBytes(":020000040000FA\r\n:00000001FF\r\n");
+    var firmwareHash = Convert.ToHexString(SHA256.HashData(firmwareBytes));
+    var manifest = $$"""
+        {
+          "schemaVersion": 1,
+          "channel": "stable",
+          "suiteVersion": "1.0.0",
+          "generatedUtc": "2026-07-31T12:00:00Z",
+          "firmware": [
+            {
+              "deviceType": 100230,
+              "supportedPcbs": [100184],
+              "version": "2.0",
+              "imageType": "offset-production",
+              "processor": "PIC18F26K80",
+              "minimumBootloader": "1.3",
+              "url": "https://github.com/Inventable/IT_Releases/releases/download/suite-v1.0.0/firmware.hex",
+              "sha256": "{{firmwareHash}}"
+            },
+            {
+              "deviceType": 100230,
+              "supportedPcbs": [100184],
+              "version": "2.1",
+              "imageType": "offset-production",
+              "processor": "PIC18F26K80",
+              "minimumBootloader": "1.3",
+              "url": "https://github.com/Inventable/IT_Releases/releases/download/suite-v1.0.0/firmware.hex",
+              "sha256": "{{firmwareHash}}",
+              "releaseNotes": "First public update"
+            },
+            {
+              "deviceType": 100230,
+              "supportedPcbs": [100184],
+              "version": "9.0",
+              "imageType": "combined-production",
+              "processor": "PIC18F26K80",
+              "minimumBootloader": "1.3",
+              "url": "https://github.com/Inventable/IT_Releases/releases/download/suite-v1.0.0/unsafe.hex",
+              "sha256": "{{firmwareHash}}"
+            }
+          ]
+        }
+        """;
+    var handler = new StaticHttpMessageHandler(request =>
+    {
+        var content = request.RequestUri!.AbsolutePath.EndsWith("manifest.json", StringComparison.Ordinal)
+            ? Encoding.UTF8.GetBytes(manifest)
+            : firmwareBytes;
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(content) };
+    });
+    using var httpClient = new HttpClient(handler);
+    var client = new FirmwareReleaseCatalogClient(httpClient);
+    var releaseCheck = client.CheckAsync(
+        new Uri("https://downloads.example.test/firmware/manifest.json"),
+        100230,
+        100184,
+        "2.0").GetAwaiter().GetResult();
+
+    AssertEqual("2.1", releaseCheck?.Release.Version);
+    AssertEqual(true, releaseCheck?.IsUpdateAvailable);
+    AssertEqual(
+        "https://github.com/Inventable/IT_Releases/releases/download/suite-v1.0.0/firmware.hex",
+        releaseCheck?.DownloadUri.AbsoluteUri);
+    var downloaded = client.DownloadAsync(releaseCheck!).GetAwaiter().GetResult();
+    AssertSequenceEqual(firmwareBytes, downloaded);
 }
 
 static void Crc16VerifiesAppendedBytes()
@@ -159,6 +283,19 @@ static void EchoOnlyFindEofIsRejected()
     throw new InvalidOperationException("An echoed zero-payload FIND_EOF request was accepted as an address.");
 }
 
+static void V3ProbeEchoIsDistinguishedFromFallback()
+{
+    var request = GaugeFrame.Create(GaugeCommand.V3Capabilities);
+    var echo = GaugeFrameCodec.Decode(GaugeFrameCodec.Encode(request));
+    var fallback = new GaugeFrame(GaugeCommand.V3Capabilities, 1, 0, [0xFF]);
+
+    AssertEqual(true, GaugeFrameCodec.IsExactRequestEcho(request, echo));
+    AssertEqual(false, GaugeFrameCodec.IsExactRequestEcho(request, fallback));
+
+    var session = new GaugeSession(new DelegateGaugeTransport(_ => fallback));
+    AssertEqual<V3Capabilities?>(null, session.ProbeV3CapabilitiesAsync().GetAwaiter().GetResult());
+}
+
 static void ChunkedMemoryReadResumesAfterPrefix()
 {
     var addresses = new List<uint>();
@@ -239,6 +376,40 @@ static void InterruptedMemoryReadRetainsConfirmedPackets()
     AssertSequenceEqual(new byte[] { 0, 1, 2, 3, 4, 5 }, completed);
     AssertEqual(1, resumedAddresses.Count);
     AssertEqual((uint)0x1004, resumedAddresses[0]);
+}
+
+static void Command24ReadSplitsAtPhysicalChipBoundary()
+{
+    var requests = new List<GaugeFrame>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        requests.Add(request);
+        return GaugeFrame.Create(
+            request.Command,
+            request.Address,
+            Enumerable.Repeat(
+                    request.Address < V3Capabilities.PhysicalChipBoundary
+                        ? (byte)0x11
+                        : (byte)0x22,
+                    request.DataLength)
+                .ToArray());
+    });
+
+    var bytes = new GaugeSession(transport)
+        .ReadExternalMemoryAsync(
+            V3Capabilities.PhysicalChipBoundary - 256,
+            512,
+            GaugeCommand.ReadExternalEeprom)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(2, requests.Count);
+    AssertEqual(V3Capabilities.PhysicalChipBoundary - 256, requests[0].Address);
+    AssertEqual((ushort)256, requests[0].DataLength);
+    AssertEqual(V3Capabilities.PhysicalChipBoundary, requests[1].Address);
+    AssertEqual((ushort)256, requests[1].DataLength);
+    AssertEqual(true, bytes[..256].All(value => value == 0x11));
+    AssertEqual(true, bytes[256..].All(value => value == 0x22));
 }
 
 static void BootloaderReadVersionRequestMatchesFirmwareFrame()
@@ -391,6 +562,129 @@ static void MemoryGaugeIdentifyPayloadDecodes()
     AssertEqual((ushort)5, device.MeasurementInterval);
     AssertEqual((byte)1, device.MemoryMode);
     AssertEqual((byte?)0, device.EraseStatus);
+    AssertEqual("1.20", device.FirmwareVersion);
+}
+
+static void FirmwareDisplayReversesIdentityByteOrder()
+{
+    var device = new DeviceData(
+        FirmwareMajor: 1,
+        FirmwareMinor: 2,
+        DeviceType: 100230,
+        DeviceSerial: 1,
+        PcbType: 100198,
+        PcbSerial: 2,
+        MeasurementInterval: 5,
+        MemoryMode: 1,
+        EraseStatus: 0);
+
+    AssertEqual("2.1", device.FirmwareVersion);
+}
+
+static void GaugeIntervalSettingUsesCompatibleWireFormat()
+{
+    ushort measurementInterval = 5;
+    var settingWrites = 0;
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        if (request.Command == GaugeCommand.Identify)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(
+                    eraseStatus: 0,
+                    measurementInterval: measurementInterval,
+                    memoryMode: 1));
+        }
+
+        if (request.Command == GaugeCommand.SetMeasureRate)
+        {
+            settingWrites++;
+            AssertSequenceEqual([0x2C, 0x01], request.Payload);
+            measurementInterval = BinaryPrimitives.ReadUInt16LittleEndian(request.Payload);
+            return GaugeFrame.Create(request.Command, payload: [0x01]);
+        }
+
+        throw new InvalidOperationException($"Unexpected command {request.Command}.");
+    });
+    var service = new GaugeConfigurationService(new GaugeSession(transport));
+
+    var device = service
+        .SetMeasurementIntervalAsync(300, 1234)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(1, settingWrites);
+    AssertEqual((ushort)300, device.MeasurementInterval);
+}
+
+static void GaugeStorageSettingResolvesLostAcknowledgement()
+{
+    byte memoryMode = 0;
+    var settingWrites = 0;
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        if (request.Command == GaugeCommand.Identify)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(
+                    eraseStatus: 0,
+                    measurementInterval: 5,
+                    memoryMode: memoryMode));
+        }
+
+        if (request.Command == GaugeCommand.SetMemoryMode)
+        {
+            settingWrites++;
+            AssertSequenceEqual([0x01], request.Payload);
+            memoryMode = request.Payload[0];
+            throw new TimeoutException("Simulated lost setting acknowledgement.");
+        }
+        if (request.Command == GaugeCommand.V3Capabilities)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateV3CapabilitiesPayload(V3MemoryMode.Mirror));
+        }
+
+        throw new InvalidOperationException($"Unexpected command {request.Command}.");
+    });
+    var service = new GaugeConfigurationService(new GaugeSession(transport));
+
+    var device = service
+        .SetStorageModeAsync(GaugeStorageMode.Mirror, 1234)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(1, settingWrites);
+    AssertEqual((byte)GaugeStorageMode.Mirror, device.MemoryMode);
+}
+
+static void GaugeStorageSettingRejectsUnknownMode()
+{
+    var transactions = 0;
+    var service = new GaugeConfigurationService(
+        new GaugeSession(new DelegateGaugeTransport(request =>
+        {
+            transactions++;
+            return GaugeFrame.Create(request.Command, payload: [0x01]);
+        })));
+
+    var rejected = false;
+    try
+    {
+        service.SetStorageModeAsync((GaugeStorageMode)2, 1234)
+            .GetAwaiter()
+            .GetResult();
+    }
+    catch (ArgumentOutOfRangeException)
+    {
+        rejected = true;
+    }
+
+    AssertEqual(true, rejected);
+    AssertEqual(0, transactions);
 }
 
 static void MemoryGaugeFileRecordParsesAndValidatesCrc()
@@ -622,6 +916,141 @@ static void QuartzCalibrationConvertsCountsToFrequencies()
     AssertNear(262162.88848216913, calibration.TemperatureFrequencyHz(16964453), 0.000000001);
 }
 
+static void SensorLivePayloadsDecode()
+{
+    var statusPayload = new byte[SensorLiveStatus.PayloadLength];
+    statusPayload[0] = 1;
+    statusPayload[1] = (byte)SensorLiveState.Running;
+    statusPayload[2] = (byte)(
+        SensorLiveStatusFlags.DataReady |
+        SensorLiveStatusFlags.SensorInitialised |
+        SensorLiveStatusFlags.CalibrationAvailable);
+    BinaryPrimitives.WriteUInt32LittleEndian(statusPayload.AsSpan(4), 7);
+    var status = SensorLiveStatus.Parse(statusPayload);
+    AssertEqual(true, status.DataReady);
+    AssertEqual((uint)7, status.LatestSequence);
+
+    var samplePayload = BuildSensorLiveSamplePayload(
+        sequence: 7,
+        ticks: 123,
+        pressureRaw: 4_942_157,
+        temperatureRaw: 4_910_753);
+    var sample = SensorLiveSample.Parse(samplePayload);
+    AssertEqual((uint)7, sample.Sequence);
+    AssertEqual((uint)123, sample.MonotonicTicks);
+    AssertEqual((uint)4_942_157, sample.PressureRaw);
+    AssertEqual((uint)4_910_753, sample.TemperatureRaw);
+}
+
+static void SensorLiveReadsCalibrationWithoutInitialise()
+{
+    var commands = new List<GaugeCommand>();
+    var startInterval = 0;
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request.Command);
+        return request.Command switch
+        {
+            GaugeCommand.SensorLiveStatus => GaugeFrame.Create(
+                request.Command,
+                payload: BuildSensorLiveStatusPayload(
+                    SensorLiveState.Idle,
+                    SensorLiveStatusFlags.CalibrationAvailable)),
+            GaugeCommand.ReadSensorSerial => GaugeFrame.Create(
+                request.Command,
+                payload: "SERIAL\r\n=\r\n"u8),
+            GaugeCommand.ReadSensorCalibration => GaugeFrame.Create(
+                request.Command,
+                payload: "S: RefClk 0 Id 1 Bias 10 PStartupMs 0 PLLClk 1000\r\n=\r\n"u8),
+            GaugeCommand.ReadSensorPressurePolynomial => GaugeFrame.Create(
+                request.Command,
+                payload: "PRESSURE\r\n=\r\n"u8),
+            GaugeCommand.ReadSensorTemperaturePolynomial => GaugeFrame.Create(
+                request.Command,
+                payload: "TEMPERATURE\r\n=\r\n"u8),
+            GaugeCommand.SensorLiveStart => AcceptSensorLiveStart(request),
+            GaugeCommand.SensorLiveStop => GaugeFrame.Create(request.Command, payload: [0x01]),
+            _ => throw new InvalidOperationException(
+                $"Unexpected Sensor Live command {request.Command}.")
+        };
+    });
+    var service = new SensorLiveService(new GaugeSession(transport));
+
+    var probe = service.ProbeAsync().GetAwaiter().GetResult();
+    var calibration = service.ReadCalibrationAsync().GetAwaiter().GetResult();
+    var started = service.StartAsync().GetAwaiter().GetResult();
+    service.StopAsync().GetAwaiter().GetResult();
+
+    AssertEqual(SensorLiveState.Idle, probe!.State);
+    AssertEqual(true, calibration.SensorSerial.Length > 0);
+    AssertEqual(SensorLiveState.Running, started.State);
+    AssertEqual(1, startInterval);
+    AssertEqual(false, commands.Contains(GaugeCommand.InitialiseSensor));
+
+    GaugeFrame AcceptSensorLiveStart(GaugeFrame request)
+    {
+        startInterval = BinaryPrimitives.ReadUInt16LittleEndian(request.Payload);
+        return GaugeFrame.Create(
+            request.Command,
+            payload: BuildSensorLiveStatusPayload(
+                SensorLiveState.Running,
+                SensorLiveStatusFlags.SensorInitialised |
+                SensorLiveStatusFlags.CalibrationAvailable));
+    }
+}
+
+static void SensorLiveRawCountsCalibrate()
+{
+    var headerBytes = ReadV3Fixture("latest-header-replica-0.bin");
+    var header = V3HeaderDecoder.Decode(
+        headerBytes.AsSpan(0, 6 * V3PageCodec.PhysicalBytes));
+    var decoder = new SensorLiveDecoder(
+        V3GaugeJobService.GetCalibrationBundle(header));
+    var reading = decoder.Decode(new SensorLiveSample(
+        ProtocolVersion: 1,
+        QualityFlags: 0,
+        SensorIteration: 12,
+        Sequence: 1,
+        MonotonicTicks: 100,
+        PressureRaw: 4_942_157,
+        TemperatureRaw: 4_910_753));
+
+    AssertNear(16.22890203894386, reading.Pressure, 0.0000001);
+    AssertNear(28.36388855138488, reading.Temperature, 0.0000001);
+    AssertEqual(true, reading.IsSensible);
+}
+
+static byte[] BuildSensorLiveStatusPayload(
+    SensorLiveState state,
+    SensorLiveStatusFlags flags,
+    byte lastError = 0,
+    uint latestSequence = 0)
+{
+    var payload = new byte[SensorLiveStatus.PayloadLength];
+    payload[0] = 1;
+    payload[1] = (byte)state;
+    payload[2] = (byte)flags;
+    payload[3] = lastError;
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), latestSequence);
+    return payload;
+}
+
+static byte[] BuildSensorLiveSamplePayload(
+    uint sequence,
+    uint ticks,
+    uint pressureRaw,
+    uint temperatureRaw)
+{
+    var payload = new byte[SensorLiveSample.PayloadLength];
+    payload[0] = 1;
+    payload[2] = 12;
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), sequence);
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), ticks);
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12), pressureRaw);
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(16), temperatureRaw);
+    return payload;
+}
+
 static QuartzCalibration BuildLiveGaugeCalibration()
 {
     double[][] pressure =
@@ -715,6 +1144,7 @@ static void LegacyRecordExporterWritesAsciiFormat()
     var lines = text.Split("\r\n", StringSplitOptions.None);
     AssertEqual("Start of Job: 2026/07/12 17:16:08", lines[0]);
     AssertEqual("Device Type: Northstar 4000AH Quartz Transducer", lines[2]);
+    AssertEqual("Firmware Version: 2.0", lines[5]);
     AssertEqual(LegacyRecordExporter.Header, lines[10]);
     AssertEqual(
         "16995857\t16964453\t16.228902\t28.363889\t     0\t   240\t38832\t0.00000000\t262162.888482\t0\t0\t0",
@@ -799,12 +1229,1975 @@ static void CommunicationSessionSummaryCountsIntegrityEvents()
     AssertEqual(100, log.Snapshot().Count);
 }
 
+static void V3CapabilitiesAndFallbackWork()
+{
+    var mirrorPayload = CreateV3CapabilitiesPayload(V3MemoryMode.Mirror);
+    var mirror = V3Capabilities.Parse(mirrorPayload);
+    AssertEqual((ushort)256, mirror.PageBytes);
+    AssertEqual((ushort)792, mirror.MaximumSerialPayload);
+    AssertEqual(
+        V3CapabilityFlags.DiagnosticJournal,
+        mirror.Flags & V3CapabilityFlags.DiagnosticJournal);
+    AssertEqual(V3MemoryMode.Mirror, mirror.MemoryMode);
+    AssertEqual(V3Capabilities.MirrorStorageEnd, mirror.StorageEnd);
+    AssertEqual((byte)0x03, mirror.WriteTargetMask);
+
+    var full = V3Capabilities.Parse(
+        CreateV3CapabilitiesPayload(V3MemoryMode.Full));
+    AssertEqual(V3MemoryMode.Full, full.MemoryMode);
+    AssertEqual(V3Capabilities.FullStorageEnd, full.StorageEnd);
+    AssertEqual((byte)0x01, full.WriteTargetMask);
+
+    var v3Session = new GaugeSession(new DelegateGaugeTransport(
+        request => new GaugeFrame(request.Command, 32, 0, mirrorPayload)));
+    AssertEqual((byte)3, V3Capabilities.StorageMajor);
+    AssertEqual(true, v3Session.ProbeV3CapabilitiesAsync().GetAwaiter().GetResult() is not null);
+
+    var v2Session = new GaugeSession(new DelegateGaugeTransport(
+        request => new GaugeFrame(request.Command, 1, 0, [0xFF])));
+    AssertEqual<V3Capabilities?>(null, v2Session.ProbeV3CapabilitiesAsync().GetAwaiter().GetResult());
+}
+
+static void V3CapabilitiesRejectInconsistentLayouts()
+{
+    var badMask = CreateV3CapabilitiesPayload(V3MemoryMode.Mirror);
+    badMask[30] = 0x01;
+    AssertGaugeProtocol(() => V3Capabilities.Parse(badMask));
+
+    var badEnd = CreateV3CapabilitiesPayload(V3MemoryMode.Full);
+    WriteUInt32LittleEndian(
+        badEnd.AsSpan(16, 4),
+        V3Capabilities.MirrorStorageEnd);
+    AssertGaugeProtocol(() => V3Capabilities.Parse(badEnd));
+
+    var badMode = CreateV3CapabilitiesPayload(V3MemoryMode.Mirror);
+    badMode[29] = 2;
+    AssertGaugeProtocol(() => V3Capabilities.Parse(badMode));
+
+    var unknownFlag = CreateV3CapabilitiesPayload(V3MemoryMode.Mirror);
+    unknownFlag[3] |= 0x20;
+    AssertGaugeProtocol(() => V3Capabilities.Parse(unknownFlag));
+
+    var reserved = CreateV3CapabilitiesPayload(V3MemoryMode.Mirror);
+    reserved[31] = 1;
+    AssertGaugeProtocol(() => V3Capabilities.Parse(reserved));
+}
+
+static void V3DiagnosticFailoverHintsWork()
+{
+    var capabilities = V3Capabilities.Parse(
+        CreateV3CapabilitiesPayload(V3MemoryMode.Mirror));
+    var chip1Failed = V3DiagnosticStatus.Parse(
+        CreateV3DiagnosticStatusPayload(
+            V3MemoryMode.Mirror,
+            failedChipMask: 0x01,
+            degradedReplicaMask: 0x01),
+        capabilities);
+    AssertEqual(1, chip1Failed.PreferredReplicaId);
+    AssertEqual(true, chip1Failed.RequiresMemoryService);
+    AssertEqual(V3Capabilities.MirrorStorageEnd, chip1Failed.RegionStart);
+
+    var chip2Failed = V3DiagnosticStatus.Parse(
+        CreateV3DiagnosticStatusPayload(
+            V3MemoryMode.Mirror,
+            failedChipMask: 0x02,
+            degradedReplicaMask: 0x02),
+        capabilities);
+    AssertEqual(0, chip2Failed.PreferredReplicaId);
+
+    var bothFailed = V3DiagnosticStatus.Parse(
+        CreateV3DiagnosticStatusPayload(
+            V3MemoryMode.Mirror,
+            failedChipMask: 0x03,
+            degradedReplicaMask: 0x03),
+        capabilities);
+    AssertEqual(true, bothFailed.ProbeBothFirst);
+
+    var inconsistent = CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror);
+    inconsistent[21] = 1;
+    AssertGaugeProtocol(() => V3DiagnosticStatus.Parse(inconsistent, capabilities));
+}
+
+static void V3CrashCapsuleParsesKnownPayload()
+{
+    var payload = CreateCrashCapsulePayload(
+        rawRcon: 0xA6,
+        applicationState: 2,
+        faultId: 0x91,
+        generation: 0x78563412,
+        bootId: 0xEFCDAB89,
+        eventId: 0x3412,
+        fileId: 0x89ABCDEF,
+        committedSamples: 0x10203040);
+
+    var capsule = CrashCapsule.Parse(payload);
+    AssertEqual((byte)1, capsule.SchemaVersion);
+    AssertEqual((byte)0xA6, capsule.RawRcon);
+    AssertEqual((byte)2, capsule.ApplicationState);
+    AssertEqual("deployment recording", capsule.ApplicationStateDisplay);
+    AssertEqual((byte)0x91, capsule.FaultId);
+    AssertEqual(0x78563412u, capsule.Generation);
+    AssertEqual(0xEFCDAB89u, capsule.BootId);
+    AssertEqual((ushort)0x3412, capsule.EventId);
+    AssertEqual(0x89ABCDEFu, capsule.FileId);
+    AssertEqual(0x10203040u, capsule.CommittedSampleCount);
+
+    var unknown = CrashCapsule.Parse(CreateCrashCapsulePayload(
+        applicationState: 0xFE,
+        faultId: 0xFD,
+        eventId: 0xFCFB));
+    AssertEqual((byte)0xFE, unknown.ApplicationState);
+    AssertEqual((byte)0xFD, unknown.FaultId);
+    AssertEqual((ushort)0xFCFB, unknown.EventId);
+    AssertEqual("unknown (254)", unknown.ApplicationStateDisplay);
+}
+
+static void V3CrashCapsuleValidationFailures()
+{
+    var valid = CreateCrashCapsulePayload();
+    AssertGaugeProtocol(() => CrashCapsule.Parse(valid.AsSpan(0, 31)));
+    AssertGaugeProtocol(() => CrashCapsule.Parse([.. valid, 0]));
+
+    var badMagic = valid.ToArray();
+    badMagic[0] ^= 1;
+    RewriteCrashCapsuleCrc(badMagic);
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badMagic));
+
+    var badSchema = valid.ToArray();
+    badSchema[4] = 2;
+    RewriteCrashCapsuleCrc(badSchema);
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badSchema));
+
+    var badReserved = valid.ToArray();
+    badReserved[26] = 1;
+    RewriteCrashCapsuleCrc(badReserved);
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badReserved));
+
+    var badCommit = valid.ToArray();
+    badCommit[31] = 0;
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badCommit));
+
+    var badCrc = valid.ToArray();
+    badCrc[27] ^= 1;
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badCrc));
+
+    var byte26Changed = valid.ToArray();
+    byte26Changed[26] = 1;
+    AssertEqual(
+        false,
+        Crc32C.Compute(byte26Changed.AsSpan(0, 27)) ==
+        BinaryPrimitives.ReadUInt32LittleEndian(byte26Changed.AsSpan(27, 4)));
+    AssertEqual(
+        Crc32C.Compute(valid.AsSpan(0, 27)),
+        BinaryPrimitives.ReadUInt32LittleEndian(valid.AsSpan(27, 4)));
+}
+
+static void V3CrashCapsuleCommandResponses()
+{
+    GaugeFrame? captured = null;
+    var payload = CreateCrashCapsulePayload();
+    var session = new GaugeSession(new DelegateGaugeTransport(request =>
+    {
+        captured = request;
+        return GaugeFrame.Create(request.Command, payload: payload);
+    }));
+    var available = session.ReadV3CrashCapsuleAsync().GetAwaiter().GetResult();
+    AssertEqual(CrashCapsuleReadStatus.Available, available.Status);
+    AssertEqual((uint)7, available.Capsule!.Generation);
+    AssertEqual(GaugeCommand.V3GetCrashCapsule, captured!.Command);
+    AssertEqual((ushort)0, captured.DataLength);
+    AssertEqual(0, captured.Payload.Length);
+
+    AssertEqual(
+        CrashCapsuleReadStatus.NoLongerAvailable,
+        ReadCrashCapsuleResponse([0xFC]).Status);
+    AssertEqual(
+        CrashCapsuleReadStatus.Unsupported,
+        ReadCrashCapsuleResponse([0xFF]).Status);
+    AssertGaugeProtocol(() => ReadCrashCapsuleResponse(payload.AsSpan(0, 31).ToArray()));
+    AssertGaugeProtocol(() => ReadCrashCapsuleResponse([.. payload, 0]));
+}
+
+static void V3CrashCapsuleAvailabilityWorkflow()
+{
+    var withoutRequests = 0;
+    var without = DiscoverEmptyV3Catalog(
+        CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror),
+        request =>
+        {
+            withoutRequests++;
+            return [0xFF];
+        });
+    AssertEqual(0, withoutRequests);
+    AssertEqual<CrashCapsuleReadResult?>(null, without.CrashCapsuleRead);
+
+    var withStatus = CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror);
+    withStatus[1] |= (byte)V3DiagnosticFlags.CrashCapsuleValid;
+    WriteUInt32LittleEndian(withStatus.AsSpan(28, 4), 7);
+    var withRequests = 0;
+    var with = DiscoverEmptyV3Catalog(
+        withStatus,
+        request =>
+        {
+            withRequests++;
+            return CreateCrashCapsulePayload();
+        });
+    AssertEqual(1, withRequests);
+    AssertEqual((uint)7, with.CrashCapsule!.Generation);
+
+    var raced = DiscoverEmptyV3Catalog(withStatus, request => [0xFC]);
+    AssertEqual(CrashCapsuleReadStatus.NoLongerAvailable, raced.CrashCapsuleRead!.Status);
+    AssertEqual<CrashCapsule?>(null, raced.CrashCapsule);
+
+    var unsupported = DiscoverEmptyV3Catalog(withStatus, request => [0xFF]);
+    AssertEqual(CrashCapsuleReadStatus.Unsupported, unsupported.CrashCapsuleRead!.Status);
+    AssertEqual(0, unsupported.Files.Count);
+}
+
+static void V3CrashCapsulePrecedesFileTransfer()
+{
+    var data = ReadV3Fixture("bch-clean-data.bin");
+    var diagnosticPayload = CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror);
+    diagnosticPayload[1] |= (byte)V3DiagnosticFlags.CrashCapsuleValid;
+    WriteUInt32LittleEndian(diagnosticPayload.AsSpan(28, 4), 7);
+    var capabilities = V3Capabilities.Parse(
+        CreateV3CapabilitiesPayload(V3MemoryMode.Mirror));
+    var diagnostic = V3DiagnosticStatus.Parse(
+        diagnosticPayload,
+        capabilities);
+    var catalog = CreateV3DataCatalog(data) with
+    {
+        DiagnosticStatus = diagnostic
+    };
+    var commands = new List<GaugeCommand>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request.Command);
+        if (request.Command == GaugeCommand.V3GetCrashCapsule)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateCrashCapsulePayload());
+        }
+
+        if (request.Command == GaugeCommand.ReadExternalEeprom)
+        {
+            var logicalAddress = request.Address >=
+                V3GaugeJobService.ReplicaAddressStride
+                ? request.Address - V3GaugeJobService.ReplicaAddressStride
+                : request.Address;
+            var offset = checked((int)(logicalAddress - 0x10000));
+            return GaugeFrame.Create(
+                request.Command,
+                request.Address,
+                data.AsSpan(offset, request.DataLength).ToArray());
+        }
+
+        throw new InvalidOperationException(
+            $"Unexpected request {request.Command}.");
+    });
+    var service = new V3GaugeJobService(new GaugeSession(transport));
+
+    catalog = service
+        .DownloadCrashCapsuleIfAvailableAsync(catalog)
+        .GetAwaiter()
+        .GetResult();
+    _ = service
+        .DownloadFileAsync(catalog, 0)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual((uint)7, catalog.CrashCapsule!.Generation);
+    var capsuleIndex = commands.IndexOf(GaugeCommand.V3GetCrashCapsule);
+    var fileReadIndex = commands.IndexOf(GaugeCommand.ReadExternalEeprom);
+    AssertEqual(true, capsuleIndex >= 0);
+    AssertEqual(true, fileReadIndex > capsuleIndex);
+}
+
+static void V3CrashCapsuleReportsDeduplicate()
+{
+    var directory = Path.Combine(
+        Path.GetTempPath(),
+        $"gauge-crash-capsule-test-{Guid.NewGuid():N}");
+    try
+    {
+        var store = new CrashCapsuleReportStore(directory);
+        var capsule = CrashCapsule.Parse(CreateCrashCapsulePayload());
+        AssertEqual(true, store.SaveIfNew("100230:1234", capsule));
+        AssertEqual(false, store.SaveIfNew("100230:1234", capsule));
+        AssertEqual(true, store.SaveIfNew("100230:5678", capsule));
+        AssertEqual(true, store.SaveIfNew(
+            "100230:1234",
+            capsule with { EventId = (ushort)(capsule.EventId + 1) }));
+        AssertEqual(3, Directory.GetFiles(directory, "*.json").Length);
+    }
+    finally
+    {
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}
+
+static CrashCapsuleReadResult ReadCrashCapsuleResponse(byte[] payload)
+{
+    var session = new GaugeSession(new DelegateGaugeTransport(
+        request => GaugeFrame.Create(request.Command, payload: payload)));
+    return session.ReadV3CrashCapsuleAsync().GetAwaiter().GetResult();
+}
+
+static V3GaugeCatalog DiscoverEmptyV3Catalog(
+    byte[] diagnosticPayload,
+    Func<GaugeFrame, byte[]> crashCapsuleResponse)
+{
+    var capabilitiesPayload = CreateV3CapabilitiesPayload(V3MemoryMode.Mirror);
+    var session = new GaugeSession(new DelegateGaugeTransport(request =>
+    {
+        var payload = request.Command switch
+        {
+            GaugeCommand.V3Capabilities => capabilitiesPayload,
+            GaugeCommand.V3DiagnosticStatus => diagnosticPayload,
+            GaugeCommand.V3GetCrashCapsule => crashCapsuleResponse(request),
+            GaugeCommand.ReadExternalEeprom =>
+                Enumerable.Repeat((byte)0xFF, request.DataLength).ToArray(),
+            _ => throw new InvalidOperationException(
+                $"Unexpected request {request.Command}.")
+        };
+        return GaugeFrame.Create(request.Command, payload: payload);
+    }));
+    return new V3GaugeJobService(session)
+        .DiscoverAsync()
+        .GetAwaiter()
+        .GetResult()!;
+}
+
+static byte[] CreateCrashCapsulePayload(
+    byte rawRcon = 0x20,
+    byte applicationState = 3,
+    byte faultId = 9,
+    uint generation = 7,
+    uint bootId = 11,
+    ushort eventId = 14,
+    uint fileId = 0x12345678,
+    uint committedSamples = 1234)
+{
+    var payload = new byte[CrashCapsule.PayloadLength];
+    "MGCC"u8.CopyTo(payload);
+    payload[4] = CrashCapsule.CurrentSchemaVersion;
+    payload[5] = rawRcon;
+    payload[6] = applicationState;
+    payload[7] = faultId;
+    WriteUInt32LittleEndian(payload.AsSpan(8, 4), generation);
+    WriteUInt32LittleEndian(payload.AsSpan(12, 4), bootId);
+    BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(16, 2), eventId);
+    WriteUInt32LittleEndian(payload.AsSpan(18, 4), fileId);
+    WriteUInt32LittleEndian(payload.AsSpan(22, 4), committedSamples);
+    RewriteCrashCapsuleCrc(payload);
+    payload[31] = CrashCapsule.CommitMarker;
+    return payload;
+}
+
+static void RewriteCrashCapsuleCrc(byte[] payload)
+{
+    WriteUInt32LittleEndian(
+        payload.AsSpan(27, 4),
+        Crc32C.Compute(payload.AsSpan(0, 27)));
+}
+
+static void ExternalEraseProgressPayloadValidates()
+{
+    var busy = ExternalEraseStatus.Parse(BuildEraseProgressPayload(
+        ExternalEraseState.Busy,
+        completed: 17,
+        busyMask: 3,
+        address: 0x00110000));
+    AssertEqual((ushort)17, busy.Completed);
+    AssertEqual((ushort)512, busy.Total);
+    AssertEqual((byte)3, busy.BusyMask);
+
+    var complete = ExternalEraseStatus.Parse(BuildEraseProgressPayload(
+        ExternalEraseState.Complete,
+        completed: 512,
+        address: 0x02000000));
+    AssertEqual(100.0, complete.Percent);
+
+    var badVersion = BuildEraseProgressPayload(ExternalEraseState.Busy, 0);
+    badVersion[0] = 2;
+    AssertGaugeProtocol(() => ExternalEraseStatus.Parse(badVersion));
+
+    var badMask = BuildEraseProgressPayload(ExternalEraseState.Busy, 0);
+    badMask[2] = 0x80;
+    AssertGaugeProtocol(() => ExternalEraseStatus.Parse(badMask));
+
+    var badCount = BuildEraseProgressPayload(ExternalEraseState.Complete, 512);
+    badCount[4] = 1;
+    AssertGaugeProtocol(() => ExternalEraseStatus.Parse(badCount));
+}
+
+static void ProgressEraseReportsEveryPair()
+{
+    ushort completed = 0;
+    var commands = new List<GaugeCommand>();
+    var updates = new List<ExternalEraseProgress>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request.Command);
+        if (request.Command == GaugeCommand.StartProgressErase)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: BuildEraseProgressPayload(
+                    ExternalEraseState.Busy,
+                    completed,
+                    busyMask: 3));
+        }
+
+        if (request.Command == GaugeCommand.GetEraseProgress)
+        {
+            completed++;
+            var state = completed == 512
+                ? ExternalEraseState.Complete
+                : ExternalEraseState.Busy;
+            return GaugeFrame.Create(
+                request.Command,
+                payload: BuildEraseProgressPayload(
+                    state,
+                    completed,
+                    busyMask: state == ExternalEraseState.Busy ? (byte)3 : (byte)0,
+                    address: (uint)completed * 0x10000));
+        }
+        if (request.Command == GaugeCommand.EndMemoryErase)
+        {
+            return GaugeFrame.Create(request.Command, payload: [0x01]);
+        }
+        if (request.Command == GaugeCommand.Identify)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(eraseStatus: 0));
+        }
+
+        throw new InvalidOperationException($"Unexpected erase command {request.Command}.");
+    });
+
+    var result = new ExternalMemoryEraseService(new GaugeSession(transport))
+        .EraseAsync(
+            new InlineProgress<ExternalEraseProgress>(updates.Add),
+            pollInterval: TimeSpan.Zero)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(ExternalEraseMode.Progress, result.Mode);
+    AssertEqual((ushort)512, result.Completed);
+    AssertEqual(513, updates.Count);
+    AssertEqual(0.0, updates[0].Percent);
+    AssertEqual(100.0, updates[^1].Percent);
+    AssertEqual(0, commands.Count(command => command == GaugeCommand.EndMemoryErase));
+    AssertEqual(1, commands.Count(command => command == GaugeCommand.Identify));
+    AssertEqual((byte)54, (byte)GaugeCommand.SetTxInterval);
+    AssertEqual((byte)63, (byte)GaugeCommand.StartSensorMeasurement);
+}
+
+static void ProgressEraseLostStartReplyUsesStatus()
+{
+    var commands = new List<GaugeCommand>();
+    var progressReads = 0;
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request.Command);
+        return request.Command switch
+        {
+            GaugeCommand.StartProgressErase => throw new TimeoutException(
+                "The command-64 reply was lost after firmware accepted it."),
+            GaugeCommand.GetEraseProgress => GaugeFrame.Create(
+                request.Command,
+                payload: BuildEraseProgressPayload(
+                    ++progressReads == 1
+                        ? ExternalEraseState.Busy
+                        : ExternalEraseState.Complete,
+                    completed: progressReads == 1 ? (ushort)1 : (ushort)512,
+                    busyMask: progressReads == 1 ? (byte)0x03 : (byte)0,
+                    address: progressReads == 1 ? 0x00010000U : 0x02000000U)),
+            GaugeCommand.Identify => GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(eraseStatus: 0)),
+            _ => throw new InvalidOperationException(
+                $"Unexpected lost-start recovery command {request.Command}.")
+        };
+    });
+
+    var result = new ExternalMemoryEraseService(new GaugeSession(transport))
+        .EraseAsync(pollInterval: TimeSpan.Zero)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(ExternalEraseMode.Progress, result.Mode);
+    AssertEqual((ushort)512, result.Completed);
+    AssertEqual(1, commands.Count(command => command == GaugeCommand.StartProgressErase));
+    AssertEqual(2, commands.Count(command => command == GaugeCommand.GetEraseProgress));
+    AssertEqual(1, commands.Count(command => command == GaugeCommand.Identify));
+}
+
+static void ProgressEraseThenModeSelectionVerifiesLayout()
+{
+    byte memoryMode = 0;
+    var commands = new List<GaugeCommand>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request.Command);
+        return request.Command switch
+        {
+            GaugeCommand.StartProgressErase => GaugeFrame.Create(
+                request.Command,
+                payload: BuildEraseProgressPayload(
+                    ExternalEraseState.Complete,
+                    completed: 512,
+                    address: V3Capabilities.PhysicalChipBoundary)),
+            GaugeCommand.Identify => GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(
+                    eraseStatus: 0,
+                    memoryMode: memoryMode)),
+            GaugeCommand.SetMemoryMode => ApplyMode(request),
+            GaugeCommand.V3Capabilities => GaugeFrame.Create(
+                request.Command,
+                payload: CreateV3CapabilitiesPayload((V3MemoryMode)memoryMode)),
+            _ => throw new InvalidOperationException(
+                $"Unexpected erase/mode command {request.Command}.")
+        };
+    });
+    var session = new GaugeSession(transport);
+
+    _ = new ExternalMemoryEraseService(session)
+        .EraseAsync(pollInterval: TimeSpan.Zero)
+        .GetAwaiter()
+        .GetResult();
+    var device = new GaugeConfigurationService(session)
+        .SetStorageModeAsync(GaugeStorageMode.Mirror, 1234)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual((byte)GaugeStorageMode.Mirror, device.MemoryMode);
+    AssertEqual(0, commands.Count(command => command == GaugeCommand.EndMemoryErase));
+    AssertEqual(
+        "StartProgressErase,Identify,Identify,SetMemoryMode,Identify,V3Capabilities",
+        string.Join(',', commands));
+
+    GaugeFrame ApplyMode(GaugeFrame request)
+    {
+        AssertSequenceEqual([0x01], request.Payload);
+        memoryMode = request.Payload[0];
+        return GaugeFrame.Create(request.Command, payload: [0x01]);
+    }
+}
+
+static void ProgressEraseStopsOnLostResponse()
+{
+    var progressPolls = 0;
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        return request.Command switch
+        {
+            GaugeCommand.StartProgressErase => GaugeFrame.Create(
+                request.Command,
+                payload: BuildEraseProgressPayload(
+                    ExternalEraseState.Busy,
+                    completed: 0,
+                    busyMask: 3)),
+            GaugeCommand.GetEraseProgress => LoseProgressReply(),
+            _ => throw new InvalidOperationException(
+                $"Unexpected erase command {request.Command}.")
+        };
+    });
+
+    var timedOut = false;
+    try
+    {
+        new ExternalMemoryEraseService(new GaugeSession(transport))
+            .EraseAsync(pollInterval: TimeSpan.Zero)
+            .GetAwaiter()
+            .GetResult();
+    }
+    catch (TimeoutException)
+    {
+        timedOut = true;
+    }
+
+    AssertEqual(true, timedOut);
+    AssertEqual(1, progressPolls);
+
+    GaugeFrame LoseProgressReply()
+    {
+        progressPolls++;
+        throw new TimeoutException("Simulated disconnected gauge.");
+    }
+}
+
+static void ProgressEraseFallsBackToLegacyV2()
+{
+    var memoryPolls = 0;
+    var commands = new List<GaugeCommand>();
+    var updates = new List<ExternalEraseProgress>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request.Command);
+        return request.Command switch
+        {
+            GaugeCommand.StartProgressErase => GaugeFrame.Create(request.Command, payload: [0xFF]),
+            GaugeCommand.EraseExternalMemory => GaugeFrame.Create(request.Command, payload: [0x01]),
+            GaugeCommand.MemoryStatus => GaugeFrame.Create(
+                request.Command,
+                payload: [++memoryPolls < 2 ? (byte)0x03 : (byte)0x00]),
+            GaugeCommand.EndMemoryErase => GaugeFrame.Create(request.Command, payload: [0x01]),
+            GaugeCommand.Identify => GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(eraseStatus: 0)),
+            _ => throw new InvalidOperationException($"Unexpected legacy erase command {request.Command}.")
+        };
+    });
+
+    var result = new ExternalMemoryEraseService(new GaugeSession(transport))
+        .EraseAsync(
+            new InlineProgress<ExternalEraseProgress>(updates.Add),
+            pollInterval: TimeSpan.Zero)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(ExternalEraseMode.LegacyEstimated, result.Mode);
+    AssertEqual(true, updates.All(update => update.IsEstimated));
+    AssertEqual(100.0, updates[^1].Percent);
+    AssertEqual(1, commands.Count(command => command == GaugeCommand.EraseExternalMemory));
+    AssertEqual(1, commands.Count(command => command == GaugeCommand.EndMemoryErase));
+}
+
+static void LegacyEraseRequiresClearedInterlock()
+{
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        return request.Command switch
+        {
+            GaugeCommand.StartProgressErase => GaugeFrame.Create(request.Command, payload: [0xFF]),
+            GaugeCommand.EraseExternalMemory => GaugeFrame.Create(request.Command, payload: [0x01]),
+            GaugeCommand.MemoryStatus => GaugeFrame.Create(request.Command, payload: [0x00]),
+            GaugeCommand.EndMemoryErase => GaugeFrame.Create(request.Command, payload: [0x01]),
+            GaugeCommand.Identify => GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(eraseStatus: 1)),
+            _ => throw new InvalidOperationException(
+                $"Unexpected legacy erase command {request.Command}.")
+        };
+    });
+
+    var rejected = false;
+    try
+    {
+        new ExternalMemoryEraseService(new GaugeSession(transport))
+            .EraseAsync(pollInterval: TimeSpan.Zero)
+            .GetAwaiter()
+            .GetResult();
+    }
+    catch (InvalidDataException)
+    {
+        rejected = true;
+    }
+
+    AssertEqual(true, rejected);
+}
+
+static void IncompleteEraseRestartBeginsFresh()
+{
+    var existingBusyPolls = 0;
+    var restartIssued = false;
+    var progressPolls = 0;
+    var commands = new List<GaugeCommand>();
+    var updates = new List<ExternalEraseProgress>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request.Command);
+        return request.Command switch
+        {
+            GaugeCommand.GetEraseProgress when !restartIssued => GaugeFrame.Create(
+                request.Command,
+                payload: BuildEraseProgressPayload(
+                    ++existingBusyPolls < 3
+                        ? ExternalEraseState.Busy
+                        : ExternalEraseState.Complete,
+                    completed: existingBusyPolls < 3 ? (ushort)25 : (ushort)512,
+                    busyMask: existingBusyPolls < 3 ? (byte)0x03 : (byte)0x00)),
+            GaugeCommand.ResetDevice when existingBusyPolls >= 3 =>
+                AcceptRestart(request.Command),
+            GaugeCommand.StartProgressErase when restartIssued => GaugeFrame.Create(
+                request.Command,
+                payload: BuildEraseProgressPayload(
+                    ExternalEraseState.Busy,
+                    completed: 0,
+                    busyMask: 3)),
+            GaugeCommand.GetEraseProgress when restartIssued => GaugeFrame.Create(
+                request.Command,
+                payload: BuildEraseProgressPayload(
+                    ExternalEraseState.Complete,
+                    completed: CompleteProgressPoll(),
+                    address: 0x02000000)),
+            GaugeCommand.Identify => GaugeFrame.Create(
+                request.Command,
+                payload: BuildMemoryIdentityPayload(eraseStatus: 0)),
+            _ => throw new InvalidOperationException(
+                $"Unexpected restart command {request.Command}.")
+        };
+    });
+
+    var session = new GaugeSession(transport);
+    var service = new ExternalMemoryEraseService(session);
+    service.PrepareRestartFromBeginningAsync(pollInterval: TimeSpan.Zero)
+        .GetAwaiter()
+        .GetResult();
+    var reacquired = DeviceData.DecodeMemoryGauge(
+        session.IdentifyAsync().GetAwaiter().GetResult().Payload);
+    AssertEqual((byte)0, reacquired.EraseStatus.GetValueOrDefault());
+    var result = service.EraseAsync(
+        new InlineProgress<ExternalEraseProgress>(updates.Add),
+        pollInterval: TimeSpan.Zero)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(ExternalEraseMode.Progress, result.Mode);
+    AssertEqual(true, restartIssued);
+    AssertEqual(1, commands.Count(command => command == GaugeCommand.StartProgressErase));
+    AssertEqual(0, commands.Count(command => command == GaugeCommand.EraseExternalMemory));
+    AssertEqual(0, commands.Count(command => command == GaugeCommand.EndMemoryErase));
+    AssertEqual(1, commands.Count(command => command == GaugeCommand.ResetDevice));
+    AssertEqual(
+        true,
+        commands.IndexOf(GaugeCommand.Identify) <
+        commands.IndexOf(GaugeCommand.StartProgressErase));
+    AssertEqual(100.0, updates[^1].Percent);
+
+    GaugeFrame AcceptRestart(GaugeCommand command)
+    {
+        restartIssued = true;
+        return GaugeFrame.Create(command, payload: [0x01]);
+    }
+
+    ushort CompleteProgressPoll()
+    {
+        progressPolls++;
+        return 512;
+    }
+}
+
+static byte[] BuildMemoryIdentityPayload(
+    byte eraseStatus,
+    ushort measurementInterval = 5,
+    byte memoryMode = 1)
+{
+    var payload = new byte[22];
+    payload[0] = 3;
+    payload[1] = 0;
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(2, 4), 100230);
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6, 4), 1234);
+    BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18, 2), measurementInterval);
+    payload[20] = memoryMode;
+    payload[21] = eraseStatus;
+    return payload;
+}
+
+static byte[] BuildEraseProgressPayload(
+    ExternalEraseState state,
+    ushort completed,
+    byte busyMask = 0,
+    byte errorMask = 0,
+    uint address = 0)
+{
+    var payload = new byte[ExternalEraseStatus.PayloadLength];
+    payload[0] = 1;
+    payload[1] = (byte)state;
+    payload[2] = busyMask;
+    payload[3] = errorMask;
+    payload[4] = (byte)completed;
+    payload[5] = (byte)(completed >> 8);
+    payload[6] = 0;
+    payload[7] = 2;
+    WriteUInt32LittleEndian(payload.AsSpan(8, 4), address);
+    return payload;
+}
+
+static void V3DiagnosticEventsUseOperatorLanguage()
+{
+    var powerRemoved = V3DiagnosticEventCatalog.Describe(13);
+    AssertEqual(GaugeDiagnosticLevel.Normal, powerRemoved.Level);
+    AssertEqual("Power removed or logging stopped", powerRemoved.Title);
+    AssertEqual(true, powerRemoved.Detail.Contains("normal operation", StringComparison.Ordinal));
+    AssertEqual(false, powerRemoved.Detail.Contains("footer", StringComparison.OrdinalIgnoreCase));
+    AssertEqual(false, powerRemoved.Title.Contains("crash", StringComparison.OrdinalIgnoreCase));
+
+    var loggingFault = V3DiagnosticEventCatalog.Describe(14);
+    AssertEqual(GaugeDiagnosticLevel.Warning, loggingFault.Level);
+    AssertEqual("Logging stopped after a fault", loggingFault.Title);
+}
+
+static void V3CatalogDiscoveryUsesPrimaryRawReadsOnly()
+{
+    var commands = new List<GaugeFrame>();
+    var capabilitiesPayload = CreateV3CapabilitiesPayload();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request);
+        if (request.Command == GaugeCommand.V3Capabilities)
+        {
+            return GaugeFrame.Create(request.Command, 0, capabilitiesPayload);
+        }
+        if (request.Command == GaugeCommand.V3DiagnosticStatus)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror));
+        }
+
+        if (request.Command == GaugeCommand.V3CatalogSummary)
+        {
+            throw new InvalidOperationException("Host must not ask the PIC to recover the V3 catalog.");
+        }
+
+        if (request.Command == GaugeCommand.ReadExternalEeprom)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                request.Address,
+                Enumerable.Repeat((byte)0xFF, request.DataLength).ToArray());
+        }
+
+        throw new InvalidOperationException($"Unexpected V3 discovery request {request.Command} at 0x{request.Address:X8}.");
+    });
+
+    var catalog = new V3GaugeJobService(new GaugeSession(transport))
+        .DiscoverAsync()
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(0, catalog!.Files.Count);
+    AssertEqual(false, catalog.Recovery.Replicas[1].WasInspected);
+    AssertEqual(false, commands.Any(request => request.Command == GaugeCommand.V3CatalogSummary));
+    AssertEqual(
+        1,
+        commands.Count(request =>
+            request.Command == GaugeCommand.ReadExternalEeprom &&
+            request.Address >= V3GaugeJobService.ReplicaAddressStride));
+}
+
+static void V3CatalogUnionRetainsLongerAlternatePrefix()
+{
+    var full = ReadV3Fixture("catalog-six-files-replica-0.bin");
+    var shorter = full.ToArray();
+    shorter.AsSpan(5 * V3PageCodec.PhysicalBytes).Fill(0xFF);
+
+    var recovery = V3CatalogDecoder.Recover(
+        shorter,
+        full,
+        preferredReplicaId: 0);
+
+    AssertEqual(6, recovery.Records.Count);
+    AssertEqual((uint)5, recovery.Records[^1].CatalogSequence);
+    AssertEqual(1, recovery.SelectedReplicaId);
+}
+
+static void V3DiscoveryRetainsChip2OnlyPublication()
+{
+    const uint latestFileStart = 98304;
+    const uint latestDataStart = latestFileStart + 4096;
+    var fullCatalog = ReadV3Fixture("catalog-six-files-replica-0.bin");
+    var shorterCatalog = fullCatalog.ToArray();
+    shorterCatalog.AsSpan(5 * V3PageCodec.PhysicalBytes).Fill(0xFF);
+    var header = ReadV3Fixture("latest-header-replica-0.bin");
+    var data = ReadV3Fixture("latest-data-replica-0.bin");
+    var commands = new List<GaugeFrame>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request);
+        if (request.Command == GaugeCommand.V3Capabilities)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateV3CapabilitiesPayload(V3MemoryMode.Mirror));
+        }
+        if (request.Command == GaugeCommand.V3DiagnosticStatus)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror));
+        }
+        if (request.Command != GaugeCommand.ReadExternalEeprom)
+        {
+            throw new InvalidOperationException($"Unexpected V3 command {request.Command}.");
+        }
+
+        var chip2 = request.Address >= V3Capabilities.PhysicalChipBoundary;
+        var logicalAddress = chip2
+            ? request.Address - V3Capabilities.PhysicalChipBoundary
+            : request.Address;
+        var result = Enumerable.Repeat((byte)0xFF, request.DataLength).ToArray();
+        CopyFixtureRange(
+            chip2 ? fullCatalog : shorterCatalog,
+            0,
+            logicalAddress,
+            result);
+        if (chip2)
+        {
+            CopyFixtureRange(header, latestFileStart, logicalAddress, result);
+            CopyFixtureRange(data, latestDataStart, logicalAddress, result);
+        }
+        return GaugeFrame.Create(request.Command, request.Address, result);
+    });
+    var service = new V3GaugeJobService(new GaugeSession(transport));
+
+    var catalog = service.DiscoverAsync().GetAwaiter().GetResult()!;
+    AssertEqual(6, catalog.Recovery.Records.Count);
+    AssertEqual(1, catalog.Files.Count);
+    AssertEqual(1, catalog.Files[0].HeaderReplicaId);
+    AssertEqual(true, catalog.RequiresMemoryService);
+
+    var download = service.DownloadFileAsync(catalog, 0).GetAwaiter().GetResult();
+    AssertEqual(4, download.Samples.Count);
+    AssertEqual(2, download.AlternateRecoveryCount);
+    AssertEqual(true, download.RequiresMemoryService);
+    AssertEqual(
+        true,
+        commands.Any(request =>
+            request.Command == GaugeCommand.ReadExternalEeprom &&
+            request.Address == V3Capabilities.PhysicalChipBoundary +
+                (5 * V3PageCodec.PhysicalBytes)));
+}
+
+static void V3CorrectedSingleCopyHeaderRequiresService()
+{
+    const uint latestFileStart = 98304;
+    const uint latestDataStart = latestFileStart + 4096;
+    var catalogBytes = ReadV3Fixture("catalog-six-files-replica-0.bin");
+    var headerBytes = ReadV3Fixture("latest-header-replica-0.bin");
+    headerBytes[40] ^= 0x01;
+    var dataBytes = ReadV3Fixture("latest-data-replica-0.bin");
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        if (request.Command == GaugeCommand.V3Capabilities)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateV3CapabilitiesPayload(V3MemoryMode.Mirror));
+        }
+        if (request.Command == GaugeCommand.V3DiagnosticStatus)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror));
+        }
+        if (request.Command != GaugeCommand.ReadExternalEeprom)
+        {
+            throw new InvalidOperationException($"Unexpected V3 command {request.Command}.");
+        }
+
+        var chip2 = request.Address >= V3Capabilities.PhysicalChipBoundary;
+        var logicalAddress = chip2
+            ? request.Address - V3Capabilities.PhysicalChipBoundary
+            : request.Address;
+        var result = Enumerable.Repeat((byte)0xFF, request.DataLength).ToArray();
+        if (!chip2)
+        {
+            CopyFixtureRange(catalogBytes, 0, logicalAddress, result);
+            CopyFixtureRange(headerBytes, latestFileStart, logicalAddress, result);
+            CopyFixtureRange(dataBytes, latestDataStart, logicalAddress, result);
+        }
+
+        return GaugeFrame.Create(request.Command, request.Address, result);
+    });
+
+    var catalog = new V3GaugeJobService(new GaugeSession(transport))
+        .DiscoverAsync()
+        .GetAwaiter()
+        .GetResult()!;
+
+    AssertEqual(1, catalog.Files.Count);
+    AssertEqual(0, catalog.Files[0].HeaderReplicaId);
+    AssertEqual(true, catalog.RequiresMemoryService);
+}
+
+static void V3DataDownloadUsesLazyMirrorFallback()
+{
+    var clean = ReadV3Fixture("bch-clean-data.bin");
+    var damaged = clean.ToArray();
+    for (var bit = 0; bit < 17; bit++)
+    {
+        damaged[bit / 8] ^= (byte)(0x80 >> (bit % 8));
+    }
+
+    var cleanMirrorReads = new List<GaugeFrame>();
+    var cleanDownload = CreateV3DataService(clean, clean, cleanMirrorReads)
+        .DownloadFileAsync(CreateV3DataCatalog(clean), 0)
+        .GetAwaiter()
+        .GetResult();
+    AssertEqual(0, cleanDownload.MirrorPageReadCount);
+    AssertEqual(0, cleanMirrorReads.Count);
+    AssertEqual(false, cleanDownload.Pages.Any(page => page.MirrorWasInspected));
+    AssertEqual(true, cleanDownload.IsOpen);
+    AssertEqual(false, cleanDownload.IsIncomplete);
+
+    var correctedPrimary = ReadV3Fixture("bch-16-corrected-data.bin");
+    var correctedMirrorReads = new List<GaugeFrame>();
+    var corrected = CreateV3DataService(correctedPrimary, clean, correctedMirrorReads)
+        .DownloadFileAsync(CreateV3DataCatalog(clean), 0)
+        .GetAwaiter()
+        .GetResult();
+    AssertEqual(1, corrected.MirrorPageReadCount);
+    AssertEqual(1, correctedMirrorReads.Count);
+    AssertEqual(1, corrected.Pages[0].SelectedReplicaId);
+    AssertEqual(V3PageStatus.Ok, corrected.Pages[0].Selected.Status);
+
+    var fallbackMirrorReads = new List<GaugeFrame>();
+    var recovered = CreateV3DataService(damaged, clean, fallbackMirrorReads)
+        .DownloadFileAsync(CreateV3DataCatalog(clean), 0)
+        .GetAwaiter()
+        .GetResult();
+    AssertEqual(1, recovered.MirrorPageReadCount);
+    AssertEqual(1, fallbackMirrorReads.Count);
+    AssertEqual((uint)0x10000, fallbackMirrorReads[0].Address - V3GaugeJobService.ReplicaAddressStride);
+    AssertEqual(1, recovered.Pages[0].SelectedReplicaId);
+    AssertEqual(false, recovered.Pages[1].MirrorWasInspected);
+}
+
+static void V3FullCapacityDownloadDoesNotReadMirror()
+{
+    var clean = ReadV3Fixture("bch-clean-data.bin");
+    var correctedPrimary = ReadV3Fixture("bch-16-corrected-data.bin");
+    var mirrorReads = new List<GaugeFrame>();
+    var download = CreateV3DataService(
+            correctedPrimary,
+            clean,
+            mirrorReads,
+            useMirror: false)
+        .DownloadFileAsync(CreateV3DataCatalog(clean, useMirror: false), 0)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(false, download.UsesMirror);
+    AssertEqual(0, mirrorReads.Count);
+    AssertEqual(0, download.MirrorPageReadCount);
+    AssertEqual(1, download.CorrectedPageCount);
+    AssertEqual(0, download.Pages[0].SelectedReplicaId);
+    AssertEqual(V3PageStatus.Corrected, download.Pages[0].Selected.Status);
+}
+
+static void V3FullCapacityFileCrossesChipBoundary()
+{
+    var clean = ReadV3Fixture("latest-data-replica-0.bin")
+        .AsSpan(0, 2 * V3PageCodec.PhysicalBytes)
+        .ToArray();
+    var requests = new List<GaugeFrame>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        requests.Add(request);
+        var sourceOffset = request.Address < V3Capabilities.PhysicalChipBoundary
+            ? 0
+            : V3PageCodec.PhysicalBytes;
+        return GaugeFrame.Create(
+            request.Command,
+            request.Address,
+            clean.AsSpan(sourceOffset, request.DataLength).ToArray());
+    });
+    var template = CreateV3DataCatalog(clean, useMirror: false);
+    var templateFile = template.Files[0];
+    var dataStart = V3Capabilities.PhysicalChipBoundary -
+        V3PageCodec.PhysicalBytes;
+    var file = templateFile with
+    {
+        DataStart = dataStart,
+        DataEnd = dataStart + (2 * V3PageCodec.PhysicalBytes),
+        BoundEnd = dataStart + 4096
+    };
+    var catalog = template with { Files = new[] { file } };
+
+    var download = new V3GaugeJobService(
+            new GaugeSession(transport),
+            useMirror: false)
+        .DownloadFileAsync(catalog, 0)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(4, download.Samples.Count);
+    AssertEqual(2, requests.Count);
+    AssertEqual(dataStart, requests[0].Address);
+    AssertEqual((ushort)V3PageCodec.PhysicalBytes, requests[0].DataLength);
+    AssertEqual(V3Capabilities.PhysicalChipBoundary, requests[1].Address);
+    AssertEqual((ushort)V3PageCodec.PhysicalBytes, requests[1].DataLength);
+    AssertEqual(
+        false,
+        requests.Any(request => request.Address >= 0x04000000));
+}
+
+static void V3DiscoveryResolvesLatestLogicalEnd()
+{
+    const uint latestFileStart = 98304;
+    const uint latestDataStart = latestFileStart + 4096;
+    var catalogBytes = ReadV3Fixture("catalog-six-files-replica-0.bin");
+    var headerBytes = ReadV3Fixture("latest-header-replica-0.bin");
+    var dataBytes = ReadV3Fixture("latest-data-replica-0.bin");
+    var capabilities = CreateV3CapabilitiesPayload();
+
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        if (request.Command == GaugeCommand.V3Capabilities)
+        {
+            return GaugeFrame.Create(request.Command, 0, capabilities);
+        }
+        if (request.Command == GaugeCommand.V3DiagnosticStatus)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror));
+        }
+
+        if (request.Command != GaugeCommand.ReadExternalEeprom)
+        {
+            throw new InvalidOperationException($"Unexpected V3 command {request.Command}.");
+        }
+
+        var logicalAddress = request.Address >= V3GaugeJobService.ReplicaAddressStride
+            ? request.Address - V3GaugeJobService.ReplicaAddressStride
+            : request.Address;
+        var result = Enumerable.Repeat((byte)0xFF, request.DataLength).ToArray();
+        CopyFixtureRange(catalogBytes, 0, logicalAddress, result);
+        CopyFixtureRange(headerBytes, latestFileStart, logicalAddress, result);
+        CopyFixtureRange(dataBytes, latestDataStart, logicalAddress, result);
+        return GaugeFrame.Create(request.Command, request.Address, result);
+    });
+
+    var service = new V3GaugeJobService(new GaugeSession(transport));
+    var catalog = service.DiscoverAsync().GetAwaiter().GetResult()!;
+    AssertEqual(1, catalog.Files.Count);
+    AssertEqual(5, catalog.RejectedRecords.Count);
+    AssertEqual(latestDataStart + 512, catalog.Files[0].DataEnd);
+    AssertEqual((uint)512, catalog.Files[0].DataLength);
+
+    var download = service.DownloadFileAsync(catalog, 0).GetAwaiter().GetResult();
+    AssertEqual(2, download.Pages.Count);
+    AssertEqual(0, download.UncorrectablePageCount);
+    AssertEqual(4, download.Samples.Count);
+}
+
+static void CopyFixtureRange(
+    byte[] source,
+    uint sourceAddress,
+    uint requestAddress,
+    byte[] destination)
+{
+    var requestEnd = checked(requestAddress + (uint)destination.Length);
+    var sourceEnd = checked(sourceAddress + (uint)source.Length);
+    var overlapStart = Math.Max(requestAddress, sourceAddress);
+    var overlapEnd = Math.Min(requestEnd, sourceEnd);
+    if (overlapStart >= overlapEnd)
+    {
+        return;
+    }
+
+    source.AsSpan(
+            checked((int)(overlapStart - sourceAddress)),
+            checked((int)(overlapEnd - overlapStart)))
+        .CopyTo(destination.AsSpan(checked((int)(overlapStart - requestAddress))));
+}
+
+static V3GaugeJobService CreateV3DataService(
+    byte[] primary,
+    byte[] mirror,
+    List<GaugeFrame> mirrorReads,
+    bool useMirror = true)
+{
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        var isMirror = request.Address >= V3GaugeJobService.ReplicaAddressStride;
+        var logicalAddress = isMirror
+            ? request.Address - V3GaugeJobService.ReplicaAddressStride
+            : request.Address;
+        if (isMirror)
+        {
+            mirrorReads.Add(request);
+        }
+
+        var source = isMirror ? mirror : primary;
+        var offset = checked((int)(logicalAddress - 0x10000));
+        return GaugeFrame.Create(
+            request.Command,
+            request.Address,
+            source.AsSpan(offset, request.DataLength).ToArray());
+    });
+    return new V3GaugeJobService(new GaugeSession(transport), useMirror);
+}
+
+static V3GaugeCatalog CreateV3DataCatalog(
+    byte[] clean,
+    bool useMirror = true)
+{
+    var page = V3PageCodec.Decode(clean.AsSpan(0, V3PageCodec.PhysicalBytes));
+    var fileId = page.Envelope?.FileId
+        ?? throw new InvalidOperationException("Test V3 page has no file ID.");
+    var record = new V3CatalogRecord(0, fileId, 0xF000, 1, 1, 0, page);
+    var header = new V3FileHeader(fileId, 1, 1, [], [], [], [], [], []);
+    var file = new V3GaugeFile(0, record, header, 0x10000, 0x10200, 0x11000, false, 0);
+    var replica = new V3CatalogReplica(0, [record], null, true, null);
+    return new V3GaugeCatalog(
+        new V3Capabilities(
+            1,
+            V3CapabilityFlags.Mirror | V3CapabilityFlags.Catalog |
+            V3CapabilityFlags.Bch | V3CapabilityFlags.IndependentCrc,
+            0,
+            0x10000,
+            0x10000,
+            useMirror
+                ? V3Capabilities.MirrorStorageEnd
+                : V3Capabilities.FullStorageEnd,
+            256,
+            4096,
+            33,
+            16,
+            2,
+            792,
+            useMirror ? V3MemoryMode.Mirror : V3MemoryMode.Full,
+            useMirror ? (byte)0x03 : (byte)0x01),
+        new V3CatalogSummary(0, 1, 0, 1, 0, fileId, 0xF000, uint.MaxValue),
+        new V3CatalogRecovery(
+            [record],
+            [replica, new V3CatalogReplica(1, [], null, true, null, WasInspected: false)],
+            0,
+            false),
+        [file],
+        [],
+        UsesMirror: useMirror);
+}
+
+static byte[] CreateV3CapabilitiesPayload(
+    V3MemoryMode mode = V3MemoryMode.Mirror)
+{
+    var payload = new byte[32];
+    payload[0] = 1;
+    payload[1] = 3;
+    payload[2] = 1;
+    payload[3] = 0x1F;
+    WriteUInt32LittleEndian(payload.AsSpan(4, 4), 0);
+    WriteUInt32LittleEndian(payload.AsSpan(8, 4), 0x10000);
+    WriteUInt32LittleEndian(payload.AsSpan(12, 4), 0x10000);
+    WriteUInt32LittleEndian(
+        payload.AsSpan(16, 4),
+        mode == V3MemoryMode.Mirror
+            ? V3Capabilities.MirrorStorageEnd
+            : V3Capabilities.FullStorageEnd);
+    payload[20] = 0;
+    payload[21] = 1;
+    payload[22] = 0;
+    payload[23] = 0x10;
+    payload[24] = 33;
+    payload[25] = 16;
+    payload[26] = 2;
+    payload[27] = 0x18;
+    payload[28] = 0x03;
+    payload[29] = (byte)mode;
+    payload[30] = mode == V3MemoryMode.Mirror ? (byte)0x03 : (byte)0x01;
+    return payload;
+}
+
+static byte[] CreateV3DiagnosticStatusPayload(
+    V3MemoryMode mode,
+    byte failedChipMask = 0,
+    byte degradedReplicaMask = 0)
+{
+    var payload = new byte[V3DiagnosticStatus.PayloadLength];
+    payload[0] = V3DiagnosticStatus.Schema;
+    payload[1] = failedChipMask == 0
+        ? (byte)0
+        : (byte)V3DiagnosticFlags.StorageFailoverCapsuleValid;
+    payload[3] = degradedReplicaMask;
+    WriteUInt32LittleEndian(
+        payload.AsSpan(12, 4),
+        mode == V3MemoryMode.Mirror
+            ? V3Capabilities.MirrorStorageEnd
+            : V3Capabilities.FullStorageEnd);
+    WriteUInt32LittleEndian(
+        payload.AsSpan(16, 4),
+        V3DiagnosticStatus.RegionBytes);
+    payload[21] = failedChipMask;
+    return payload;
+}
+
+static void V3BchTargetFixturesDecode()
+{
+    var clean = ReadV3Fixture("bch-clean-data.bin");
+    var corrected = ReadV3Fixture("bch-16-corrected-data.bin");
+
+    var cleanPage = V3DataDecoder.DecodePage(clean.AsSpan(0, 256));
+    var correctedPage = V3DataDecoder.DecodePage(corrected.AsSpan(0, 256));
+    AssertEqual(V3PageStatus.Ok, cleanPage.Page.Status);
+    AssertEqual(V3PageStatus.Corrected, correctedPage.Page.Status);
+    AssertEqual(16, correctedPage.Page.CorrectedBitCount);
+    AssertEqual((uint)1211301889, correctedPage.FileId);
+    AssertEqual((uint)1048576, correctedPage.Samples[0].PressureCounts);
+    AssertEqual((uint)2097152, correctedPage.Samples[0].TemperatureCounts);
+    AssertSequenceEqual(clean.AsSpan(0, 233), correctedPage.Page.DecodedBytes!.AsSpan(0, 233));
+
+    var second = V3DataDecoder.DecodePage(corrected.AsSpan(256, 256));
+    AssertEqual(V3PageStatus.Ok, second.Page.Status);
+    AssertEqual((uint)1, second.PageSequence);
+    AssertFixtureCsv("bch-clean-data.expected.csv", V3CsvInspector.InspectData(clean));
+    AssertFixtureCsv("bch-16-corrected-data.expected.csv", V3CsvInspector.InspectData(corrected));
+}
+
+static void V3CatalogTargetFixtureDecodes()
+{
+    var bytes = ReadV3Fixture("catalog-six-files-replica-0.bin");
+    var replica = V3CatalogDecoder.DecodeReplica(0, bytes);
+    AssertEqual(true, replica.IsValid);
+    AssertEqual(6, replica.Records.Count);
+    AssertEqual((uint)0, replica.Records[0].CatalogSequence);
+    AssertEqual((uint)1379074054, replica.Records[^1].FileId);
+    AssertEqual((uint)98304, replica.Records[^1].FileStart);
+    AssertEqual(V3PageStatus.Erased, replica.TerminalPage!.Status);
+    AssertFixtureCsv("catalog-six-files.expected.csv", V3CsvInspector.InspectCatalog(bytes));
+}
+
+static void V3HeaderTargetFixtureDecodes()
+{
+    var bytes = ReadV3Fixture("latest-header-replica-0.bin");
+    var header = V3HeaderDecoder.Decode(bytes.AsSpan(0, 6 * 256));
+    AssertEqual((uint)1379074054, header.FileId);
+    AssertEqual(6, header.Pages.Count);
+    AssertEqual(774, header.RawHeaderStream.Length);
+    AssertEqual(37, header.SensorSerial.Length);
+    AssertEqual(69, header.SensorHeader.Length);
+    AssertEqual(604, header.PressurePolynomial.Length + header.TemperaturePolynomial.Length);
+    AssertFixtureCsv("latest-header.expected.csv", V3CsvInspector.InspectHeader(bytes));
+}
+
+static void V3FileLocalHeaderCalibratesSamples()
+{
+    var headerBytes = ReadV3Fixture("latest-header-replica-0.bin");
+    var header = V3HeaderDecoder.Decode(headerBytes.AsSpan(0, 6 * V3PageCodec.PhysicalBytes));
+    var rawData = ReadV3Fixture("latest-data-replica-0.bin");
+    var dataBytes = rawData.AsSpan(0, 2 * V3PageCodec.PhysicalBytes).ToArray();
+    var dataPages = V3DataDecoder.DecodeSequence(dataBytes, header.FileId);
+    var record = new V3CatalogRecord(
+        5,
+        header.FileId,
+        98304,
+        header.CreationBootId,
+        header.MeasurementInterval,
+        0,
+        V3PageCodec.Decode(ReadV3Fixture("catalog-six-files-replica-0.bin")
+            .AsSpan(5 * V3PageCodec.PhysicalBytes, V3PageCodec.PhysicalBytes)));
+    var file = new V3GaugeFile(
+        0,
+        record,
+        header,
+        98304 + 4096,
+        98304 + 4096 + (uint)dataBytes.Length,
+        98304 + 8192,
+        true,
+        0);
+    var evidence = dataPages
+        .Select((page, index) => new V3ReplicaPageEvidence(
+            file.DataStart + (uint)(index * V3PageCodec.PhysicalBytes),
+            0,
+            page.Page,
+            page.Page,
+            null,
+            false))
+        .ToArray();
+    var download = new V3GaugeDownload(
+        file,
+        file.DataStart + (uint)dataBytes.Length,
+        dataBytes,
+        Enumerable.Repeat((byte)0xFF, dataBytes.Length).ToArray(),
+        evidence,
+        dataPages,
+        true,
+        [],
+        []);
+
+    var samples = V3GaugeJobService.BuildCalibratedSamples(download);
+    var calibrationHeader = SensorCalibrationHeader.Parse(header.SensorHeader);
+    AssertEqual(4, samples.Count);
+    AssertEqual(
+        checked(dataPages[0].Samples[0].PressureCounts + calibrationHeader.CountBias!.Value),
+        samples[0].PressureCounts);
+    AssertEqual(
+        checked(dataPages[0].Samples[0].TemperatureCounts + calibrationHeader.CountBias.Value),
+        samples[0].TemperatureCounts);
+    AssertEqual((uint)4, samples[^1].Timestamp);
+    AssertEqual(false, double.IsNaN(samples[0].Pressure));
+    AssertEqual(false, double.IsNaN(samples[0].Temperature));
+    AssertEqual(false, samples[0].CrcError);
+
+    var alternateBias = calibrationHeader.CountBias.Value + 1;
+    var alternateHeaderText = System.Text.RegularExpressions.Regex.Replace(
+        SensorAsciiData.DecodePayload(header.SensorHeader),
+        @"Bias\s+\d+",
+        $"Bias {alternateBias}");
+    var alternateHeader = header with
+    {
+        SensorHeader = Encoding.ASCII.GetBytes(alternateHeaderText)
+    };
+    var alternateSamples = V3GaugeJobService.BuildCalibratedSamples(
+        download with { File = file with { Header = alternateHeader } });
+    AssertEqual(samples[0].PressureCounts + 1, alternateSamples[0].PressureCounts);
+    AssertEqual(samples[0].TemperatureCounts + 1, alternateSamples[0].TemperatureCounts);
+}
+
+static void V3OpenTargetFileDecodes()
+{
+    var bytes = ReadV3Fixture("latest-data-replica-0.bin");
+    var pages = V3DataDecoder.DecodeSequence(bytes, 1379074054);
+    var samples = pages.SelectMany(page => page.Samples).ToArray();
+    AssertEqual(2, pages.Count);
+    AssertEqual(4, samples.Length);
+    AssertEqual((uint)0, samples[0].SampleSequence);
+    AssertEqual((uint)3, samples[^1].SampleSequence);
+    AssertEqual((uint)4, samples[^1].Timestamp);
+    AssertEqual((byte)5, samples[^1].SensorIteration);
+    AssertFixtureCsv("latest-data.expected.csv", V3CsvInspector.InspectData(bytes));
+}
+
+static void V31CompactGoldenPageDecodes()
+{
+    var physical = ReadV3HexFixture("v3.1-compact-golden.hex");
+    AssertEqual(256, physical.Length);
+    AssertEqual("MG3D", Encoding.ASCII.GetString(physical, 0, 4));
+    AssertEqual((byte)1, physical[4]);
+    AssertEqual((byte)33, physical[5]);
+    AssertEqual((byte)0x05, physical[26]);
+    AssertEqual((byte)0x01, physical[30]);
+    AssertEqual(
+        (uint)0xF1E1A59F,
+        BinaryPrimitives.ReadUInt32LittleEndian(physical.AsSpan(229, 4)));
+
+    var decoded = V3DataDecoder.DecodePage(physical);
+    AssertEqual(V3PageStatus.Ok, decoded.Page.Status);
+    AssertEqual(V3DataEncoding.CompactCrc32C, decoded.Encoding);
+    AssertEqual((uint)0x12345678, decoded.FileId);
+    AssertEqual((uint)0x01020304, decoded.PageSequence);
+    AssertEqual((uint)0x11223344, decoded.FirstSampleSequence);
+    AssertEqual((ushort)0x99AA, decoded.FirstTimer1Phase);
+    AssertEqual(33, decoded.Samples.Count);
+    AssertEqual(false, decoded.Samples[0].IsMissing);
+    AssertEqual((uint?)0, decoded.Samples[0].PressureCounts);
+    AssertEqual((uint?)0, decoded.Samples[0].TemperatureCounts);
+    AssertEqual(true, decoded.Samples[1].IsMissing);
+    AssertEqual((uint?)0x123456, decoded.Samples[2].PressureCounts);
+    AssertEqual((uint?)0xABCDEF, decoded.Samples[2].TemperatureCounts);
+    AssertEqual((uint?)1, decoded.Samples[32].PressureCounts);
+    AssertEqual(
+        0x55667788 + (0x99AA / 32768.0) + 320.0,
+        decoded.Samples[32].ExactTimestampSeconds);
+}
+
+static void V31CompactIntegrityGatesWork()
+{
+    var clean = ReadV3HexFixture("v3.1-compact-golden.hex");
+    var bitLocations = new[]
+    {
+        0, 37, 83, 151, 180, 215, 247, 511,
+        1027, 1603, 1827, 1859, 1921, 1997, 2029, 2039
+    };
+    for (var count = 1; count <= V3Bch16.CorrectionLimit; count++)
+    {
+        var damaged = clean.ToArray();
+        for (var index = 0; index < count; index++)
+        {
+            var bit = bitLocations[index];
+            damaged[bit / 8] ^= (byte)(0x80 >> (bit % 8));
+        }
+
+        var result = V3PageCodec.Decode(damaged);
+        AssertEqual(V3PageStatus.Corrected, result.Status);
+        AssertEqual(count, result.CorrectedBitCount);
+        AssertSequenceEqual(
+            clean.AsSpan(0, 255),
+            result.DecodedBytes!.AsSpan(0, 255));
+    }
+
+    var staleCrc = clean.ToArray();
+    staleCrc[31] ^= 1;
+    staleCrc = V3Bch16.BuildPage(staleCrc.AsSpan(0, V3Bch16.DataBytes));
+    AssertEqual(V3PageStatus.CrcFailure, V3PageCodec.Decode(staleCrc).Status);
+
+    var unknownEncoding = clean.ToArray();
+    unknownEncoding[4] = 9;
+    unknownEncoding = V3Bch16.BuildPage(
+        unknownEncoding.AsSpan(0, V3Bch16.DataBytes));
+    AssertEqual(
+        V3PageStatus.Unsupported,
+        V3PageCodec.Decode(unknownEncoding).Status);
+
+    var invalidBitmap = clean.ToArray();
+    invalidBitmap[30] |= 0x80;
+    invalidBitmap = RebuildV31Page(invalidBitmap);
+    AssertEqual(
+        V3PageStatus.StructuralFailure,
+        V3PageCodec.Decode(invalidBitmap).Status);
+
+    var nonZeroNull = clean.ToArray();
+    nonZeroNull[37] = 1;
+    nonZeroNull = RebuildV31Page(nonZeroNull);
+    AssertEqual(
+        V3PageStatus.StructuralFailure,
+        V3PageCodec.Decode(nonZeroNull).Status);
+
+    var torn = clean.ToArray();
+    torn.AsSpan(180, 53).Fill(0xFF);
+    AssertEqual(false, V3PageCodec.Decode(torn).IsAccepted);
+
+    var overLimit = clean.ToArray();
+    for (var index = 0; index < 17; index++)
+    {
+        var bit = index * 97;
+        overLimit[bit / 8] ^= (byte)(0x80 >> (bit % 8));
+    }
+    AssertEqual(false, V3PageCodec.Decode(overLimit).IsAccepted);
+}
+
+static void V31PartialAndMissingExport()
+{
+    var page = CreateV31Page(
+        7,
+        0,
+        20,
+        100,
+        16384,
+        2,
+        [(true, 5U, 6U), (false, 0U, 0U), (true, 0U, 0U)]);
+    var decoded = V3DataDecoder.DecodePage(page);
+    AssertEqual(3, decoded.Samples.Count);
+    AssertEqual(100.5, decoded.Samples[0].ExactTimestampSeconds);
+    AssertEqual(102.5, decoded.Samples[1].ExactTimestampSeconds);
+    AssertEqual(true, decoded.Samples[1].IsMissing);
+    AssertEqual(false, decoded.Samples[2].IsMissing);
+
+    var rows = CalibratedCsvExporter.BuildLines(
+    [
+        new CalibratedGaugeSample(
+            0, 0, double.NaN, double.NaN, 21, 21, 31, 102,
+            double.NaN, double.NaN, false, false, 0, true, 102.5)
+    ]);
+    AssertEqual(2, rows.Count);
+    AssertEqual(true, rows[1].StartsWith(",,,,21,21,31,102.5,", StringComparison.Ordinal));
+}
+
+static void V31Schema2HeaderDecodes()
+{
+    var serial = Encoding.ASCII.GetBytes("SER\0RAW");
+    var header = Encoding.ASCII.GetBytes("HDR\r\nBias 4000000\r\n");
+    var pressure = new byte[] { 0, 1, 2, 0, 4 };
+    var temperature = new byte[] { 9, 8, 0, 6 };
+    var stream = new byte[
+        21 + serial.Length + header.Length + pressure.Length + temperature.Length];
+    "MG3H"u8.CopyTo(stream);
+    stream[4] = 2;
+    BinaryPrimitives.WriteUInt16LittleEndian(
+        stream.AsSpan(5, 2),
+        checked((ushort)stream.Length));
+    BinaryPrimitives.WriteUInt32LittleEndian(stream.AsSpan(7, 4), 0x10203040);
+    BinaryPrimitives.WriteUInt16LittleEndian(stream.AsSpan(11, 2), 10);
+    BinaryPrimitives.WriteUInt16LittleEndian(
+        stream.AsSpan(13, 2),
+        checked((ushort)serial.Length));
+    BinaryPrimitives.WriteUInt16LittleEndian(
+        stream.AsSpan(15, 2),
+        checked((ushort)header.Length));
+    BinaryPrimitives.WriteUInt16LittleEndian(
+        stream.AsSpan(17, 2),
+        checked((ushort)pressure.Length));
+    BinaryPrimitives.WriteUInt16LittleEndian(
+        stream.AsSpan(19, 2),
+        checked((ushort)temperature.Length));
+    var offset = 21;
+    serial.CopyTo(stream, offset);
+    offset += serial.Length;
+    header.CopyTo(stream, offset);
+    offset += header.Length;
+    pressure.CopyTo(stream, offset);
+    offset += pressure.Length;
+    temperature.CopyTo(stream, offset);
+
+    var split = stream.Length / 2;
+    var body0 = CreateGenericV31Page(
+        V3PageType.HeaderBody, 0x10203040, 0, 0, 2, stream.AsSpan(0, split));
+    var body1 = CreateGenericV31Page(
+        V3PageType.HeaderBody, 0x10203040, 1, 1, 2, stream.AsSpan(split));
+    var commitPayload = new byte[4];
+    BinaryPrimitives.WriteUInt32LittleEndian(
+        commitPayload,
+        Crc32C.Compute(stream));
+    var commit = CreateGenericV31Page(
+        V3PageType.HeaderCommit,
+        0x10203040,
+        2,
+        2,
+        checked((uint)stream.Length),
+        commitPayload);
+    var decoded = V3HeaderDecoder.Decode(body0.Concat(body1).Concat(commit).ToArray());
+    AssertEqual((byte)2, decoded.Schema);
+    AssertEqual((uint)10, decoded.MeasurementInterval);
+    AssertSequenceEqual(serial, decoded.SensorSerial);
+    AssertSequenceEqual(header, decoded.SensorHeader);
+    AssertSequenceEqual(pressure, decoded.PressurePolynomial);
+    AssertSequenceEqual(temperature, decoded.TemperaturePolynomial);
+
+    var malformed = stream.ToArray();
+    BinaryPrimitives.WriteUInt16LittleEndian(
+        malformed.AsSpan(13, 2),
+        ushort.MaxValue);
+    AssertInvalidData(() => V3HeaderDecoder.DecodeStream(malformed));
+
+    commitPayload[0] ^= 1;
+    var badCommit = CreateGenericV31Page(
+        V3PageType.HeaderCommit,
+        0x10203040,
+        2,
+        2,
+        checked((uint)stream.Length),
+        commitPayload);
+    AssertInvalidData(() =>
+        V3HeaderDecoder.Decode(body0.Concat(body1).Concat(badCommit).ToArray()));
+}
+
+static void V32FallbackPageDecodes()
+{
+    var page = CreateV32Page();
+    var decoded = V3DataDecoder.DecodePage(page);
+    AssertEqual(V3DataEncoding.CompactCrc64Fallback, decoded.Encoding);
+    AssertEqual(2, decoded.Samples.Count);
+    AssertEqual((uint?)0x010203, decoded.Samples[0].PressureCounts);
+    AssertEqual(true, decoded.Samples[1].IsMissing);
+}
+
+static void V31StoredCountsMatchSensorLive()
+{
+    var stored = V3DataDecoder.DecodePage(
+        ReadV3HexFixture("v3.1-compact-golden.hex")).Samples[2];
+    var payload = new byte[SensorLiveSample.PayloadLength];
+    payload[0] = SensorLiveSample.CurrentProtocolVersion;
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4, 4), 1);
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8, 4), 123);
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12, 4), 0x123456);
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(16, 4), 0xABCDEF);
+    var live = SensorLiveSample.Parse(payload);
+    AssertEqual(stored.PressureCounts, (uint?)live.PressureRaw);
+    AssertEqual(stored.TemperatureCounts, (uint?)live.TemperatureRaw);
+}
+
+static void V31MirroredLazyFallback()
+{
+    var clean = CreateV31Page(
+        7, 0, 0, 100, 0, 1,
+        [(true, 0x123456U, 0xABCDEFU), (false, 0U, 0U)]);
+    var damaged = clean.ToArray();
+    for (var index = 0; index < 17; index++)
+    {
+        var bit = index * 97;
+        damaged[bit / 8] ^= (byte)(0x80 >> (bit % 8));
+    }
+
+    var reads = new List<GaugeFrame>();
+    var service = CreateV3DataService(damaged, clean, reads);
+    var template = CreateV3DataCatalog(clean);
+    var file = template.Files[0] with { DataEnd = 0x10100 };
+    var download = service.DownloadFileAsync(
+        template with { Files = [file] },
+        0).GetAwaiter().GetResult();
+    AssertEqual(2, download.Samples.Count);
+    AssertEqual(1, download.MissingSampleCount);
+    AssertEqual(1, download.AlternateRecoveryCount);
+    AssertEqual(1, reads.Count);
+}
+
+static void V31DivergentReplicas()
+{
+    var logical = CreateV31Page(
+        7, 0, 0, 100, 0, 1,
+        [(true, 0x123456U, 0xABCDEFU), (false, 0U, 0U)]);
+    var correctedPreferred = logical.ToArray();
+    correctedPreferred[0] ^= 0x80;
+    var alternate = logical.ToArray();
+    alternate[31] ^= 1;
+    alternate = RebuildV31Page(alternate);
+
+    var reads = new List<GaugeFrame>();
+    var service = CreateV3DataService(correctedPreferred, alternate, reads);
+    var template = CreateV3DataCatalog(logical);
+    var file = template.Files[0] with { DataEnd = 0x10100 };
+    var download = service.DownloadFileAsync(
+        template with { Files = [file] },
+        0).GetAwaiter().GetResult();
+    AssertEqual(true, download.HasMirrorDivergence);
+    AssertEqual(true, download.RequiresMemoryService);
+    AssertEqual(1, download.AlternateRecoveryCount);
+    AssertEqual(V3PageStatus.Ok, download.Pages[0].Selected.Status);
+    AssertEqual((uint?)0x123457, download.Samples[0].PressureCounts);
+}
+
+static void V31PartialRecoveryContinues()
+{
+    var first = CreateV31Page(
+        7, 0, 0, 100, 0, 1,
+        [(true, 1U, 2U), (true, 3U, 4U)]);
+    var damaged = CreateV31Page(
+        7, 1, 2, 102, 0, 1,
+        [(true, 5U, 6U), (true, 7U, 8U)]);
+    for (var index = 0; index < 17; index++)
+    {
+        var bit = index * 97;
+        damaged[bit / 8] ^= (byte)(0x80 >> (bit % 8));
+    }
+    var last = CreateV31Page(
+        7, 2, 4, 104, 0, 1,
+        [(true, 9U, 10U), (false, 0U, 0U)]);
+    var bytes = first.Concat(damaged).Concat(last).ToArray();
+    var reads = new List<GaugeFrame>();
+    var service = CreateV3DataService(bytes, bytes, reads);
+    var template = CreateV3DataCatalog(first);
+    var file = template.Files[0] with { DataEnd = 0x10300 };
+    var download = service.DownloadFileAsync(
+        template with { Files = [file] },
+        0).GetAwaiter().GetResult();
+    AssertEqual(2, download.DataPages.Count);
+    AssertEqual(4, download.Samples.Count);
+    AssertEqual((uint)2, download.DataPages[1].PageSequence);
+    AssertEqual(1, download.PageSequenceGaps.Count);
+    AssertEqual((uint)1, download.PageSequenceGaps[0]);
+    AssertEqual(1, download.UncorrectablePageCount);
+    AssertEqual(true, download.IsIncomplete);
+}
+
+static void V3MalformedPagesAreRejected()
+{
+    var clean = ReadV3Fixture("bch-clean-data.bin");
+    var padding = clean.AsSpan(0, 256).ToArray();
+    padding[224] = 0;
+    var crc = Crc64Ecma.Compute(padding.AsSpan(0, 225));
+    for (var index = 0; index < 8; index++)
+    {
+        padding[225 + index] = (byte)(crc >> (index * 8));
+    }
+
+    padding = V3Bch16.BuildPage(padding.AsSpan(0, V3Bch16.DataBytes));
+    var paddingResult = V3PageCodec.Decode(padding);
+    AssertEqual(V3PageStatus.StructuralFailure, paddingResult.Status);
+
+    var overLimit = clean.AsSpan(0, 256).ToArray();
+    for (var bit = 0; bit < 17; bit++)
+    {
+        overLimit[bit / 8] ^= (byte)(0x80 >> (bit % 8));
+    }
+
+    var overLimitResult = V3PageCodec.Decode(overLimit);
+    AssertEqual(false, overLimitResult.IsAccepted);
+}
+
+static void V3RequiredFieldsAndSequencesAreRejected()
+{
+    var headerBytes = ReadV3Fixture("latest-header-replica-0.bin");
+    var header = V3HeaderDecoder.Decode(headerBytes.AsSpan(0, 6 * 256));
+    var unknownRequired = header.RawHeaderStream.ToArray();
+    unknownRequired[24] = 99;
+    unknownRequired[25] = 0;
+    WriteUInt32LittleEndian(
+        unknownRequired.AsSpan(20, 4),
+        Crc32C.Compute(unknownRequired.AsSpan(24)));
+    AssertInvalidData(() => V3HeaderDecoder.DecodeStream(unknownRequired));
+
+    var nonMonotonic = ReadV3Fixture("bch-clean-data.bin");
+    WriteUInt32LittleEndian(nonMonotonic.AsSpan(256 + 12, 4), 9);
+    WriteUInt64LittleEndian(
+        nonMonotonic.AsSpan(256 + 225, 8),
+        Crc64Ecma.Compute(nonMonotonic.AsSpan(256, 225)));
+    AssertInvalidData(() => V3DataDecoder.DecodeSequence(nonMonotonic));
+
+    var unknownMajor = ReadV3Fixture("bch-clean-data.bin").AsSpan(0, 256).ToArray();
+    unknownMajor[4] = 4;
+    WriteUInt64LittleEndian(
+        unknownMajor.AsSpan(225, 8),
+        Crc64Ecma.Compute(unknownMajor.AsSpan(0, 225)));
+    unknownMajor = V3Bch16.BuildPage(unknownMajor.AsSpan(0, V3Bch16.DataBytes));
+    AssertEqual(V3PageStatus.Unsupported, V3PageCodec.Decode(unknownMajor).Status);
+}
+
+static byte[] CreateV31Page(
+    uint fileId,
+    uint pageSequence,
+    uint firstSequence,
+    uint firstSeconds,
+    ushort phase,
+    ushort interval,
+    IReadOnlyList<(bool Valid, uint Pressure, uint Temperature)> slots)
+{
+    if (slots.Count is 0 or > 33)
+    {
+        throw new ArgumentOutOfRangeException(nameof(slots));
+    }
+
+    var envelope = new byte[V3Bch16.DataBytes];
+    "MG3D"u8.CopyTo(envelope);
+    envelope[4] = 1;
+    envelope[5] = checked((byte)slots.Count);
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(6, 4), fileId);
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(10, 4), pageSequence);
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(14, 4), firstSequence);
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(18, 4), firstSeconds);
+    BinaryPrimitives.WriteUInt16LittleEndian(envelope.AsSpan(22, 2), phase);
+    BinaryPrimitives.WriteUInt16LittleEndian(envelope.AsSpan(24, 2), interval);
+    for (var index = 0; index < slots.Count; index++)
+    {
+        var slot = slots[index];
+        if (!slot.Valid)
+        {
+            continue;
+        }
+
+        envelope[26 + (index / 8)] |= (byte)(1 << (index % 8));
+        WriteUInt24LittleEndian(
+            envelope.AsSpan(31 + (index * 6), 3),
+            slot.Pressure);
+        WriteUInt24LittleEndian(
+            envelope.AsSpan(34 + (index * 6), 3),
+            slot.Temperature);
+    }
+
+    BinaryPrimitives.WriteUInt32LittleEndian(
+        envelope.AsSpan(229, 4),
+        Crc32C.Compute(envelope.AsSpan(0, 229)));
+    return V3Bch16.BuildPage(envelope);
+}
+
+static byte[] RebuildV31Page(byte[] page)
+{
+    BinaryPrimitives.WriteUInt32LittleEndian(
+        page.AsSpan(229, 4),
+        Crc32C.Compute(page.AsSpan(0, 229)));
+    return V3Bch16.BuildPage(page.AsSpan(0, V3Bch16.DataBytes));
+}
+
+static byte[] CreateGenericV31Page(
+    V3PageType type,
+    uint fileId,
+    uint pageSequence,
+    uint metadataFirst,
+    uint metadataSecond,
+    ReadOnlySpan<byte> payload)
+{
+    if (payload.Length > V3PageCodec.PayloadCapacity)
+    {
+        throw new ArgumentOutOfRangeException(nameof(payload));
+    }
+
+    var envelope = Enumerable.Repeat((byte)0xFF, V3Bch16.DataBytes).ToArray();
+    "MG3P"u8.CopyTo(envelope);
+    envelope[4] = 3;
+    envelope[5] = 1;
+    envelope[6] = (byte)type;
+    envelope[7] = 1;
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(8, 4), fileId);
+    BinaryPrimitives.WriteUInt32LittleEndian(
+        envelope.AsSpan(12, 4),
+        pageSequence);
+    envelope.AsSpan(16, 14).Clear();
+    BinaryPrimitives.WriteUInt16LittleEndian(
+        envelope.AsSpan(30, 2),
+        checked((ushort)payload.Length));
+    BinaryPrimitives.WriteUInt32LittleEndian(
+        envelope.AsSpan(32, 4),
+        metadataFirst);
+    BinaryPrimitives.WriteUInt32LittleEndian(
+        envelope.AsSpan(36, 4),
+        metadataSecond);
+    payload.CopyTo(envelope.AsSpan(40));
+    BinaryPrimitives.WriteUInt32LittleEndian(
+        envelope.AsSpan(229, 4),
+        Crc32C.Compute(envelope.AsSpan(0, 229)));
+    return V3Bch16.BuildPage(envelope);
+}
+
+static byte[] CreateV32Page()
+{
+    var envelope = new byte[V3Bch16.DataBytes];
+    "MG3D"u8.CopyTo(envelope);
+    envelope[4] = 2;
+    envelope[5] = 2;
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(6, 4), 9);
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(10, 4), 4);
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(14, 4), 8);
+    BinaryPrimitives.WriteUInt32LittleEndian(envelope.AsSpan(18, 4), 100);
+    BinaryPrimitives.WriteUInt16LittleEndian(envelope.AsSpan(22, 2), 1);
+    BinaryPrimitives.WriteUInt16LittleEndian(envelope.AsSpan(24, 2), 5);
+    envelope[26] = 1;
+    WriteUInt24LittleEndian(envelope.AsSpan(30, 3), 0x010203);
+    WriteUInt24LittleEndian(envelope.AsSpan(33, 3), 0x040506);
+    envelope.AsSpan(222, 3).Fill(0xFF);
+    BinaryPrimitives.WriteUInt64LittleEndian(
+        envelope.AsSpan(225, 8),
+        Crc64Ecma.Compute(envelope.AsSpan(0, 225)));
+    return V3Bch16.BuildPage(envelope);
+}
+
+static byte[] ReadV3HexFixture(string name) =>
+    Convert.FromHexString(
+        File.ReadAllText(
+                Path.Combine(AppContext.BaseDirectory, "fixtures", "v3_target", name))
+            .Trim());
+
+static byte[] ReadV3Fixture(string name) =>
+    File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "fixtures", "v3_target", name));
+
+static void AssertFixtureCsv(string name, IReadOnlyList<string> actual)
+{
+    var expected = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "v3_target", name));
+    AssertEqual(string.Join('\n', expected), string.Join('\n', actual));
+}
+
+static void AssertInvalidData(Action action)
+{
+    try
+    {
+        action();
+    }
+    catch (InvalidDataException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException("Expected invalid V3 data to be rejected.");
+}
+
+static void AssertGaugeProtocol(Action action)
+{
+    try
+    {
+        action();
+    }
+    catch (GaugeProtocolException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException("Expected invalid protocol data to be rejected.");
+}
+
 static void WriteUInt32LittleEndian(Span<byte> target, uint value)
 {
     target[0] = (byte)value;
     target[1] = (byte)(value >> 8);
     target[2] = (byte)(value >> 16);
     target[3] = (byte)(value >> 24);
+}
+
+static void WriteUInt64LittleEndian(Span<byte> target, ulong value)
+{
+    for (var index = 0; index < 8; index++)
+    {
+        target[index] = (byte)(value >> (index * 8));
+    }
 }
 
 static string BuildHexRecord(ushort address, byte recordType, ReadOnlySpan<byte> data)
@@ -974,5 +3367,23 @@ sealed class InlineProgress<T> : IProgress<T>
     public void Report(T value)
     {
         _report(value);
+    }
+}
+
+sealed class StaticHttpMessageHandler : HttpMessageHandler
+{
+    private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+
+    public StaticHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
+    {
+        _responder = responder;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_responder(request));
     }
 }

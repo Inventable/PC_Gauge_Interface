@@ -41,6 +41,72 @@ public sealed class GaugeSession
             .ConfigureAwait(false);
     }
 
+    public async Task<GaugeFrame> SendCommandAsync(
+        GaugeCommand command,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken = default)
+    {
+        var request = GaugeFrame.Create(command, payload: payload.Span);
+        return await _transport.TransactAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<V3Capabilities?> ProbeV3CapabilitiesAsync(CancellationToken cancellationToken = default)
+    {
+        var reply = await _transport
+            .TransactAsync(GaugeFrame.Create(GaugeCommand.V3Capabilities), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (reply.Payload is [0xFF])
+        {
+            return null;
+        }
+
+        return V3Capabilities.Parse(reply.Payload);
+    }
+
+    public async Task<V3CatalogSummary> ReadV3CatalogSummaryAsync(CancellationToken cancellationToken = default)
+    {
+        var reply = await _transport
+            .TransactAsync(GaugeFrame.Create(GaugeCommand.V3CatalogSummary), cancellationToken)
+            .ConfigureAwait(false);
+        return V3CatalogSummary.Parse(reply.Payload);
+    }
+
+    public async Task<V3DiagnosticStatus?> ReadV3DiagnosticStatusAsync(
+        V3Capabilities capabilities,
+        CancellationToken cancellationToken = default)
+    {
+        var reply = await _transport
+            .TransactAsync(
+                GaugeFrame.Create(GaugeCommand.V3DiagnosticStatus),
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (reply.Payload is [0xFF] && capabilities.IsLegacyLayout)
+        {
+            return null;
+        }
+
+        return V3DiagnosticStatus.Parse(reply.Payload, capabilities);
+    }
+
+    public async Task<CrashCapsuleReadResult> ReadV3CrashCapsuleAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var reply = await _transport
+            .TransactAsync(
+                GaugeFrame.Create(GaugeCommand.V3GetCrashCapsule),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return reply.Payload switch
+        {
+            [0xFC] => CrashCapsuleReadResult.NoLongerAvailable,
+            [0xFF] => CrashCapsuleReadResult.Unsupported,
+            _ => CrashCapsuleReadResult.Available(
+                CrashCapsule.Parse(reply.Payload))
+        };
+    }
+
     public async Task<GaugeMemoryAddress> FindEndOfFileAsync(CancellationToken cancellationToken = default)
     {
         var reply = await _transport
@@ -71,6 +137,30 @@ public sealed class GaugeSession
             throw new ArgumentOutOfRangeException(nameof(command), command, "Command is not an external memory read command.");
         }
 
+        var requestEnd = checked((ulong)address + length);
+        if (command == GaugeCommand.ReadExternalEeprom &&
+            address < V3Capabilities.PhysicalChipBoundary &&
+            requestEnd > V3Capabilities.PhysicalChipBoundary)
+        {
+            var firstLength = checked(
+                (ushort)(V3Capabilities.PhysicalChipBoundary - address));
+            var secondLength = checked((ushort)(length - firstLength));
+            var first = await ReadExternalMemoryAsync(
+                address,
+                firstLength,
+                command,
+                cancellationToken).ConfigureAwait(false);
+            var second = await ReadExternalMemoryAsync(
+                V3Capabilities.PhysicalChipBoundary,
+                secondLength,
+                command,
+                cancellationToken).ConfigureAwait(false);
+            var combined = new byte[length];
+            first.CopyTo(combined, 0);
+            second.CopyTo(combined, first.Length);
+            return combined;
+        }
+
         var request = GaugeFrame.CreateReadRequest(command, address, length);
         var reply = await _transport.TransactAsync(request, cancellationToken).ConfigureAwait(false);
 
@@ -84,7 +174,7 @@ public sealed class GaugeSession
 
     private static void EnsureSupportedDevice(DeviceData device)
     {
-        if (device.DeviceType is not (100200 or 100230))
+        if (device.DeviceType is not (100160 or 100187 or 100196 or 100200 or 100230))
         {
             throw new GaugeProtocolException($"IDENTIFY returned unsupported device type {device.DeviceType}.");
         }
