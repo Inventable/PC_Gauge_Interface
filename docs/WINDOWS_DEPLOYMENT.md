@@ -51,6 +51,20 @@ Use `-SkipArchive` while iterating locally. The existing `eng\app.ps1` remains t
   Firmware catalogue checks and verified HEX downloads are supported, while
   application self-update remains deferred until rollback ownership is defined.
 
+## Updating an Existing Installation
+
+The versioned Setup EXE may be run directly over an existing Northstar Gauge
+Interface installation. Its stable Inno Setup `AppId` and per-user install
+directory identify the existing application, close a running instance, replace
+the packaged files, and retain the user's settings under Local AppData. An
+operator does not need to uninstall the previous version first and should not
+run both installers concurrently.
+
+The ZIP is a portable engineering fallback rather than an updater. Close the
+application, extract the complete new ZIP to a new folder (or replace the whole
+old extracted folder), and keep all published files together. Do not copy only
+the EXE over an older extracted build.
+
 ## Field Verification
 
 Before calling a build field-ready:

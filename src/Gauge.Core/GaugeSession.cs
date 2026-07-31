@@ -174,7 +174,7 @@ public sealed class GaugeSession
 
     private static void EnsureSupportedDevice(DeviceData device)
     {
-        if (device.DeviceType is not (100160 or 100187 or 100196 or 100200 or 100230))
+        if (!GaugeDeviceTypes.IsRecognized(device.DeviceType))
         {
             throw new GaugeProtocolException($"IDENTIFY returned unsupported device type {device.DeviceType}.");
         }

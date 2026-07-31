@@ -27,10 +27,11 @@ var tests = new (string Name, Action Run)[]
     ("Bootloader version response decodes", BootloaderVersionResponseDecodes),
     ("Intel HEX validates checksums and extended addresses", IntelHexValidatesChecksumsAndExtendedAddresses),
     ("Bootloader image rejects application data below offset", BootloaderImageRejectsDataBelowOffset),
-    ("Firmware updater erases start first and writes it last", FirmwareUpdaterErasesStartFirstAndWritesItLast),
+    ("Firmware updater accepts loader 1.2 and writes the start row last", FirmwareUpdaterErasesStartFirstAndWritesItLast),
     ("Firmware release catalog selects, downloads, and verifies the latest stable image", FirmwareReleaseCatalogSelectsAndVerifiesLatest),
+    ("Gauge device type catalog classifies recognized families", GaugeDeviceTypeCatalogClassifiesFamilies),
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
-    ("Firmware display reverses identity byte order", FirmwareDisplayReversesIdentityByteOrder),
+    ("Firmware display uses legacy and V3 identity byte orders", FirmwareDisplayUsesProtocolByteOrder),
     ("Gauge interval setting uses V2/V3 wire format and verifies IDENTIFY", GaugeIntervalSettingUsesCompatibleWireFormat),
     ("Gauge storage setting resolves a lost acknowledgement by IDENTIFY", GaugeStorageSettingResolvesLostAcknowledgement),
     ("Gauge storage setting rejects an unknown mode without writing", GaugeStorageSettingRejectsUnknownMode),
@@ -184,6 +185,29 @@ static void FirmwareReleaseCatalogSelectsAndVerifiesLatest()
         releaseCheck?.DownloadUri.AbsoluteUri);
     var downloaded = client.DownloadAsync(releaseCheck!).GetAwaiter().GetResult();
     AssertSequenceEqual(firmwareBytes, downloaded);
+
+    var legacyTypeRelease = client.CheckAsync(
+        new Uri("https://downloads.example.test/firmware/manifest.json"),
+        GaugeDeviceTypes.ConstellationQ150Legacy,
+        999999,
+        "2.0").GetAwaiter().GetResult();
+    AssertEqual("2.1", legacyTypeRelease?.Release.Version);
+}
+
+static void GaugeDeviceTypeCatalogClassifiesFamilies()
+{
+    AssertEqual(
+        true,
+        GaugeDeviceTypes.Recognized.SequenceEqual(
+            new uint[] { 100160, 100187, 100196, 100200, 100230 }));
+    AssertEqual(true, GaugeDeviceTypes.IsMemoryGauge(100160));
+    AssertEqual(true, GaugeDeviceTypes.IsMemoryGauge(100196));
+    AssertEqual(true, GaugeDeviceTypes.IsMemoryGauge(100230));
+    AssertEqual(false, GaugeDeviceTypes.IsMemoryGauge(100187));
+    AssertEqual(false, GaugeDeviceTypes.IsMemoryGauge(100200));
+    AssertEqual(true, GaugeDeviceTypes.IsFirmwareCompatible(100160, 100230));
+    AssertEqual(false, GaugeDeviceTypes.IsFirmwareCompatible(100160, 100200));
+    AssertEqual(false, GaugeDeviceTypes.IsRecognized(999999));
 }
 
 static void Crc16VerifiesAppendedBytes()
@@ -521,7 +545,7 @@ static void FirmwareUpdaterErasesStartFirstAndWritesItLast()
     ]);
     var image = BootloaderApplicationImage.Create("offset.hex", hex);
     var bootloader = new FakeBootloaderClient { LoseFirstWriteAcknowledgement = true };
-    var version = new BootloaderVersion(1, 3, 256, 0x6126, 64, 64, []);
+    var version = new BootloaderVersion(1, 2, 256, 0x6126, 64, 64, []);
     var updater = new GaugeFirmwareUpdater(bootloader, version);
 
     var result = updater.ProgramAsync(image).GetAwaiter().GetResult();
@@ -540,8 +564,8 @@ static void FirmwareUpdaterErasesStartFirstAndWritesItLast()
 static void MemoryGaugeIdentifyPayloadDecodes()
 {
     var payload = new byte[22];
-    payload[0] = 20;
-    payload[1] = 1;
+    payload[0] = 1;
+    payload[1] = 20;
     WriteUInt32LittleEndian(payload.AsSpan(2), 100200);
     WriteUInt32LittleEndian(payload.AsSpan(6), 1);
     WriteUInt32LittleEndian(payload.AsSpan(10), 100198);
@@ -553,8 +577,8 @@ static void MemoryGaugeIdentifyPayloadDecodes()
 
     var device = DeviceData.DecodeMemoryGauge(payload);
 
-    AssertEqual((byte)20, device.FirmwareMajor);
-    AssertEqual((byte)1, device.FirmwareMinor);
+    AssertEqual((byte)1, device.FirmwareMajor);
+    AssertEqual((byte)20, device.FirmwareMinor);
     AssertEqual((uint)100200, device.DeviceType);
     AssertEqual((uint)1, device.DeviceSerial);
     AssertEqual((uint)100198, device.PcbType);
@@ -563,13 +587,18 @@ static void MemoryGaugeIdentifyPayloadDecodes()
     AssertEqual((byte)1, device.MemoryMode);
     AssertEqual((byte?)0, device.EraseStatus);
     AssertEqual("1.20", device.FirmwareVersion);
+
+    payload[20] = byte.MaxValue;
+    var unprogrammedMode = DeviceData.DecodeMemoryGauge(payload);
+    AssertEqual((byte)GaugeStorageMode.Full, unprogrammedMode.MemoryMode);
+    AssertEqual(true, unprogrammedMode.MemoryModeWasUnprogrammed);
 }
 
-static void FirmwareDisplayReversesIdentityByteOrder()
+static void FirmwareDisplayUsesProtocolByteOrder()
 {
-    var device = new DeviceData(
+    var legacy = new DeviceData(
         FirmwareMajor: 1,
-        FirmwareMinor: 2,
+        FirmwareMinor: 21,
         DeviceType: 100230,
         DeviceSerial: 1,
         PcbType: 100198,
@@ -578,12 +607,20 @@ static void FirmwareDisplayReversesIdentityByteOrder()
         MemoryMode: 1,
         EraseStatus: 0);
 
-    AssertEqual("2.1", device.FirmwareVersion);
+    var v3 = legacy with
+    {
+        FirmwareMajor = 1,
+        FirmwareMinor = 3,
+        UsesV3FirmwareByteOrder = true
+    };
+
+    AssertEqual("1.21", legacy.FirmwareVersion);
+    AssertEqual("3.1", v3.FirmwareVersion);
 }
 
 static void GaugeIntervalSettingUsesCompatibleWireFormat()
 {
-    ushort measurementInterval = 5;
+    ushort measurementInterval = 0;
     var settingWrites = 0;
     var transport = new DelegateGaugeTransport(request =>
     {
@@ -594,7 +631,8 @@ static void GaugeIntervalSettingUsesCompatibleWireFormat()
                 payload: BuildMemoryIdentityPayload(
                     eraseStatus: 0,
                     measurementInterval: measurementInterval,
-                    memoryMode: 1));
+                    memoryMode: byte.MaxValue,
+                    deviceType: GaugeDeviceTypes.ConstellationQ150Legacy));
         }
 
         if (request.Command == GaugeCommand.SetMeasureRate)
@@ -1105,8 +1143,8 @@ static void LegacyRecordExporterWritesAsciiFormat()
         "Northstar 4000AH Quartz Transducer",
         100230,
         3807522001,
-        0,
         2,
+        0,
         "XHTI-7-1000153",
         "2022-03-05T00:06:52");
     CalibratedGaugeSample[] samples =
@@ -1989,12 +2027,13 @@ static void IncompleteEraseRestartBeginsFresh()
 static byte[] BuildMemoryIdentityPayload(
     byte eraseStatus,
     ushort measurementInterval = 5,
-    byte memoryMode = 1)
+    byte memoryMode = 1,
+    uint deviceType = GaugeDeviceTypes.ConstellationQ150)
 {
     var payload = new byte[22];
     payload[0] = 3;
     payload[1] = 0;
-    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(2, 4), 100230);
+    BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(2, 4), deviceType);
     BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(6, 4), 1234);
     BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(18, 2), measurementInterval);
     payload[20] = memoryMode;

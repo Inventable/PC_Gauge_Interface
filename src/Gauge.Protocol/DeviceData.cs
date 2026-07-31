@@ -9,12 +9,22 @@ public sealed record DeviceData(
     uint PcbSerial,
     ushort MeasurementInterval,
     byte MemoryMode,
-    byte? EraseStatus)
+    byte? EraseStatus,
+    bool UsesV3FirmwareByteOrder = false,
+    bool MemoryModeWasUnprogrammed = false)
 {
-    public string FirmwareVersion => FormatFirmwareVersion(FirmwareMajor, FirmwareMinor);
+    public string FirmwareVersion => FormatFirmwareVersion(
+        FirmwareMajor,
+        FirmwareMinor,
+        UsesV3FirmwareByteOrder);
 
-    public static string FormatFirmwareVersion(byte firstSerialByte, byte secondSerialByte) =>
-        $"{secondSerialByte}.{firstSerialByte}";
+    public static string FormatFirmwareVersion(
+        byte firstSerialByte,
+        byte secondSerialByte,
+        bool usesV3ByteOrder = false) =>
+        usesV3ByteOrder
+            ? $"{secondSerialByte}.{firstSerialByte}"
+            : $"{firstSerialByte}.{secondSerialByte}";
 
     public static DeviceData DecodeMemoryGauge(ReadOnlySpan<byte> payload)
     {
@@ -23,6 +33,7 @@ public sealed record DeviceData(
             throw new GaugeProtocolException("Memory gauge identify payload is too short.");
         }
 
+        var rawMemoryMode = payload[20];
         return new DeviceData(
             payload[0],
             payload[1],
@@ -31,8 +42,9 @@ public sealed record DeviceData(
             ReadUInt32LittleEndian(payload[10..14]),
             ReadUInt32LittleEndian(payload[14..18]),
             ReadUInt16LittleEndian(payload[18..20]),
-            payload[20],
-            payload[21]);
+            rawMemoryMode == byte.MaxValue ? (byte)0 : rawMemoryMode,
+            payload[21],
+            MemoryModeWasUnprogrammed: rawMemoryMode == byte.MaxValue);
     }
 
     public static DeviceData DecodeAcousticGauge(ReadOnlySpan<byte> payload)

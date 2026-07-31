@@ -72,7 +72,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File eng\gauge-cli.ps1 bootlo
 
 ## Live Validation
 
-On 16 July 2026, memory gauge `3807522001` (application firmware `2.0`) completed non-writing bootloader entry, version discovery, reset, and application reacquisition at both `57600` and `115200` baud. The firmware serialises the displayed minor component first and major component second, so the PC renders the two identity bytes in reverse wire order (`0,2` displays as `2.0`; `1,2` displays as `2.1`).
+On 16 July 2026, memory gauge `3807522001` (application firmware `2.0`) completed non-writing bootloader entry, version discovery, reset, and application reacquisition at both `57600` and `115200` baud. Legacy firmware serialises major then minor (`2,0` displays as `2.0`; `1,21` displays as `1.21`). V3 firmware currently serialises those identity bytes in the opposite order, so the PC selects the V3 ordering only after the V3 storage protocol is successfully discovered.
 
 The loader reported:
 
@@ -106,7 +106,7 @@ The proven updater is available in **Settings > Device Management > Firmware Upd
 
 1. Uses the native file picker and accepts only an `Offset/production` HEX artifact. StandAlone, Combined, unified, below-`0x0800`, and unsupported-address images are rejected before a command is sent.
 2. Displays the normalized program range, populated-row count, and SHA-256 before enabling programming.
-3. Enables normal programming only for a connected memory gauge (`100230`) and requires the operator to type the connected device serial.
+3. Enables normal programming for a connected gauge after requiring the operator to confirm its device serial. The validated Offset image, PIC identity, and post-reset serial identity remain enforced; application device type and bootloader version are not programming blocks. Loader `1.2` remains eligible and the discovered version is recorded for diagnostics.
 4. Cancels background downloads, takes exclusive ownership of the serial port, verifies the gauge identity again, and sends `BOOTLOAD` once without an automatic retry.
 5. Discovers and verifies the PIC18F26K80 loader at the validated maximum of `115200` baud, then reports erase, programming, verification, and start-vector commit progress.
 6. Blocks app exit while flash work is active. If any failure occurs after loader entry, normal identify polling remains suspended and the same validated image is retained for the explicit `RECOVER` path.

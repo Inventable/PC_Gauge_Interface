@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$FirmwareHex,
     [string]$FirmwareVersion = '2.0',
-    [uint32]$DeviceType = 100230,
+    [uint32[]]$DeviceTypes = @(100160, 100196, 100230),
     [uint32[]]$SupportedPcbs = @(100161, 100184, 100228),
     [string]$MinimumBootloader = '1.3',
     [string]$Repository = 'Inventable/IT_Releases',
@@ -67,8 +67,9 @@ $manifest = [ordered]@{
         sha256 = (Get-FileHash -LiteralPath (Join-Path $assetDirectory $installerName) -Algorithm SHA256).Hash
     }
     firmware = @(
+        $DeviceTypes | ForEach-Object {
         [ordered]@{
-            deviceType = $DeviceType
+            deviceType = $_
             supportedPcbs = $SupportedPcbs
             version = $FirmwareVersion
             imageType = 'offset-production'
@@ -79,6 +80,7 @@ $manifest = [ordered]@{
             url = "https://github.com/$Repository/releases/download/suite-v$appVersion/$firmwareName"
             sha256 = $firmwareHash
             releaseNotes = $ReleaseNotes
+        }
         }
     )
 }

@@ -84,12 +84,19 @@ public sealed class FirmwareReleaseCatalogClient
         }
 
         var candidates = catalog.Firmware
-            .Where(release => release.DeviceType == deviceType
-                && (release.SupportedPcbs is null || release.SupportedPcbs.Count == 0 || release.SupportedPcbs.Contains(pcbType))
+            .Where(release => GaugeDeviceTypes.IsFirmwareCompatible(deviceType, release.DeviceType)
+                && (release.DeviceType != deviceType ||
+                    release.SupportedPcbs is null ||
+                    release.SupportedPcbs.Count == 0 ||
+                    release.SupportedPcbs.Contains(pcbType))
                 && string.Equals(release.ImageType, "offset-production", StringComparison.OrdinalIgnoreCase)
                 && string.Equals(release.Processor, "PIC18F26K80", StringComparison.OrdinalIgnoreCase))
-            .Select(release => (Release: release, Version: ParseVersion(release.Version)))
-            .OrderByDescending(candidate => candidate.Version)
+            .Select(release => (
+                Release: release,
+                Version: ParseVersion(release.Version),
+                MatchPriority: release.DeviceType == deviceType ? 0 : 1))
+            .OrderBy(candidate => candidate.MatchPriority)
+            .ThenByDescending(candidate => candidate.Version)
             .ToArray();
 
         if (candidates.Length == 0)
