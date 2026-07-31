@@ -2,10 +2,10 @@
 
 ## Release identity
 
-- Application version: `1.0.0`.
-- Git tag: `app-v1.0.0` on the exact clean source commit used to build.
+- Application version: `1.0.1`.
+- Git tag: `app-v1.0.1` on the exact clean source commit used to build.
 - Public distribution repository: `Inventable/IT_Releases`.
-- GitHub release tag: `suite-v1.0.0`.
+- GitHub release tag: `suite-v1.0.1`.
 - Stable catalogue: `channels/stable.json`.
 
 The version is defined once in `Directory.Build.props`, embedded in the
@@ -31,11 +31,11 @@ The normal publish creates:
 
 - `dist/publish/win-x64/` — self-contained application payload.
 - `dist/Northstar-Gauge-Interface-win-x64.zip` — portable fallback.
-- `dist/Northstar-Gauge-Interface-Setup-1.0.0.exe` — per-user, single-file
+- `dist/Northstar-Gauge-Interface-Setup-1.0.1.exe` — per-user, single-file
   installer containing the .NET runtime.
 
 The staging command creates `dist/download-repository/`. Upload everything in
-`release-assets/` to GitHub Release `suite-v1.0.0`; commit `README.md`,
+`release-assets/` to GitHub Release `suite-v1.0.1`; commit `README.md`,
 `channels/`, `schemas/`, and `.gitignore` to the public repository. Publish the
 release assets before updating `channels/stable.json`.
 
@@ -62,7 +62,7 @@ Software-complete gates:
 - Full automated test suite passes.
 - Release solution build passes with zero errors.
 - Self-contained publish and installer compile succeed.
-- Installer metadata and application version both report `1.0.0`.
+- Installer metadata and application version both report `1.0.1`.
 - Installer and firmware hashes match `SHA256SUMS.txt` and `stable.json`.
 
 External/manual gates before calling the release production-ready:

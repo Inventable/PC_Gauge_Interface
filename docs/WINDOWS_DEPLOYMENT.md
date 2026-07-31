@@ -40,7 +40,7 @@ Use `-SkipArchive` while iterating locally. The existing `eng\app.ps1` remains t
 
 ## Distribution Direction
 
-- Retain the self-contained ZIP as a workshop fallback. Release `1.0.0` also
+- Retain the self-contained ZIP as a workshop fallback. Release `1.0.1` also
   produces a per-user single-file Setup EXE containing the same self-contained
   payload.
 - Sign the application and final package before routine field/operator distribution so Windows can identify Northstar as the publisher.
@@ -69,6 +69,15 @@ Code-signing procurement remains a deployment task. The self-contained archive
 is the engineering fallback; the Setup EXE is the intended downloadable format.
 
 ## Latest Local Preflight
+
+On 31 July 2026, release `1.0.1` installed successfully on a low-spec Windows
+PC and no problems were reported during uninstall. The PC used a 1920x1080
+display at 150% scaling. All screens were usable when maximised, but the first
+serial-connection screen initially opened partly outside the visible work area
+and had to be maximised. Deferred UI action: constrain the initial window to
+the DPI-scaled working area and verify first-run layout at 1920x1080 with 150%
+scaling. This test did not include connection to or firmware programming of a
+gauge.
 
 On 16 July 2026 the current `win-x64` archive was rebuilt with 240 entries (49,273,925 bytes). Its executable was launched directly from the publish folder, without `dotnet`, and connected to the live acoustic gauge on COM5 as device 1 running firmware 1.20. The file table loaded with interval and duration columns. This confirms the current release payload locally; it does not replace the clean-machine checklist above.
 
