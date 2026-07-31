@@ -43,7 +43,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private const int EraseTransactionDeadlineMs = 7000;
     private const int EraseRestartWakeScanTimeoutMs = 3000;
     private const int BootloaderBaud = 115200;
-    private const uint MemoryGaugeDeviceType = 100230;
     private const ushort Pic18F26K80DeviceId = 0x6126;
     private static readonly TimeSpan LiveChartRefreshInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan FastVerifyDelay = TimeSpan.FromMilliseconds(250);
@@ -183,7 +182,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private FileListSortColumn _fileSortColumn = FileListSortColumn.FileNumber;
     private bool _fileSortDescending = true;
     private BootloaderApplicationImage? _firmwareImage;
-    private Version? _firmwareMinimumBootloader;
     private string _firmwareImageName = "No image selected";
     private string _firmwareImageSummary = "Select an Offset production HEX file";
     private string _firmwareStatus = "Ready";
@@ -904,11 +902,25 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public bool IsSensorLiveStopped => !IsSensorLiveRunning;
 
     public bool CanOpenSensorLive =>
-        IsGaugeConnected &&
+        IsSensorLiveAvailable &&
         !IsBusy &&
         !IsFirmwareUpdating &&
-        !IsErasePageVisible &&
-        _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+        !IsErasePageVisible;
+
+    public bool IsSensorLiveAvailable =>
+        SupportsV3OperatorFeatures &&
+        _connectedDevice is not null &&
+        GaugeDeviceTypes.IsMemoryGauge(_connectedDevice.DeviceType);
+
+    public bool IsPrepareDeploymentAvailable => IsSensorLiveAvailable;
+
+    public bool IsGaugeConfigurationSupported =>
+        IsGaugeConnected &&
+        _connectedDevice is not null &&
+        GaugeDeviceTypes.IsMemoryGauge(_connectedDevice.DeviceType);
+
+    private bool SupportsV3OperatorFeatures =>
+        IsGaugeConnected && _v3Catalog is not null;
 
     public string SensorLiveStatus
     {
@@ -1334,7 +1346,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public string GaugeMemoryMode => _connectedDevice is null
         ? "--"
-        : DescribeStorageMode(_connectedDevice.MemoryMode);
+        : DescribeDeviceStorageMode(_connectedDevice);
 
     public string GaugeEraseStatus => _connectedDevice?.EraseStatus?.ToString() ?? "--";
 
@@ -1384,9 +1396,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     public string RecordingTimeEstimate => BuildRecordingTimeEstimate();
 
     public string StorageModeCompatibilityText =>
-        _v3Catalog is not null
+        !IsExternalMemoryEmpty()
+            ? "Erase Memory before changing storage mode. Recorded files prevent a mode change."
+            : _v3Catalog is not null
             ? "Changing V3 storage mode requires empty memory. Recorded files will be erased before the new mode is applied."
             : "Changing storage mode requires empty memory. Recorded files will be erased before the new mode is applied.";
+
+    public bool CanSelectGaugeStorageMode =>
+        IsGaugeConfigurationSupported && IsExternalMemoryEmpty();
 
     public string GaugeSettingsStatus
     {
@@ -1510,24 +1527,31 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         get
         {
             var assembly = typeof(MainWindowViewModel).Assembly;
-            var version = assembly.GetName().Version;
-            if (version is null)
-            {
-                return "unknown";
-            }
-
-            var semanticVersion = $"{version.Major}.{version.Minor}.{version.Build}";
             var informationalVersion = assembly
                 .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
                 .InformationalVersion;
-            var separator = informationalVersion?.IndexOf('+') ?? -1;
-            if (separator < 0 || informationalVersion is null || separator == informationalVersion.Length - 1)
+            if (!string.IsNullOrWhiteSpace(informationalVersion))
             {
-                return semanticVersion;
+                var separator = informationalVersion.IndexOf('+');
+                if (separator < 0)
+                {
+                    return informationalVersion;
+                }
+
+                var semanticVersion = informationalVersion[..separator];
+                if (separator == informationalVersion.Length - 1)
+                {
+                    return semanticVersion;
+                }
+
+                var revision = informationalVersion[(separator + 1)..];
+                return $"{semanticVersion} ({revision[..Math.Min(12, revision.Length)]})";
             }
 
-            var revision = informationalVersion[(separator + 1)..];
-            return $"{semanticVersion} ({revision[..Math.Min(12, revision.Length)]})";
+            var version = assembly.GetName().Version;
+            return version is null
+                ? "unknown"
+                : $"{version.Major}.{version.Minor}.{version.Build}";
         }
     }
 
@@ -1779,7 +1803,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         IsSensorLiveVisible = false;
         IsPrepareDeploymentVisible = false;
         RefreshGaugeSettingSelections();
-        GaugeSettingsStatus = string.Empty;
+        GaugeSettingsStatus = string.IsNullOrWhiteSpace(_calibrationFailure)
+            ? string.Empty
+            : "No sensor available. Gauge settings and firmware update remain available.";
         IsGaugeSettingsVisible = true;
         RaiseDeviceInformationChanged();
         return Task.CompletedTask;
@@ -1981,6 +2007,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool CanChangeStorageMode()
     {
         return IsGaugeConfigurationAvailable() &&
+            IsExternalMemoryEmpty() &&
             (byte)SelectedStorageMode.Mode != _connectedDevice!.MemoryMode;
     }
 
@@ -2059,8 +2086,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         !IsBusy &&
         !IsFirmwareUpdating &&
         !IsErasePageVisible &&
-        IsGaugeConnected &&
-        _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+        IsGaugeConfigurationSupported;
 
     private static bool IsGaugeConfigurationConnectionFailure(Exception exception) =>
         exception is TimeoutException
@@ -2272,8 +2298,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _ => $"Unknown ({mode})"
     };
 
+    private static string DescribeDeviceStorageMode(DeviceData device) =>
+        device.MemoryModeWasUnprogrammed
+            ? "Full capacity (default; EEPROM was unprogrammed)"
+            : DescribeStorageMode(device.MemoryMode);
+
     private void UpdateConfiguredDevice(DeviceData device)
     {
+        device = ApplyKnownFirmwareByteOrder(device);
         _connectedDevice = device;
         DeviceSummary = DescribeGauge(device);
         DeviceDetails = BuildDeviceDetails(device, []);
@@ -2286,6 +2318,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         OnPropertyChanged(nameof(RecordingTimeEstimate));
         OnPropertyChanged(nameof(StorageModeCompatibilityText));
+        OnPropertyChanged(nameof(CanSelectGaugeStorageMode));
         if (ApplySampleIntervalCommand is RelayCommand applyInterval)
         {
             applyInterval.RaiseCanExecuteChanged();
@@ -3007,7 +3040,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 : "External memory erase complete";
             _pendingStorageMode = null;
             _externalMemoryKnownEmpty = true;
-            _connectedDevice = device with { EraseStatus = 0 };
+            _connectedDevice = ApplyKnownFirmwareByteOrder(
+                device with { EraseStatus = 0 });
             DeviceSummary = DescribeGauge(_connectedDevice);
             DeviceDetails = BuildDeviceDetails(_connectedDevice, []);
             ConnectionStatus = "Connected";
@@ -3136,11 +3170,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private bool CanBeginMemoryErase() =>
         !IsBusy &&
         !IsFirmwareUpdating &&
-        IsGaugeConnected &&
-        _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+        IsGaugeConfigurationSupported;
 
     private static bool RequiresIncompleteEraseRecovery(DeviceData device) =>
-        device.DeviceType == MemoryGaugeDeviceType &&
+        GaugeDeviceTypes.IsMemoryGauge(device.DeviceType) &&
         device.EraseStatus.GetValueOrDefault() != 0;
 
     private static DeviceData ValidateEraseGauge(
@@ -3150,7 +3183,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         var device = DecodeDevice(identity.Payload)
             ?? throw new GaugeProtocolException("Gauge returned an incomplete identity.");
-        if (device.DeviceType != MemoryGaugeDeviceType ||
+        if (!GaugeDeviceTypes.IsMemoryGauge(device.DeviceType) ||
             device.DeviceSerial != expectedSerial)
         {
             throw new InvalidOperationException(
@@ -3167,6 +3200,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void EnterIncompleteEraseRecovery(DeviceData device, byte[] identityPayload)
     {
+        var usesV3FirmwareByteOrder = device.UsesV3FirmwareByteOrder ||
+            (_connectedDevice?.DeviceSerial == device.DeviceSerial &&
+             _connectedDevice.UsesV3FirmwareByteOrder) ||
+            _v3Catalog is not null;
         IsFileInfoPageVisible = false;
         _pendingStorageMode = null;
         _externalMemoryKnownEmpty = false;
@@ -3182,6 +3219,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         _calibrationFailure = null;
         ResetReview();
 
+        device = device with { UsesV3FirmwareByteOrder = usesV3FirmwareByteOrder };
         _connectedDevice = device;
         DeviceSummary = DescribeGauge(device);
         DeviceDetails = BuildDeviceDetails(device, identityPayload);
@@ -3299,16 +3337,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 return;
             }
 
-            var minimumBootloaderText = releaseCheck.Release.MinimumBootloader.Trim().TrimStart('v', 'V');
-            if (!Version.TryParse(minimumBootloaderText, out _firmwareMinimumBootloader))
-            {
-                _firmwareImage = null;
-                FirmwareRemoteStatus = "The release has an invalid minimum bootloader version and was rejected.";
-                FirmwareStatus = "Rejected firmware release";
-                RaiseFirmwareCommandStates();
-                return;
-            }
-
             FirmwareRemoteStatus = string.IsNullOrWhiteSpace(releaseCheck.Release.ReleaseNotes)
                 ? $"Firmware {releaseCheck.Release.Version} downloaded and verified. Review, then select Program Firmware."
                 : $"Firmware {releaseCheck.Release.Version} downloaded and verified: {releaseCheck.Release.ReleaseNotes}";
@@ -3330,7 +3358,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     public void SelectFirmwareImage(string path)
     {
-        _firmwareMinimumBootloader = null;
         FirmwareProgressPercent = 0;
         FirmwareLoaderDetails = "Not connected";
         FirmwareImageName = Path.GetFileName(path);
@@ -3412,12 +3439,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 {
                     var device = DecodeDevice(connection.Identity.Payload)
                         ?? throw new InvalidDataException("The connected gauge returned an incomplete identity.");
-                    if (device.DeviceType != MemoryGaugeDeviceType)
-                    {
-                        throw new InvalidOperationException(
-                            $"Device type {device.DeviceType} is not the supported memory gauge type {MemoryGaugeDeviceType}.");
-                    }
-
                     if (device.DeviceSerial != expectedSerial.Value)
                     {
                         throw new InvalidOperationException(
@@ -3447,14 +3468,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 {
                     throw new InvalidOperationException(
                         $"Loader device ID 0x{version.DeviceId:X4} does not match PIC18F26K80 ID 0x{Pic18F26K80DeviceId:X4}.");
-                }
-
-                var connectedLoaderVersion = new Version(version.Major, version.Minor);
-                if (_firmwareMinimumBootloader is not null
-                    && connectedLoaderVersion < _firmwareMinimumBootloader)
-                {
-                    throw new InvalidOperationException(
-                        $"Firmware requires bootloader {_firmwareMinimumBootloader}; connected loader is {connectedLoaderVersion}.");
                 }
 
                 var progress = new Progress<FirmwareUpdateProgress>(UpdateFirmwareProgress);
@@ -3487,12 +3500,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 throw new IOException("The programmed application was not reacquired after reset.");
             }
 
-            if (restoredDevice.DeviceType != MemoryGaugeDeviceType
-                || (expectedSerial.HasValue && restoredDevice.DeviceSerial != expectedSerial.Value))
+            if (expectedSerial.HasValue && restoredDevice.DeviceSerial != expectedSerial.Value)
             {
                 throw new InvalidDataException("The application restarted with an unexpected device identity.");
             }
 
+            restoredDevice = ApplyKnownFirmwareByteOrder(restoredDevice);
             _connectedDevice = restoredDevice;
             DeviceSummary = DescribeGauge(restoredDevice);
             DeviceDetails = BuildDeviceDetails(restoredDevice, restoredIdentity!.Payload);
@@ -3603,7 +3616,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             && !IsFirmwareUpdating
             && !IsFirmwareRecoveryRequired
             && _firmwareImage is not null
-            && _connectedDevice?.DeviceType == MemoryGaugeDeviceType;
+            && _connectedDevice is not null;
     }
 
     private bool CanBeginFirmwareRecovery()
@@ -3670,6 +3683,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     {
         var serial = _connectedDevice?.DeviceSerial.ToString() ?? "unknown";
         return $"gauge-{serial}-{DateTime.Now:yyyyMMdd}-file-{file.Index:000}.rec";
+    }
+
+    public string BuildRawFileName(GaugeFileRowViewModel file)
+    {
+        var serial = _connectedDevice?.DeviceSerial.ToString() ?? "unknown";
+        return $"gauge-{serial}-{DateTime.Now:yyyyMMdd}-file-{file.Index:000}.raw";
     }
 
     public string BuildSupportBundleFileName()
@@ -3896,7 +3915,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             _connectedDevice.FirmwareMajor,
             _connectedDevice.FirmwareMinor,
             sensorType,
-            sensorSerial);
+            sensorSerial,
+            UsesV3FirmwareByteOrder: _connectedDevice.UsesV3FirmwareByteOrder);
     }
 
     public void RecordExportSucceeded(GaugeFileRowViewModel file, string savedPath)
@@ -4061,6 +4081,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
             _fileTable = table;
             _v3Catalog = v3Catalog;
+            if (v3Catalog is not null)
+            {
+                device = device with { UsesV3FirmwareByteOrder = true };
+                _connectedDevice = device;
+                DeviceSummary = DescribeGauge(device);
+                DeviceDetails = BuildDeviceDetails(device, identity.Payload);
+            }
             if (v3Catalog?.CrashCapsule is { } crashCapsule)
             {
                 try
@@ -4101,25 +4128,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             FileInfoProgressPercent = 100;
             IsFileInfoPageVisible = false;
 
-            if (v3Catalog is null && _calibration is null)
+            if (Files.Count > 0 && v3Catalog is null && _calibration is null)
             {
                 Status = "Capturing sensor calibration";
                 try
                 {
                     _calibration = await CaptureCalibrationWithDeadlineAsync(cancellationToken).ConfigureAwait(true);
                     _calibrationFailure = null;
+                    DeviceSummary = DescribeGauge(device);
                     ConvertRawDownloads();
                 }
                 catch (SensorCommunicationException ex)
                 {
                     _calibrationFailure = FormatCalibrationFailure(ex);
-                    var stillConnected = await ProbeConnectedGaugeAsync(device.DeviceSerial, cancellationToken).ConfigureAwait(true);
-                    if (!stillConnected)
-                    {
-                        TransitionToDisconnected($"Gauge disconnected during calibration: {ex.Message}");
-                        return;
-                    }
-
+                    DeviceSummary = DescribeGauge(device);
                     Status = $"Sensor unavailable ({_calibrationFailure}); downloading raw files";
                 }
             }
@@ -4427,6 +4449,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             }
             if (connectedDevice is not null)
             {
+                connectedDevice = ApplyKnownFirmwareByteOrder(connectedDevice);
                 _connectedDevice = connectedDevice;
                 DeviceSummary = DescribeGauge(connectedDevice);
                 DeviceDetails = BuildDeviceDetails(connectedDevice, identity.Payload);
@@ -4886,6 +4909,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             {
                 _calibration = await CaptureCalibrationWithDeadlineAsync(cancellationToken).ConfigureAwait(true);
                 _calibrationFailure = null;
+                DeviceSummary = DescribeGauge(_connectedDevice);
                 ConvertRawDownloads();
                 RaiseDeviceInformationChanged();
                 return true;
@@ -4893,15 +4917,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             catch (SensorCommunicationException ex)
             {
                 _calibrationFailure = FormatCalibrationFailure(ex);
+                DeviceSummary = DescribeGauge(_connectedDevice);
                 RaiseDeviceInformationChanged();
-                var expectedSerial = _connectedDevice?.DeviceSerial;
-                if (!expectedSerial.HasValue
-                    || !await ProbeConnectedGaugeAsync(expectedSerial.Value, cancellationToken).ConfigureAwait(true))
-                {
-                    TransitionToDisconnected($"Gauge disconnected during calibration: {ex.Message}");
-                    return false;
-                }
-
                 SetProtectedStatus(
                     $"Sensor unavailable ({_calibrationFailure}); raw download remains available",
                     TimeSpan.FromSeconds(20));
@@ -5465,19 +5482,6 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         }
     }
 
-    private async Task<bool> ProbeConnectedGaugeAsync(
-        uint expectedSerial,
-        CancellationToken cancellationToken)
-    {
-        var identity = await TryIdentifyAsync(
-            SelectedPort,
-            FastBaud,
-            ConnectedPollTransactionTimeoutMs,
-            cancellationToken).ConfigureAwait(true);
-        var device = identity is null ? null : DecodeDevice(identity.Payload);
-        return device?.DeviceSerial == expectedSerial;
-    }
-
     private async Task HandleDownloadFailureAsync(
         GaugeFileRowViewModel file,
         Exception exception,
@@ -5513,9 +5517,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
         var expectedSerial = _connectedDevice?.DeviceSerial;
         file.MarkInterrupted();
-        TransitionToDisconnected(
-            $"Gauge communication failed while downloading file {file.Index}",
-            cancelActiveOperations: false);
+        Status = $"Verifying gauge connection after file {file.Index} stopped";
 
         GaugeFrame? recoveredIdentity = null;
         DeviceData? recoveredDevice = null;
@@ -5578,6 +5580,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
 
     private void RestoreRetainedSession(DeviceData device, byte[] identityPayload)
     {
+        device = ApplyKnownFirmwareByteOrder(device);
         _connectedDevice = device;
         DeviceSummary = DescribeGauge(device);
         DeviceDetails = BuildDeviceDetails(device, identityPayload);
@@ -5689,25 +5692,27 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
             : DeviceData.DecodeMemoryGauge(payload);
     }
 
-    private static string DescribeGauge(DeviceData? device)
+    private string DescribeGauge(DeviceData? device)
     {
         if (device is null)
         {
             return "Gauge connected";
         }
 
-        return $"Connected | Device {device.DeviceSerial} | Firmware {device.FirmwareVersion}";
+        var sensorStatus = string.IsNullOrWhiteSpace(_calibrationFailure)
+            ? string.Empty
+            : " | No sensor available";
+        return $"Connected | Device {device.DeviceSerial} | Firmware {device.FirmwareVersion}{sensorStatus}";
     }
+
+    private DeviceData ApplyKnownFirmwareByteOrder(DeviceData device) =>
+        _v3Catalog is null
+            ? device
+            : device with { UsesV3FirmwareByteOrder = true };
 
     private static string DescribeDeviceType(uint deviceType)
     {
-        return deviceType switch
-        {
-            100196 => "Constellation Q177",
-            100160 or 100230 => "Constellation Q150",
-            100187 or 100200 => "Constellation Acoustic Quartz Gauge",
-            _ => $"Gauge Type {deviceType}"
-        };
+        return GaugeDeviceTypes.Describe(deviceType);
     }
 
     private static string BuildDeviceDetails(DeviceData? device, byte[] payload)
@@ -5832,6 +5837,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
     private void RaiseCommandStates()
     {
         OnPropertyChanged(nameof(CanOpenSensorLive));
+        OnPropertyChanged(nameof(IsSensorLiveAvailable));
+        OnPropertyChanged(nameof(IsPrepareDeploymentAvailable));
+        OnPropertyChanged(nameof(IsGaugeConfigurationSupported));
         if (StartCommand is RelayCommand start)
         {
             start.RaiseCanExecuteChanged();
@@ -5963,6 +5971,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
         OnPropertyChanged(nameof(GaugeMeasurementInterval));
         OnPropertyChanged(nameof(GaugeMemoryMode));
         OnPropertyChanged(nameof(GaugeEraseStatus));
+        OnPropertyChanged(nameof(IsSensorLiveAvailable));
+        OnPropertyChanged(nameof(IsPrepareDeploymentAvailable));
+        OnPropertyChanged(nameof(IsGaugeConfigurationSupported));
         OnPropertyChanged(nameof(EngineeringTransport));
         OnPropertyChanged(nameof(EngineeringFileTable));
         OnPropertyChanged(nameof(EngineeringCalibration));
@@ -6355,7 +6366,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
 
     public bool IsRowRetryVisible => IsRetryAvailable && HasPlotData;
 
-    public bool CanFileAction => !IsRawOnly && (!IsDownloading || HasPlotData);
+    public bool CanFileAction => IsRawOnly || !IsDownloading || HasPlotData;
 
     public string RowStatus => State switch
     {
@@ -6509,7 +6520,7 @@ public sealed class GaugeFileRowViewModel : INotifyPropertyChanged
     public string ActionToolTip => HasPlotData
         ? "View pressure and temperature graph"
         : IsRawOnly
-            ? "Raw data downloaded; sensor calibration is required for graphing"
+            ? "Save uncalibrated raw gauge memory"
             : IsRetryAvailable ? "Retry download" : IsDownloading ? "Download in progress" : "Download this file";
 
     public void MarkDownloading()

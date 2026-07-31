@@ -62,6 +62,14 @@ alternate page when the preferred page requires recovery. In V3 full mode, the
 host never calculates or reads a mirror address, and command-24 requests are
 split at the physical `0x02000000` device boundary.
 
+Legacy gauges may report an erased EEPROM mode byte of `0xFF`. Firmware treats
+every value other than mirrored mode `1` as full-capacity behavior, so the host
+normalizes `0xFF` to mode `0` while retaining an engineering diagnostic that
+the stored value was unprogrammed. Gauge Settings displays the effective full
+mode. Storage selection and **Change Storage Mode** remain disabled whenever
+the loaded file table/catalog is not empty; the operator must complete **Erase
+Memory** first. Sample-interval changes do not depend on sensor availability.
+
 After a V3 mode write, command 73 must agree with both the `IDENTIFY` mode and
 the expected write-target mask/storage end before the app marks the gauge ready.
 

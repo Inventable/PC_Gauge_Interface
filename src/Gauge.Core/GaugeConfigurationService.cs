@@ -12,8 +12,6 @@ public enum GaugeStorageMode : byte
 public sealed class GaugeConfigurationService
 {
     private const byte CommandSuccess = 0x01;
-    private const uint MemoryGaugeDeviceType = 100230;
-
     private readonly GaugeSession _session;
 
     public GaugeConfigurationService(GaugeSession session)
@@ -144,7 +142,7 @@ public sealed class GaugeConfigurationService
     {
         var identity = await _session.IdentifyAsync(cancellationToken).ConfigureAwait(false);
         var device = DeviceData.DecodeMemoryGauge(identity.Payload);
-        if (device.DeviceType != MemoryGaugeDeviceType ||
+        if (!GaugeDeviceTypes.IsMemoryGauge(device.DeviceType) ||
             device.DeviceSerial != expectedSerial)
         {
             throw new InvalidOperationException(

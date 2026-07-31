@@ -2,6 +2,19 @@
 
 These notes capture what has been verified from the firmware, live gauge reads, LabVIEW screenshots, and the sample export.
 
+## Gauges Without an Attached Sensor
+
+Sensor calibration is optional for gauge communication and raw-memory access.
+If no sensor is attached, the application reports the sensor as unavailable,
+keeps the gauge connected, downloads V2 files as raw data, and leaves Device
+Management and firmware update available. Loss of sensor communication alone
+must never transition the gauge to the disconnected state.
+
+The connected header explicitly reports **No sensor available**. A completed
+raw-only file keeps the row's orange action enabled; selecting it opens a
+`.raw` save dialog so the original memory bytes can be retained for later
+reconstruction if calibration becomes available.
+
 ## Verified Data Sources
 
 The gauge host protocol can read sensor data through:

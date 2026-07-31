@@ -12,9 +12,11 @@ Open the latest GitHub Release and download
 ## Firmware catalog
 
 The desktop application reads `channels/stable.json`, selects the newest
-stable entry matching the connected gauge device type, downloads the referenced
-Offset-production HEX, verifies its SHA-256, and validates the image layout
-before programming is enabled.
+stable entry matching the connected gauge device type or compatible memory-gauge
+family, downloads the referenced Offset-production HEX, verifies its SHA-256,
+and validates the image layout before programming is enabled. The unified
+memory-gauge image is published for device types `100160`, `100196`, and
+`100230`.
 
 Published release files are immutable: correcting an artifact requires a new
 version and a new directory. `SHA256SUMS.txt` records hashes for human/offline

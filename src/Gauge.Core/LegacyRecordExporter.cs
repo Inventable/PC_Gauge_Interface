@@ -24,7 +24,7 @@ public static class LegacyRecordExporter
         writer.WriteLine($"Type Number: {metadata.DeviceType}");
         writer.WriteLine($"Serial Number: {metadata.DeviceSerial}");
         writer.WriteLine(
-            $"Firmware Version: {DeviceData.FormatFirmwareVersion(metadata.FirmwareMajor, metadata.FirmwareMinor)}");
+            $"Firmware Version: {DeviceData.FormatFirmwareVersion(metadata.FirmwareMajor, metadata.FirmwareMinor, metadata.UsesV3FirmwareByteOrder)}");
         writer.WriteLine($"Sensor Type: {metadata.SensorType}");
         writer.WriteLine($"Sensor Serial: {metadata.SensorSerial}");
         writer.WriteLine($"Calibration Cert: {metadata.CalibrationCertificate}");
@@ -65,4 +65,5 @@ public sealed record LegacyRecordMetadata(
     byte FirmwareMinor,
     string SensorType,
     string SensorSerial,
-    string CalibrationCertificate = "");
+    string CalibrationCertificate = "",
+    bool UsesV3FirmwareByteOrder = false);

@@ -17,8 +17,9 @@ interface work described below retains the existing V2 path.
 - A valid command-73 capability payload selects V3.
 - The standard invalid-command response selects the unchanged V2 catalog,
   calibration, download, and decoding workflow.
-- Firmware display uses the identity bytes in reverse wire order. For example,
-  wire bytes `1,2` display as firmware `2.1`.
+- Legacy firmware display uses identity bytes in major/minor wire order. V3
+  display reverses the identity bytes only after the V3 storage protocol is
+  discovered; for example, V3 wire bytes `1,3` display as firmware `3.1`.
 - Existing V2 erase is retained as the fallback when progress erase command 64
   is unsupported.
 

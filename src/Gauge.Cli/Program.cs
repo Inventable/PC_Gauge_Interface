@@ -1312,7 +1312,6 @@ static void PrintFirmwareImage(BootloaderApplicationImage image)
 
 static async Task<int> RunFirmwareProgramAsync(string[] arguments, bool recoveryMode)
 {
-    const uint MemoryGaugeDeviceType = 100230;
     const ushort Pic18F26K80DeviceId = 0x6126;
 
     var minimumArguments = recoveryMode ? 4 : 5;
@@ -1368,12 +1367,6 @@ static async Task<int> RunFirmwareProgramAsync(string[] arguments, bool recovery
 
         var device = DeviceData.DecodeMemoryGauge(reply.Payload);
         PrintDevice(device);
-        if (device.DeviceType != MemoryGaugeDeviceType)
-        {
-            Console.Error.WriteLine($"Device type {device.DeviceType} is not the supported memory gauge type {MemoryGaugeDeviceType}.");
-            return 4;
-        }
-
         if (device.DeviceSerial != expectedSerial.Value)
         {
             Console.Error.WriteLine($"Connected serial {device.DeviceSerial} does not match confirmed serial {expectedSerial.Value}.");
@@ -1448,8 +1441,7 @@ static async Task<int> RunFirmwareProgramAsync(string[] arguments, bool recovery
 
     var restoredDevice = DeviceData.DecodeMemoryGauge(restoredReply.Payload);
     PrintDevice(restoredDevice);
-    if (restoredDevice.DeviceType != MemoryGaugeDeviceType
-        || (expectedSerial.HasValue && restoredDevice.DeviceSerial != expectedSerial.Value))
+    if (expectedSerial.HasValue && restoredDevice.DeviceSerial != expectedSerial.Value)
     {
         Console.Error.WriteLine("The application restarted with an unexpected device identity.");
         return 8;
