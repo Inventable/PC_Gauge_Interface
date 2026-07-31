@@ -92,9 +92,9 @@ fails.
 Event 13 is displayed as **Power removed or logging stopped** and is a normal
 state. It must not use crash/failure language. Event 14 and genuine watchdog,
 storage, recorder, or sensor failures remain warnings. Command 70 exposes the
-presence and generation of the protected crash capsule but not its internal
-context fields; the application states that limitation instead of inventing
-details.
+presence and generation of the protected crash capsule; command 71 reads and
+validates its internal context fields without acknowledging or clearing it.
+Unknown state, event, and fault identifiers remain visible numerically.
 
 ## Operator Interface
 

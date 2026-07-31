@@ -24,6 +24,20 @@ internal static class SupportBundleExporter
             archive,
             "diagnostics.json",
             JsonSerializer.Serialize(diagnostics, JsonOptions));
+        if (diagnostics.V3Diagnostics?.CrashCapsule is { } crashCapsule)
+        {
+            WriteTextEntry(
+                archive,
+                "diagnostics/crash-capsule.json",
+                JsonSerializer.Serialize(
+                    new SupportCrashCapsuleReport(
+                        diagnostics.GeneratedUtc,
+                        diagnostics.Device?.DeviceType,
+                        diagnostics.Device?.DeviceSerial,
+                        diagnostics.Device?.FirmwareVersion,
+                        crashCapsule),
+                    JsonOptions));
+        }
 
         foreach (var artifact in calibrations)
         {
@@ -140,7 +154,28 @@ internal sealed record SupportV3DiagnosticSnapshot(
     byte PendingRamEventCount,
     byte FailedChipMask,
     byte DegradedReplicaMask,
-    string Flags);
+    string Flags,
+    SupportCrashCapsuleSnapshot? CrashCapsule,
+    string CrashCapsuleReadStatus);
+
+internal sealed record SupportCrashCapsuleSnapshot(
+    byte SchemaVersion,
+    uint Generation,
+    uint BootId,
+    ushort EventId,
+    byte FaultId,
+    byte ApplicationState,
+    string ApplicationStateName,
+    uint FileId,
+    uint CommittedSampleCount,
+    byte RawRcon);
+
+internal sealed record SupportCrashCapsuleReport(
+    DateTimeOffset ExportedUtc,
+    uint? DeviceType,
+    uint? DeviceSerial,
+    string? FirmwareVersion,
+    SupportCrashCapsuleSnapshot Capsule);
 
 internal sealed record SupportCalibrationArtifact(
     string Directory,

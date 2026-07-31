@@ -213,6 +213,7 @@ public sealed class SerialGaugeTransport : IGaugeTransport
             or GaugeCommand.StartProgressErase
             or GaugeCommand.GetEraseProgress
             or GaugeCommand.V3DiagnosticStatus
+            or GaugeCommand.V3GetCrashCapsule
             or GaugeCommand.V3Capabilities
             or GaugeCommand.V3CatalogSummary;
 

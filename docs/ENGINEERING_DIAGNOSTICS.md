@@ -16,9 +16,12 @@ Routine operator diagnostics are available separately under
 A V3 recording ending after power removal is ordinary operation. Event 13 is
 shown as **Power removed or logging stopped**, not as a crash. A missing footer
 on an otherwise valid open file is healthy and does not create a warning.
-Command 70 reports a protected capsule's presence and generation but does not
-expose the capsule context fields; the operator page identifies this protocol
-limit.
+Command 70 reports a protected capsule's presence and generation. When bit 4 is
+set, the application uses the read-only command 71 to validate and display the
+capsule generation, boot, event/fault, file, committed-sample and raw RCON
+context in a labelled operator summary. A one-byte `0xFC` reply is treated as a
+benign availability race, and `0xFF` leaves the older diagnostic workflow
+available without capsule details.
 
 ## Connection Snapshot
 
@@ -55,6 +58,8 @@ Use **Save Support Bundle** to preserve this evidence as a timestamped ZIP. The 
   download and data-quality result, command-70 gauge-event status, parsed
   calibration metadata, a connection-session integrity summary, and recent
   communication events.
+- `diagnostics/crash-capsule.json` with device identity and the validated
+  capsule fields when a protected crash capsule was downloaded.
 - Connected-sensor calibration payloads under `calibration/` for V2.
 - Each atomic V3 file's calibration payloads under
   `calibration/file-NNN/`.

@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using Gauge.Calibration;
 using Gauge.Core;
@@ -26,6 +28,7 @@ var tests = new (string Name, Action Run)[]
     ("Intel HEX validates checksums and extended addresses", IntelHexValidatesChecksumsAndExtendedAddresses),
     ("Bootloader image rejects application data below offset", BootloaderImageRejectsDataBelowOffset),
     ("Firmware updater erases start first and writes it last", FirmwareUpdaterErasesStartFirstAndWritesItLast),
+    ("Firmware release catalog selects, downloads, and verifies the latest stable image", FirmwareReleaseCatalogSelectsAndVerifiesLatest),
     ("Memory gauge identify payload decodes", MemoryGaugeIdentifyPayloadDecodes),
     ("Firmware display reverses identity byte order", FirmwareDisplayReversesIdentityByteOrder),
     ("Gauge interval setting uses V2/V3 wire format and verifies IDENTIFY", GaugeIntervalSettingUsesCompatibleWireFormat),
@@ -57,6 +60,12 @@ var tests = new (string Name, Action Run)[]
     ("V3 capabilities parse exact V3.1 full and mirror layouts", V3CapabilitiesAndFallbackWork),
     ("V3 capabilities reject inconsistent mode layouts", V3CapabilitiesRejectInconsistentLayouts),
     ("V3 diagnostic failover hints select preferred read order", V3DiagnosticFailoverHintsWork),
+    ("V3 crash capsule parses and validates every field", V3CrashCapsuleParsesKnownPayload),
+    ("V3 crash capsule rejects each invalid envelope field", V3CrashCapsuleValidationFailures),
+    ("V3 crash capsule command handles all response forms", V3CrashCapsuleCommandResponses),
+    ("V3 diagnostic availability controls capsule retrieval", V3CrashCapsuleAvailabilityWorkflow),
+    ("V3 crash capsule retrieval completes before file transfer", V3CrashCapsulePrecedesFileTransfer),
+    ("V3 crash capsule reports deduplicate by device and event identity", V3CrashCapsuleReportsDeduplicate),
     ("V3 diagnostic events distinguish power removal from a logging fault", V3DiagnosticEventsUseOperatorLanguage),
     ("V3 clean catalog discovery uses raw primary reads only", V3CatalogDiscoveryUsesPrimaryRawReadsOnly),
     ("V3 catalog union retains a longer alternate prefix", V3CatalogUnionRetainsLongerAlternatePrefix),
@@ -106,6 +115,75 @@ static void Crc16MatchesIdentifyVector()
 {
     var body = new byte[] { 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
     AssertEqual((ushort)0x0CC0, Crc16.Compute(body));
+}
+
+static void FirmwareReleaseCatalogSelectsAndVerifiesLatest()
+{
+    var firmwareBytes = Encoding.ASCII.GetBytes(":020000040000FA\r\n:00000001FF\r\n");
+    var firmwareHash = Convert.ToHexString(SHA256.HashData(firmwareBytes));
+    var manifest = $$"""
+        {
+          "schemaVersion": 1,
+          "channel": "stable",
+          "suiteVersion": "1.0.0",
+          "generatedUtc": "2026-07-31T12:00:00Z",
+          "firmware": [
+            {
+              "deviceType": 100230,
+              "supportedPcbs": [100184],
+              "version": "2.0",
+              "imageType": "offset-production",
+              "processor": "PIC18F26K80",
+              "minimumBootloader": "1.3",
+              "url": "https://github.com/Inventable/IT_Releases/releases/download/suite-v1.0.0/firmware.hex",
+              "sha256": "{{firmwareHash}}"
+            },
+            {
+              "deviceType": 100230,
+              "supportedPcbs": [100184],
+              "version": "2.1",
+              "imageType": "offset-production",
+              "processor": "PIC18F26K80",
+              "minimumBootloader": "1.3",
+              "url": "https://github.com/Inventable/IT_Releases/releases/download/suite-v1.0.0/firmware.hex",
+              "sha256": "{{firmwareHash}}",
+              "releaseNotes": "First public update"
+            },
+            {
+              "deviceType": 100230,
+              "supportedPcbs": [100184],
+              "version": "9.0",
+              "imageType": "combined-production",
+              "processor": "PIC18F26K80",
+              "minimumBootloader": "1.3",
+              "url": "https://github.com/Inventable/IT_Releases/releases/download/suite-v1.0.0/unsafe.hex",
+              "sha256": "{{firmwareHash}}"
+            }
+          ]
+        }
+        """;
+    var handler = new StaticHttpMessageHandler(request =>
+    {
+        var content = request.RequestUri!.AbsolutePath.EndsWith("manifest.json", StringComparison.Ordinal)
+            ? Encoding.UTF8.GetBytes(manifest)
+            : firmwareBytes;
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(content) };
+    });
+    using var httpClient = new HttpClient(handler);
+    var client = new FirmwareReleaseCatalogClient(httpClient);
+    var releaseCheck = client.CheckAsync(
+        new Uri("https://downloads.example.test/firmware/manifest.json"),
+        100230,
+        100184,
+        "2.0").GetAwaiter().GetResult();
+
+    AssertEqual("2.1", releaseCheck?.Release.Version);
+    AssertEqual(true, releaseCheck?.IsUpdateAvailable);
+    AssertEqual(
+        "https://github.com/Inventable/IT_Releases/releases/download/suite-v1.0.0/firmware.hex",
+        releaseCheck?.DownloadUri.AbsoluteUri);
+    var downloaded = client.DownloadAsync(releaseCheck!).GetAwaiter().GetResult();
+    AssertSequenceEqual(firmwareBytes, downloaded);
 }
 
 static void Crc16VerifiesAppendedBytes()
@@ -1238,6 +1316,293 @@ static void V3DiagnosticFailoverHintsWork()
     var inconsistent = CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror);
     inconsistent[21] = 1;
     AssertGaugeProtocol(() => V3DiagnosticStatus.Parse(inconsistent, capabilities));
+}
+
+static void V3CrashCapsuleParsesKnownPayload()
+{
+    var payload = CreateCrashCapsulePayload(
+        rawRcon: 0xA6,
+        applicationState: 2,
+        faultId: 0x91,
+        generation: 0x78563412,
+        bootId: 0xEFCDAB89,
+        eventId: 0x3412,
+        fileId: 0x89ABCDEF,
+        committedSamples: 0x10203040);
+
+    var capsule = CrashCapsule.Parse(payload);
+    AssertEqual((byte)1, capsule.SchemaVersion);
+    AssertEqual((byte)0xA6, capsule.RawRcon);
+    AssertEqual((byte)2, capsule.ApplicationState);
+    AssertEqual("deployment recording", capsule.ApplicationStateDisplay);
+    AssertEqual((byte)0x91, capsule.FaultId);
+    AssertEqual(0x78563412u, capsule.Generation);
+    AssertEqual(0xEFCDAB89u, capsule.BootId);
+    AssertEqual((ushort)0x3412, capsule.EventId);
+    AssertEqual(0x89ABCDEFu, capsule.FileId);
+    AssertEqual(0x10203040u, capsule.CommittedSampleCount);
+
+    var unknown = CrashCapsule.Parse(CreateCrashCapsulePayload(
+        applicationState: 0xFE,
+        faultId: 0xFD,
+        eventId: 0xFCFB));
+    AssertEqual((byte)0xFE, unknown.ApplicationState);
+    AssertEqual((byte)0xFD, unknown.FaultId);
+    AssertEqual((ushort)0xFCFB, unknown.EventId);
+    AssertEqual("unknown (254)", unknown.ApplicationStateDisplay);
+}
+
+static void V3CrashCapsuleValidationFailures()
+{
+    var valid = CreateCrashCapsulePayload();
+    AssertGaugeProtocol(() => CrashCapsule.Parse(valid.AsSpan(0, 31)));
+    AssertGaugeProtocol(() => CrashCapsule.Parse([.. valid, 0]));
+
+    var badMagic = valid.ToArray();
+    badMagic[0] ^= 1;
+    RewriteCrashCapsuleCrc(badMagic);
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badMagic));
+
+    var badSchema = valid.ToArray();
+    badSchema[4] = 2;
+    RewriteCrashCapsuleCrc(badSchema);
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badSchema));
+
+    var badReserved = valid.ToArray();
+    badReserved[26] = 1;
+    RewriteCrashCapsuleCrc(badReserved);
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badReserved));
+
+    var badCommit = valid.ToArray();
+    badCommit[31] = 0;
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badCommit));
+
+    var badCrc = valid.ToArray();
+    badCrc[27] ^= 1;
+    AssertGaugeProtocol(() => CrashCapsule.Parse(badCrc));
+
+    var byte26Changed = valid.ToArray();
+    byte26Changed[26] = 1;
+    AssertEqual(
+        false,
+        Crc32C.Compute(byte26Changed.AsSpan(0, 27)) ==
+        BinaryPrimitives.ReadUInt32LittleEndian(byte26Changed.AsSpan(27, 4)));
+    AssertEqual(
+        Crc32C.Compute(valid.AsSpan(0, 27)),
+        BinaryPrimitives.ReadUInt32LittleEndian(valid.AsSpan(27, 4)));
+}
+
+static void V3CrashCapsuleCommandResponses()
+{
+    GaugeFrame? captured = null;
+    var payload = CreateCrashCapsulePayload();
+    var session = new GaugeSession(new DelegateGaugeTransport(request =>
+    {
+        captured = request;
+        return GaugeFrame.Create(request.Command, payload: payload);
+    }));
+    var available = session.ReadV3CrashCapsuleAsync().GetAwaiter().GetResult();
+    AssertEqual(CrashCapsuleReadStatus.Available, available.Status);
+    AssertEqual((uint)7, available.Capsule!.Generation);
+    AssertEqual(GaugeCommand.V3GetCrashCapsule, captured!.Command);
+    AssertEqual((ushort)0, captured.DataLength);
+    AssertEqual(0, captured.Payload.Length);
+
+    AssertEqual(
+        CrashCapsuleReadStatus.NoLongerAvailable,
+        ReadCrashCapsuleResponse([0xFC]).Status);
+    AssertEqual(
+        CrashCapsuleReadStatus.Unsupported,
+        ReadCrashCapsuleResponse([0xFF]).Status);
+    AssertGaugeProtocol(() => ReadCrashCapsuleResponse(payload.AsSpan(0, 31).ToArray()));
+    AssertGaugeProtocol(() => ReadCrashCapsuleResponse([.. payload, 0]));
+}
+
+static void V3CrashCapsuleAvailabilityWorkflow()
+{
+    var withoutRequests = 0;
+    var without = DiscoverEmptyV3Catalog(
+        CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror),
+        request =>
+        {
+            withoutRequests++;
+            return [0xFF];
+        });
+    AssertEqual(0, withoutRequests);
+    AssertEqual<CrashCapsuleReadResult?>(null, without.CrashCapsuleRead);
+
+    var withStatus = CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror);
+    withStatus[1] |= (byte)V3DiagnosticFlags.CrashCapsuleValid;
+    WriteUInt32LittleEndian(withStatus.AsSpan(28, 4), 7);
+    var withRequests = 0;
+    var with = DiscoverEmptyV3Catalog(
+        withStatus,
+        request =>
+        {
+            withRequests++;
+            return CreateCrashCapsulePayload();
+        });
+    AssertEqual(1, withRequests);
+    AssertEqual((uint)7, with.CrashCapsule!.Generation);
+
+    var raced = DiscoverEmptyV3Catalog(withStatus, request => [0xFC]);
+    AssertEqual(CrashCapsuleReadStatus.NoLongerAvailable, raced.CrashCapsuleRead!.Status);
+    AssertEqual<CrashCapsule?>(null, raced.CrashCapsule);
+
+    var unsupported = DiscoverEmptyV3Catalog(withStatus, request => [0xFF]);
+    AssertEqual(CrashCapsuleReadStatus.Unsupported, unsupported.CrashCapsuleRead!.Status);
+    AssertEqual(0, unsupported.Files.Count);
+}
+
+static void V3CrashCapsulePrecedesFileTransfer()
+{
+    var data = ReadV3Fixture("bch-clean-data.bin");
+    var diagnosticPayload = CreateV3DiagnosticStatusPayload(V3MemoryMode.Mirror);
+    diagnosticPayload[1] |= (byte)V3DiagnosticFlags.CrashCapsuleValid;
+    WriteUInt32LittleEndian(diagnosticPayload.AsSpan(28, 4), 7);
+    var capabilities = V3Capabilities.Parse(
+        CreateV3CapabilitiesPayload(V3MemoryMode.Mirror));
+    var diagnostic = V3DiagnosticStatus.Parse(
+        diagnosticPayload,
+        capabilities);
+    var catalog = CreateV3DataCatalog(data) with
+    {
+        DiagnosticStatus = diagnostic
+    };
+    var commands = new List<GaugeCommand>();
+    var transport = new DelegateGaugeTransport(request =>
+    {
+        commands.Add(request.Command);
+        if (request.Command == GaugeCommand.V3GetCrashCapsule)
+        {
+            return GaugeFrame.Create(
+                request.Command,
+                payload: CreateCrashCapsulePayload());
+        }
+
+        if (request.Command == GaugeCommand.ReadExternalEeprom)
+        {
+            var logicalAddress = request.Address >=
+                V3GaugeJobService.ReplicaAddressStride
+                ? request.Address - V3GaugeJobService.ReplicaAddressStride
+                : request.Address;
+            var offset = checked((int)(logicalAddress - 0x10000));
+            return GaugeFrame.Create(
+                request.Command,
+                request.Address,
+                data.AsSpan(offset, request.DataLength).ToArray());
+        }
+
+        throw new InvalidOperationException(
+            $"Unexpected request {request.Command}.");
+    });
+    var service = new V3GaugeJobService(new GaugeSession(transport));
+
+    catalog = service
+        .DownloadCrashCapsuleIfAvailableAsync(catalog)
+        .GetAwaiter()
+        .GetResult();
+    _ = service
+        .DownloadFileAsync(catalog, 0)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual((uint)7, catalog.CrashCapsule!.Generation);
+    var capsuleIndex = commands.IndexOf(GaugeCommand.V3GetCrashCapsule);
+    var fileReadIndex = commands.IndexOf(GaugeCommand.ReadExternalEeprom);
+    AssertEqual(true, capsuleIndex >= 0);
+    AssertEqual(true, fileReadIndex > capsuleIndex);
+}
+
+static void V3CrashCapsuleReportsDeduplicate()
+{
+    var directory = Path.Combine(
+        Path.GetTempPath(),
+        $"gauge-crash-capsule-test-{Guid.NewGuid():N}");
+    try
+    {
+        var store = new CrashCapsuleReportStore(directory);
+        var capsule = CrashCapsule.Parse(CreateCrashCapsulePayload());
+        AssertEqual(true, store.SaveIfNew("100230:1234", capsule));
+        AssertEqual(false, store.SaveIfNew("100230:1234", capsule));
+        AssertEqual(true, store.SaveIfNew("100230:5678", capsule));
+        AssertEqual(true, store.SaveIfNew(
+            "100230:1234",
+            capsule with { EventId = (ushort)(capsule.EventId + 1) }));
+        AssertEqual(3, Directory.GetFiles(directory, "*.json").Length);
+    }
+    finally
+    {
+        if (Directory.Exists(directory))
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}
+
+static CrashCapsuleReadResult ReadCrashCapsuleResponse(byte[] payload)
+{
+    var session = new GaugeSession(new DelegateGaugeTransport(
+        request => GaugeFrame.Create(request.Command, payload: payload)));
+    return session.ReadV3CrashCapsuleAsync().GetAwaiter().GetResult();
+}
+
+static V3GaugeCatalog DiscoverEmptyV3Catalog(
+    byte[] diagnosticPayload,
+    Func<GaugeFrame, byte[]> crashCapsuleResponse)
+{
+    var capabilitiesPayload = CreateV3CapabilitiesPayload(V3MemoryMode.Mirror);
+    var session = new GaugeSession(new DelegateGaugeTransport(request =>
+    {
+        var payload = request.Command switch
+        {
+            GaugeCommand.V3Capabilities => capabilitiesPayload,
+            GaugeCommand.V3DiagnosticStatus => diagnosticPayload,
+            GaugeCommand.V3GetCrashCapsule => crashCapsuleResponse(request),
+            GaugeCommand.ReadExternalEeprom =>
+                Enumerable.Repeat((byte)0xFF, request.DataLength).ToArray(),
+            _ => throw new InvalidOperationException(
+                $"Unexpected request {request.Command}.")
+        };
+        return GaugeFrame.Create(request.Command, payload: payload);
+    }));
+    return new V3GaugeJobService(session)
+        .DiscoverAsync()
+        .GetAwaiter()
+        .GetResult()!;
+}
+
+static byte[] CreateCrashCapsulePayload(
+    byte rawRcon = 0x20,
+    byte applicationState = 3,
+    byte faultId = 9,
+    uint generation = 7,
+    uint bootId = 11,
+    ushort eventId = 14,
+    uint fileId = 0x12345678,
+    uint committedSamples = 1234)
+{
+    var payload = new byte[CrashCapsule.PayloadLength];
+    "MGCC"u8.CopyTo(payload);
+    payload[4] = CrashCapsule.CurrentSchemaVersion;
+    payload[5] = rawRcon;
+    payload[6] = applicationState;
+    payload[7] = faultId;
+    WriteUInt32LittleEndian(payload.AsSpan(8, 4), generation);
+    WriteUInt32LittleEndian(payload.AsSpan(12, 4), bootId);
+    BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(16, 2), eventId);
+    WriteUInt32LittleEndian(payload.AsSpan(18, 4), fileId);
+    WriteUInt32LittleEndian(payload.AsSpan(22, 4), committedSamples);
+    RewriteCrashCapsuleCrc(payload);
+    payload[31] = CrashCapsule.CommitMarker;
+    return payload;
+}
+
+static void RewriteCrashCapsuleCrc(byte[] payload)
+{
+    WriteUInt32LittleEndian(
+        payload.AsSpan(27, 4),
+        Crc32C.Compute(payload.AsSpan(0, 27)));
 }
 
 static void ExternalEraseProgressPayloadValidates()
@@ -3002,5 +3367,23 @@ sealed class InlineProgress<T> : IProgress<T>
     public void Report(T value)
     {
         _report(value);
+    }
+}
+
+sealed class StaticHttpMessageHandler : HttpMessageHandler
+{
+    private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+
+    public StaticHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
+    {
+        _responder = responder;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_responder(request));
     }
 }

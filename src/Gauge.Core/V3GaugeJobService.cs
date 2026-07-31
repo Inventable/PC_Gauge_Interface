@@ -25,7 +25,11 @@ public sealed record V3GaugeCatalog(
     bool UsesMirror = true,
     int PreferredReplicaId = 0,
     V3DiagnosticStatus? DiagnosticStatus = null,
-    bool RequiresMemoryService = false);
+    bool RequiresMemoryService = false,
+    CrashCapsuleReadResult? CrashCapsuleRead = null)
+{
+    public CrashCapsule? CrashCapsule => CrashCapsuleRead?.Capsule;
+}
 
 public sealed record V3RejectedCatalogRecord(
     V3CatalogRecord CatalogRecord,
@@ -214,7 +218,8 @@ public sealed class V3GaugeJobService
 
     public async Task<V3GaugeCatalog?> DiscoverAsync(
         CancellationToken cancellationToken = default,
-        IProgress<FileInfoReadProgress>? progress = null)
+        IProgress<FileInfoReadProgress>? progress = null,
+        bool readCrashCapsule = true)
     {
         progress?.Report(new FileInfoReadProgress(0, "Reading storage capabilities"));
         var capabilities = await _session.ProbeV3CapabilitiesAsync(cancellationToken).ConfigureAwait(false);
@@ -235,6 +240,13 @@ public sealed class V3GaugeJobService
             : await _session
                 .ReadV3DiagnosticStatusAsync(capabilities, cancellationToken)
                 .ConfigureAwait(false);
+        var crashCapsuleRead =
+            readCrashCapsule &&
+            diagnosticStatus?.Flags.HasFlag(V3DiagnosticFlags.CrashCapsuleValid) == true
+                ? await _session
+                    .ReadV3CrashCapsuleAsync(cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
         progress?.Report(new FileInfoReadProgress(10, "Reading file catalog"));
         _preferredReplicaId = _useMirror
             ? diagnosticStatus?.PreferredReplicaId ?? 0
@@ -347,7 +359,28 @@ public sealed class V3GaugeJobService
             _useMirror,
             _preferredReplicaId,
             diagnosticStatus,
-            requiresMemoryService);
+            requiresMemoryService,
+            crashCapsuleRead);
+    }
+
+    public async Task<V3GaugeCatalog> DownloadCrashCapsuleIfAvailableAsync(
+        V3GaugeCatalog catalog,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (catalog.CrashCapsuleRead is not null ||
+            catalog.DiagnosticStatus?.Flags.HasFlag(
+                V3DiagnosticFlags.CrashCapsuleValid) != true)
+        {
+            return catalog;
+        }
+
+        var result = await _session
+            .ReadV3CrashCapsuleAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return catalog with { CrashCapsuleRead = result };
     }
 
     public async Task<V3GaugeDownload> DownloadFileAsync(

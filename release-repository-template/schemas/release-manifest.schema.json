@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Inventable/IT_Releases/main/schemas/release-manifest.schema.json",
+  "title": "Inventable Technology stable release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "channel", "suiteVersion", "generatedUtc", "application", "firmware"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "channel": { "enum": ["demo", "stable"] },
+    "suiteVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "generatedUtc": { "type": "string", "format": "date-time" },
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "sourceRepository", "sourceCommit", "url", "sha256"],
+      "properties": {
+        "version": { "type": "string" },
+        "sourceRepository": { "const": "Inventable/PC_Gauge_Interface" },
+        "sourceCommit": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" },
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" }
+      }
+    },
+    "firmware": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["deviceType", "supportedPcbs", "version", "imageType", "processor", "minimumBootloader", "sourceRepository", "sourceCommit", "url", "sha256", "releaseNotes"],
+        "properties": {
+          "deviceType": { "type": "integer", "minimum": 1 },
+          "supportedPcbs": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "uniqueItems": true },
+          "version": { "type": "string" },
+          "imageType": { "const": "offset-production" },
+          "processor": { "const": "PIC18F26K80" },
+          "minimumBootloader": { "type": "string" },
+          "sourceRepository": { "const": "Inventable/PIC_Memory_Gauge" },
+          "sourceCommit": { "type": "string", "pattern": "^[A-Fa-f0-9]{40}$" },
+          "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+          "releaseNotes": { "type": "string" }
+        }
+      }
+    }
+  }
+}

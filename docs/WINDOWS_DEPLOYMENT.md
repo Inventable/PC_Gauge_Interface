@@ -1,5 +1,9 @@
 # Windows Deployment
 
+The first downloadable release procedure, installer, version identity, public
+catalogue layout, and remaining release gates are defined in
+`docs/FIRST_RELEASE.md`.
+
 ## Build
 
 Create a 64-bit self-contained Windows build from the repository root:
@@ -36,10 +40,16 @@ Use `-SkipArchive` while iterating locally. The existing `eng\app.ps1` remains t
 
 ## Distribution Direction
 
-- Continue using the self-contained ZIP for workshop engineering pilots; it is transparent and does not yet imply an update infrastructure.
+- Retain the self-contained ZIP as a workshop fallback. Release `1.0.0` also
+  produces a per-user single-file Setup EXE containing the same self-contained
+  payload.
 - Sign the application and final package before routine field/operator distribution so Windows can identify Northstar as the publisher.
-- Prefer a signed, per-machine MSI when managed field-laptop deployment is required. Installer implementation should wait until the clean field image confirms FTDI driver, install-location, privilege, antivirus, and corporate software-distribution requirements.
-- Use explicitly versioned, manually installed releases initially. Do not introduce automatic updates until offline-field behaviour, rollback, and release ownership are defined.
+- The initial Inno Setup installer is per-user and needs no administrator
+  privileges. A signed per-machine MSI remains an option if managed
+  field-laptop deployment later requires it.
+- Use explicitly versioned, manually installed application releases initially.
+  Firmware catalogue checks and verified HEX downloads are supported, while
+  application self-update remains deferred until rollback ownership is defined.
 
 ## Field Verification
 
@@ -55,7 +65,8 @@ Before calling a build field-ready:
 
 Firmware Update is a Device Management pilot feature. Do not approve it for routine field deployment until the erase, middle-write, pre-vector, and start-vector interruption/recovery cases in `docs/BOOTLOADER.md` have passed with hardware-programmer fallback available.
 
-Code-signing procurement and installer/update implementation remain deployment tasks. The self-contained archive is the engineering-pilot distribution format.
+Code-signing procurement remains a deployment task. The self-contained archive
+is the engineering fallback; the Setup EXE is the intended downloadable format.
 
 ## Latest Local Preflight
 

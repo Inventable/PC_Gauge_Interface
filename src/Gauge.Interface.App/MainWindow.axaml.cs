@@ -113,6 +113,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void PrepareDeployment_Click(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainWindowViewModel viewModel &&
+            viewModel.OpenPrepareDeploymentCommand.CanExecute(null))
+        {
+            viewModel.OpenPrepareDeploymentCommand.Execute(null);
+        }
+    }
+
     private void SensorLive_Click(object? sender, RoutedEventArgs e)
     {
         if (DataContext is MainWindowViewModel viewModel &&

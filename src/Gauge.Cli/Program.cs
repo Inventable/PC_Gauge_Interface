@@ -242,6 +242,24 @@ if (args[0] == "probe-storage")
             Console.WriteLine($"Diagnostic flags: 0x{(byte)diagnostic.Flags:X2}");
             Console.WriteLine($"Failed chip mask: 0x{diagnostic.FailedChipMask:X2}");
             Console.WriteLine($"Diagnostic start: 0x{diagnostic.RegionStart:X8}");
+            if (catalog.CrashCapsule is { } capsule)
+            {
+                Console.WriteLine("Crash capsule: available (read-only)");
+                Console.WriteLine($"Capsule generation: {capsule.Generation}");
+                Console.WriteLine($"Capsule boot ID: {capsule.BootId}");
+                Console.WriteLine(
+                    $"Capsule state: {capsule.ApplicationState} ({capsule.ApplicationStateDisplay})");
+                Console.WriteLine($"Capsule event ID: {capsule.EventId}");
+                Console.WriteLine($"Capsule fault/operation ID: {capsule.FaultId}");
+                Console.WriteLine($"Capsule file ID: 0x{capsule.FileId:X8}");
+                Console.WriteLine(
+                    $"Capsule committed samples: {capsule.CommittedSampleCount}");
+                Console.WriteLine($"Capsule raw RCON: 0x{capsule.RawRcon:X2}");
+            }
+            else if (catalog.CrashCapsuleRead is { } capsuleRead)
+            {
+                Console.WriteLine($"Crash capsule: {capsuleRead.Status}");
+            }
         }
         Console.WriteLine($"Files: {catalog!.Files.Count}");
         Console.WriteLine($"Uncommitted catalog reservations: {catalog.RejectedRecords.Count}");

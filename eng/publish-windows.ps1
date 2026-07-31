@@ -2,6 +2,7 @@ param(
     [string]$Configuration = 'Release',
     [string]$Runtime = 'win-x64',
     [switch]$SkipArchive,
+    [switch]$SkipInstaller,
     [switch]$KeepRunning
 )
 
@@ -65,6 +66,10 @@ if (-not $SkipArchive) {
     }
 
     Compress-Archive -Path (Join-Path $resolvedPublishDirectory '*') -DestinationPath $archivePath -CompressionLevel Optimal
+}
+
+if (-not $SkipInstaller) {
+    & (Join-Path $PSScriptRoot 'build-installer.ps1') -Runtime $Runtime
 }
 
 Write-Host "Published: $resolvedPublishDirectory"

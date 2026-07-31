@@ -89,6 +89,24 @@ public sealed class GaugeSession
         return V3DiagnosticStatus.Parse(reply.Payload, capabilities);
     }
 
+    public async Task<CrashCapsuleReadResult> ReadV3CrashCapsuleAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var reply = await _transport
+            .TransactAsync(
+                GaugeFrame.Create(GaugeCommand.V3GetCrashCapsule),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return reply.Payload switch
+        {
+            [0xFC] => CrashCapsuleReadResult.NoLongerAvailable,
+            [0xFF] => CrashCapsuleReadResult.Unsupported,
+            _ => CrashCapsuleReadResult.Available(
+                CrashCapsule.Parse(reply.Payload))
+        };
+    }
+
     public async Task<GaugeMemoryAddress> FindEndOfFileAsync(CancellationToken cancellationToken = default)
     {
         var reply = await _transport
