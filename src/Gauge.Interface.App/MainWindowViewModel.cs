@@ -3282,7 +3282,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged, IAsyncDisposab
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Northstar",
                 "GaugeInterface",
-                "firmware-cache");
+                "firmware-cache",
+                "Offset",
+                "production");
             Directory.CreateDirectory(cacheDirectory);
             var fileName = $"memory-gauge-{device.DeviceType}-v{releaseCheck.Release.Version}.hex";
             var cachedPath = Path.Combine(cacheDirectory, fileName);
