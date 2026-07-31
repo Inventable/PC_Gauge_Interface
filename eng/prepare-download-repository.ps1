@@ -84,7 +84,11 @@ $manifest = [ordered]@{
         }
     )
 }
-$manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $channelDirectory 'stable.json') -Encoding utf8
+$manifestJson = $manifest | ConvertTo-Json -Depth 6
+[System.IO.File]::WriteAllText(
+    (Join-Path $channelDirectory 'stable.json'),
+    $manifestJson + [Environment]::NewLine,
+    [System.Text.UTF8Encoding]::new($false))
 
 $checksums = @(
     Get-FileHash -LiteralPath (Join-Path $assetDirectory $installerName) -Algorithm SHA256
