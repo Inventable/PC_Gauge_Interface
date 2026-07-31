@@ -4,7 +4,7 @@ param(
     [string]$FirmwareVersion = '2.0',
     [uint32[]]$DeviceTypes = @(100160, 100196, 100230),
     [uint32[]]$SupportedPcbs = @(100161, 100184, 100228),
-    [string]$MinimumBootloader = '1.3',
+    [string]$MinimumBootloader = '1.2',
     [string]$Repository = 'Inventable/IT_Releases',
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
@@ -90,7 +90,7 @@ $checksums = @(
     Get-FileHash -LiteralPath (Join-Path $assetDirectory $installerName) -Algorithm SHA256
     Get-FileHash -LiteralPath $firmwareDestination -Algorithm SHA256
 ) | ForEach-Object {
-    $relativePath = [System.IO.Path]::GetRelativePath($resolvedStagingRoot, $_.Path).Replace('\', '/')
+    $relativePath = $_.Path.Substring($resolvedStagingRoot.Length).TrimStart('\').Replace('\', '/')
     "$($_.Hash)  $relativePath"
 }
 $checksums | Set-Content -LiteralPath (Join-Path $resolvedStagingRoot 'SHA256SUMS.txt') -Encoding ascii
